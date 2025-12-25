@@ -1,0 +1,11 @@
+streamlit
+segyio
+pandas
+numpy
+matplotlib
+langchain
+langchain-community
+langchain-ollama
+
+langchain-openai
+openai
