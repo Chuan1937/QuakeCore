@@ -18,7 +18,7 @@
 
 ```bash
 # 克隆仓库 (如果适用)
-# git clone ...
+git clone git@github.com:Chuan1937/QuakeCore.git
 
 # 安装依赖
 pip install -r requirements.txt
@@ -63,6 +63,7 @@ streamlit run app.py
     *   "显示这个文件的文本头信息"
     *   "这个文件的采样率是多少？"
     *   "读取第0道的统计数据"
+    *   "将第100到200道导出为Excel文件，保存在data/convert/目录下"
 
 ## 项目结构
 

@@ -53,8 +53,8 @@ local_file_path = None
 with st.sidebar:
     st.header("模型配置")
     provider_options = {
-        "本地 Ollama": "ollama",
         "DeepSeek API": "deepseek",
+        "本地 Ollama": "ollama",
     }
     provider_label = st.selectbox("选择推理引擎", list(provider_options.keys()), index=0, key="provider_select")
     provider = provider_options[provider_label]

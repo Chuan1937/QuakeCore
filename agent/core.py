@@ -11,9 +11,12 @@ from agent.tools import (
     get_segy_structure,
     get_segy_text_header,
     read_trace_sample,
+    convert_segy_to_numpy,
+    convert_segy_to_excel,
+    convert_segy_to_hdf5
 )
 
-Provider = Literal["ollama", "deepseek"]
+Provider = Literal["deepseek", "ollama"]
 
 
 def _build_llm(
@@ -34,17 +37,30 @@ def _build_llm(
             temperature=0,
         )
 
-    # Default to Ollama (local) provider
-    return ChatOllama(model=model_name, temperature=0)
+    # # Default to Ollama LLM
+    # # 默认使用 Ollama LLM
+    # return ChatOllama(model=model_name, temperature=0)
+
+    # Default to DeepSeek API
+    # 默认使用 DeepSeek API
+    return ChatOpenAI(
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        base_url="https://api.deepseek.com",
+        model=model_name,
+        temperature=0,
+    )
 
 
 def get_agent_executor(
-    provider: Provider = "ollama",
-    model_name: str = "qwen2.5:3b",
+    # provider: Provider = "ollama",
+    # model_name: str = "qwen2.5:3b",
+    provider: Provider = "deepseek",
+    model_name: str = "deepseek",
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
 ):
     """Create a LangChain ReAct agent with configurable LLM backends."""
+    """创建一个具有可配置 LLM 后端的 LangChain ReAct 代理。"""
 
     llm = _build_llm(provider=provider, model_name=model_name, api_key=api_key, base_url=base_url)
 
@@ -53,11 +69,23 @@ def get_agent_executor(
         get_segy_text_header,
         get_segy_binary_header,
         read_trace_sample,
+        convert_segy_to_numpy,
+        convert_segy_to_excel,
+        convert_segy_to_hdf5,
     ]
 
     template = '''Answer the following questions as best you can. You have access to the following tools:
 
 {tools}
+
+Important rules:
+- Do NOT invent parameters the user did not request.
+- For data export/conversion tools: if the user does NOT specify a range, do NOT set `count`.
+    (The tools default to exporting ALL traces when `count` is omitted or set to null.)
+- If the user asks for a range like "100到200道", clarify whether it is inclusive and whether indexing is 0-based.
+    If you must proceed without clarification, assume 0-based trace index and interpret as start_trace=100, count=100 (100..199).
+- Always choose an output path under data/convert/ unless the user explicitly requests another folder.
+- Output MUST follow the exact format below. Do not add extra text (no markdown, no explanations) outside the fields.
 
 Use the following format:
 
