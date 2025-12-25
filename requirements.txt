@@ -2,10 +2,11 @@ streamlit
 segyio
 pandas
 numpy
+h5py
 matplotlib
 langchain
 langchain-community
 langchain-ollama
-
+openpyxl
 langchain-openai
 openai

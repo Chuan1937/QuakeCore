@@ -1,6 +1,7 @@
 import segyio
 import numpy as np
 import pandas as pd
+import  h5py
 import os
 
 class SegyHandler:
@@ -25,6 +26,74 @@ class SegyHandler:
                     "sorting": int(f.sorting) if f.sorting is not None else None
                 }
                 return info
+        except Exception as e:
+            return {"error": str(e)}
+
+    def to_numpy(self, start_trace: int = 0, count: int | None = None, output_path: str | None = None):
+        """将SEGY数据转换为 NumPy 数组，可选起始道和数量。"""
+        try:
+            with segyio.open(self.filepath, ignore_geometry=True) as f:
+                total = f.tracecount
+                if start_trace >= total:
+                    return {"error": "Start trace out of bounds"}
+
+                end = total if count is None else min(start_trace + count, total)
+                data = segyio.tools.collect(f.trace[start_trace:end])
+
+                if output_path:
+                    np.save(output_path, data)
+
+                return {
+                    "array": data,
+                    "start_trace": start_trace,
+                    "count": end - start_trace
+                }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def to_excel(self, output_path: str, start_trace: int = 0, count: int | None = None):
+        """将指定范围的地震道导出为 Excel。count=None 表示从 start_trace 导出到文件末尾。"""
+        try:
+            with segyio.open(self.filepath, ignore_geometry=True) as f:
+                total = f.tracecount
+                if start_trace >= total:
+                    return {"error": "Start trace out of bounds"}
+
+                end = total if count is None else min(start_trace + count, total)
+                data = segyio.tools.collect(f.trace[start_trace:end])
+
+                df = pd.DataFrame(data.T)
+                df.columns = [f"Trace_{i}" for i in range(start_trace, end)]
+                df.to_excel(output_path, index_label="Sample_Index")
+
+                return f"Saved traces {start_trace}-{end - 1} to {output_path}"
+        except Exception as e:
+            return {"error": str(e)}
+
+    def to_hdf5(self, output_path: str, start_trace: int = 0, count: int | None = None, compression: str | None = "gzip"):
+        """将SEGY数据写入HDF5，支持分块写入与压缩。"""
+        try:
+            with segyio.open(self.filepath, ignore_geometry=True) as f:
+                total = f.tracecount
+                if start_trace >= total:
+                    return {"error": "Start trace out of bounds"}
+
+                end = total if count is None else min(start_trace + count, total)
+                data = segyio.tools.collect(f.trace[start_trace:end])
+
+                with h5py.File(output_path, "w") as h5f:
+                    h5f.create_dataset(
+                        "traces",
+                        data=data,
+                        compression=compression,
+                        compression_opts=4 if compression == "gzip" else None
+                    )
+                    h5f.attrs["filepath"] = self.filepath
+                    h5f.attrs["start_trace"] = start_trace
+                    h5f.attrs["trace_count"] = end - start_trace
+                    h5f.attrs["sample_rate_ms"] = float(segyio.tools.dt(f)) / 1000.0
+
+                return f"Saved traces {start_trace}-{end - 1} to {output_path}"
         except Exception as e:
             return {"error": str(e)}
 
@@ -91,3 +160,4 @@ class SegyHandler:
                 }
         except Exception as e:
             return {"error": str(e)}
+
