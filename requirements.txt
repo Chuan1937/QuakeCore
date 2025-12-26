@@ -10,3 +10,4 @@ langchain-ollama
 openpyxl
 langchain-openai
 openai
+obspy

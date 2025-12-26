@@ -1,5 +1,7 @@
 from langchain.tools import tool
 from utils.segy_handler import SegyHandler
+from utils.miniseed_handler import MiniSEEDHandler
+from utils.hdf5_handler import HDF5Handler
 import json
 from typing import Union
 import numpy as np
@@ -8,6 +10,8 @@ import os
 # Global variable to store the current file path being analyzed
 # In a multi-user web app, this should be handled via session state or context
 CURRENT_SEGY_PATH = None
+CURRENT_MINISEED_PATH = None
+CURRENT_HDF5_PATH = None
 
 
 DEFAULT_CONVERT_DIR = "data/convert"
@@ -17,6 +21,16 @@ DEFAULT_CONVERT_DIR = "data/convert"
 def set_current_segy_path(path):
     global CURRENT_SEGY_PATH
     CURRENT_SEGY_PATH = path
+
+# 设置当前 MiniSEED 文件路径的辅助函数
+def set_current_miniseed_path(path):
+    global CURRENT_MINISEED_PATH
+    CURRENT_MINISEED_PATH = path
+
+# 设置当前 HDF5 文件路径的辅助函数
+def set_current_hdf5_path(path):
+    global CURRENT_HDF5_PATH
+    CURRENT_HDF5_PATH = path
 
 # 解析参数字典的辅助函数
 def _parse_param_dict(raw_params):
@@ -314,3 +328,278 @@ def convert_segy_to_hdf5(params: Union[str, dict, None] = None):
     if isinstance(result, dict):
         return json.dumps(result, indent=2)
     return result
+
+# 读取 MiniSEED 基本结构信息的工具
+@tool
+def get_miniseed_structure(params: Union[str, dict, None] = None):
+    """
+    Read MiniSEED file basic structure info. Args: path (optional).
+    """
+    """读取 MiniSEED 文件的基本结构信息。参数：path（可选）。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_MINISEED_PATH
+    if not path:
+        return "No MiniSEED file is currently loaded."
+    handler = MiniSEEDHandler(path)
+    info = handler.get_basic_info()
+    return json.dumps(info, indent=2)
+
+# 读取 MiniSEED 指定道/轨迹数据的工具
+@tool
+def read_miniseed_trace(params: Union[str, dict, None] = None):
+    """
+    Read one MiniSEED trace by 0-based index. Args: path, trace_index.
+    """
+    """按 0 基索引读取一条 MiniSEED 轨迹。参数：path，trace_index。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_MINISEED_PATH
+    if not path:
+        return "No MiniSEED file is currently loaded."
+    try:
+        trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
+    except ValueError as exc:
+        return str(exc)
+    handler = MiniSEEDHandler(path)
+    result = handler.get_trace_data(trace_index=trace_index)
+    return json.dumps(result, indent=2)
+
+# 返回当前已加载的文件上下文（类型与路径）
+@tool
+def get_loaded_context():
+    """
+    Return currently loaded file type and paths.
+    """
+    """返回当前已加载的文件类型与路径。"""
+    current_type = None
+    if CURRENT_SEGY_PATH:
+        current_type = "segy"
+    elif CURRENT_MINISEED_PATH:
+        current_type = "miniseed"
+    elif CURRENT_HDF5_PATH:
+        current_type = "hdf5"
+    return json.dumps(
+        {
+            "current_type": current_type,
+            "segy_path": CURRENT_SEGY_PATH,
+            "miniseed_path": CURRENT_MINISEED_PATH,
+            "hdf5_path": CURRENT_HDF5_PATH,
+        },
+        indent=2,
+    )
+
+# 泛化的结构读取工具：根据已加载文件类型自动选择
+@tool
+def get_file_structure():
+    """
+    Read structure of currently loaded file (SEGY or MiniSEED).
+    """
+    """读取当前已加载文件（SEGY/MiniSEED/HDF5）的结构信息。"""
+    if CURRENT_SEGY_PATH:
+        handler = SegyHandler(CURRENT_SEGY_PATH)
+        info = handler.get_basic_info()
+        return json.dumps(info, indent=2)
+    if CURRENT_MINISEED_PATH:
+        handler = MiniSEEDHandler(CURRENT_MINISEED_PATH)
+        info = handler.get_basic_info()
+        return json.dumps(info, indent=2)
+    if CURRENT_HDF5_PATH:
+        handler = HDF5Handler(CURRENT_HDF5_PATH)
+        info = handler.get_basic_info()
+        return json.dumps(info, indent=2)
+    return "No data file is currently loaded."
+
+# 泛化的轨迹读取工具：根据已加载文件类型自动选择
+@tool
+def read_file_trace(params: Union[str, dict, None] = None):
+    """
+    Read one trace from currently loaded file. Args: trace_index.
+    """
+    """读取当前已加载文件的一条轨迹。参数：trace_index。"""
+    parsed = _parse_param_dict(params)
+    try:
+        trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
+    except ValueError as exc:
+        return str(exc)
+    if CURRENT_SEGY_PATH:
+        handler = SegyHandler(CURRENT_SEGY_PATH)
+        data = handler.get_trace_data(trace_index=trace_index, count=1)
+        if "data" in data:
+            trace_vals = data["data"][0]
+            summary = {
+                "trace_index": trace_index,
+                "min_value": float(np.min(trace_vals)),
+                "max_value": float(np.max(trace_vals)),
+                "mean_value": float(np.mean(trace_vals)),
+                "first_10_samples": trace_vals[:10],
+                "total_samples": len(trace_vals),
+                "type": "segy",
+            }
+            return json.dumps(summary, indent=2)
+        return json.dumps(data, indent=2)
+    if CURRENT_MINISEED_PATH:
+        handler = MiniSEEDHandler(CURRENT_MINISEED_PATH)
+        result = handler.get_trace_data(trace_index=trace_index)
+        if isinstance(result, dict):
+            result["type"] = "miniseed"
+        return json.dumps(result, indent=2)
+    if CURRENT_HDF5_PATH:
+        handler = HDF5Handler(CURRENT_HDF5_PATH)
+        result = handler.get_trace_data(trace_index=trace_index)
+        if isinstance(result, dict):
+            result["type"] = "hdf5"
+        return json.dumps(result, indent=2)
+    return "No data file is currently loaded."
+
+# 工具：读取 HDF5 结构信息
+@tool
+def get_hdf5_structure(params: Union[str, dict, None] = None):
+    """
+    Read HDF5 file structure info. Args: path (optional), dataset (optional).
+    """
+    """读取 HDF5 文件的结构信息。参数：path（可选）、dataset（可选）。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_HDF5_PATH
+    if not path:
+        return "No HDF5 file is currently loaded."
+    handler = HDF5Handler(path)
+    info = handler.get_basic_info(dataset=parsed.get("dataset"))
+    return json.dumps(info, indent=2)
+
+# 工具：读取 HDF5 一条轨迹
+@tool
+def read_hdf5_trace(params: Union[str, dict, None] = None):
+    """
+    Read one trace from HDF5 file. Args: path (optional), dataset (optional), trace_index.
+    """
+    """从 HDF5 文件读取一条轨迹。参数：path（可选）、dataset（可选）、trace_index。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_HDF5_PATH
+    if not path:
+        return "No HDF5 file is currently loaded."
+    try:
+        trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
+    except ValueError as exc:
+        return str(exc)
+    handler = HDF5Handler(path)
+    result = handler.get_trace_data(trace_index=trace_index, dataset=parsed.get("dataset"))
+    return json.dumps(result, indent=2)
+
+# 工具：HDF5 转 NumPy
+@tool
+def convert_hdf5_to_numpy(params: Union[str, dict, None] = None):
+    """
+    Convert HDF5 dataset to NumPy. Args: path (optional), dataset (optional), output_path.
+    """
+    """将 HDF5 的数据集转换为 NumPy。参数：path（可选）、dataset（可选）、output_path。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_HDF5_PATH
+    if not path:
+        return "No HDF5 file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="hdf5_data.npy")
+    handler = HDF5Handler(path)
+    result = handler.to_numpy(output_path=output_path, dataset=parsed.get("dataset"))
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    result["saved_to"] = output_path
+    return json.dumps(result, indent=2)
+
+# 工具：HDF5 转 Excel
+@tool
+def convert_hdf5_to_excel(params: Union[str, dict, None] = None):
+    """
+    Convert HDF5 dataset to Excel. Args: path (optional), dataset (optional), output_path, start_trace, count.
+    """
+    """将 HDF5 的数据集转换为 Excel。参数：path（可选）、dataset（可选）、output_path、start_trace、count。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_HDF5_PATH
+    if not path:
+        return "No HDF5 file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="hdf5_data.xlsx")
+    try:
+        start_trace = _coerce_int(parsed.get("start_trace"), default=0, field_name="start_trace")
+        count = _coerce_int(parsed.get("count"), allow_none=True, default=None, field_name="count")
+    except ValueError as exc:
+        return str(exc)
+    handler = HDF5Handler(path)
+    result = handler.to_excel(output_path=output_path, start_trace=start_trace, count=count, dataset=parsed.get("dataset"))
+    if isinstance(result, dict):
+        result["saved_to"] = output_path
+        return json.dumps(result, indent=2)
+    return result
+
+# 工具：列出 HDF5 键
+@tool
+def get_hdf5_keys(params: Union[str, dict, None] = None):
+    """
+    List all groups and datasets with shapes and dtypes. Args: path (optional).
+    """
+    """列出所有分组与数据集及其形状和类型。参数：path（可选）。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_HDF5_PATH
+    if not path:
+        return "No HDF5 file is currently loaded."
+    handler = HDF5Handler(path)
+    result = handler.list_keys()
+    return json.dumps(result, indent=2)
+
+# 将 MiniSEED 转换为 NumPy
+@tool
+def convert_miniseed_to_numpy(params: Union[str, dict, None] = None):
+    """
+    Convert MiniSEED data to NumPy. Args: path (optional), output_path.
+    """
+    """将 MiniSEED 数据转换为 NumPy。参数：path（可选）、output_path。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_MINISEED_PATH
+    if not path:
+        return "No MiniSEED file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="miniseed_data.npz")
+    handler = MiniSEEDHandler(path)
+    result = handler.to_numpy(output_path=output_path)
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    result["saved_to"] = output_path
+    return json.dumps(result, indent=2)
+
+# 将 MiniSEED 写入 HDF5
+@tool
+def convert_miniseed_to_hdf5(params: Union[str, dict, None] = None):
+    """
+    Convert MiniSEED data to HDF5. Args: path (optional), output_path, compression.
+    """
+    """将 MiniSEED 数据写入 HDF5。参数：path（可选）、output_path、compression。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_MINISEED_PATH
+    if not path:
+        return "No MiniSEED file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="miniseed_data.h5")
+    compression = parsed.get("compression", "gzip")
+    if isinstance(compression, str) and compression.lower() in {"none", "null", ""}:
+        compression = None
+    handler = MiniSEEDHandler(path)
+    result = handler.to_hdf5(output_path=output_path, compression=compression)
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    result["saved_to"] = output_path
+    return json.dumps(result, indent=2)
+
+# 将 MiniSEED 导出为 SAC（每轨迹一个文件）
+@tool
+def convert_miniseed_to_sac(params: Union[str, dict, None] = None):
+    """
+    Export MiniSEED traces to SAC files. Args: path (optional), output_dir.
+    """
+    """将 MiniSEED 轨迹导出为 SAC 文件。参数：path（可选）、output_dir。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_MINISEED_PATH
+    if not path:
+        return "No MiniSEED file is currently loaded."
+    output_dir = parsed.get("output_dir")
+    if not output_dir or not str(output_dir).strip():
+        output_dir = os.path.join(DEFAULT_CONVERT_DIR, "miniseed_sac")
+    os.makedirs(output_dir, exist_ok=True)
+    handler = MiniSEEDHandler(path)
+    result = handler.to_sac(output_dir=output_dir)
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps(result, indent=2)

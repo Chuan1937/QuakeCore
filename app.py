@@ -2,8 +2,9 @@ import streamlit as st
 import os
 import tempfile
 import json
+import shutil
 from agent.core import get_agent_executor
-from agent.tools import set_current_segy_path
+from agent.tools import set_current_segy_path, set_current_miniseed_path, set_current_hdf5_path
 from langchain_core.messages import HumanMessage, AIMessage
 
 
@@ -46,10 +47,11 @@ if "agent_config" not in st.session_state:
 
 if "agent_error" not in st.session_state:
     st.session_state.agent_error = None
+if "uploaded_filename" not in st.session_state:
+    st.session_state.uploaded_filename = None
+if "current_file_ext" not in st.session_state:
+    st.session_state.current_file_ext = None
 
-# Sidebar for Configuration
-uploaded_file = None
-local_file_path = None
 with st.sidebar:
     st.header("模型配置")
     provider_options = {
@@ -62,7 +64,7 @@ with st.sidebar:
     current_agent_config = {}
     if provider == "ollama":
         model_name = st.text_input("本地模型名称 (Ollama)", value="qwen2.5:3b", key="ollama_model_input")
-        st.info("请确保本地已安装 Ollama 并运行了对应模型 (例如: `ollama run qwen2.5:3b`)")
+        st.info("请确保本地已安装 Ollama 并运行了对应模型")
         current_agent_config = {
             "provider": "ollama",
             "model_name": model_name,
@@ -89,26 +91,6 @@ with st.sidebar:
             "base_url": deepseek_base_url,
         }
         st.info("使用 DeepSeek 时需要有效的 API Key，可在环境变量 DEEPSEEK_API_KEY 中配置。")
-    
-    st.divider()
-    st.header("数据源")
-    data_source = st.radio("选择数据来源", ["上传文件", "本地测试文件"])
-    
-    uploaded_file = None
-    local_file_path = None
-    
-    if data_source == "上传文件":
-        uploaded_file = st.file_uploader("上传 SEGY 文件", type=["segy", "sgy"])
-    else:
-        local_file_path = st.text_input("本地文件路径", value="data/viking_small.segy")
-        if st.button("加载本地文件"):
-            if os.path.exists(local_file_path):
-                st.session_state.current_file_path = os.path.abspath(local_file_path)
-                st.session_state.uploaded_filename = os.path.basename(local_file_path)
-                set_current_segy_path(st.session_state.current_file_path)
-                st.success(f"已加载本地文件: `{local_file_path}`")
-            else:
-                st.error(f"文件不存在: `{local_file_path}`")
 
 config_changed = current_agent_config != st.session_state.agent_config
 if config_changed:
@@ -134,27 +116,34 @@ if agent_error:
 elif not agent_ready:
     st.info("请在侧边栏完成模型配置以启动对话。")
 
-# Handle File Upload
-if uploaded_file:
-    # Save uploaded file to a temporary location
-    # In a real app, you might want to manage storage more persistently
-    if "current_file_path" not in st.session_state or st.session_state.uploaded_filename != uploaded_file.name:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".segy") as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_path = tmp_file.name
-        
-        st.session_state.current_file_path = tmp_path
-        st.session_state.uploaded_filename = uploaded_file.name
-        
-        # Add a system message indicating file is ready
-        st.success(f"文件 `{uploaded_file.name}` 已加载，你可以询问关于它的问题了！")
+# Attachment upload near chat
+uploaded_file_main = st.file_uploader(
+    "上传数据文件（SEGY/SGY/MiniSEED/HDF5）",
+    type=["segy", "sgy", "mseed", "miniseed","h5","hdf5"],
+    help="选择单个文件并复制到 data 目录"
+)
 
-# Ensure the tool context is updated on every run if file exists
+if uploaded_file_main:
+    filename = uploaded_file_main.name
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    data_dir = os.path.join(os.getcwd(), "data")
+    os.makedirs(data_dir, exist_ok=True)
+    target_path = os.path.join(data_dir, filename)
+    with open(target_path, "wb") as f:
+        f.write(uploaded_file_main.getvalue())
+    st.session_state.current_file_path = target_path
+    st.session_state.uploaded_filename = filename
+    st.session_state.current_file_ext = ext
+    st.success(f"文件已复制到 data: `{filename}`")
+
 if "current_file_path" in st.session_state:
-    set_current_segy_path(st.session_state.current_file_path)
-    
-    # Optional: Auto-trigger an analysis
-    # st.session_state.messages.append({"role": "assistant", "content": "我已加载文件。你可以问我它的结构、头信息或数据内容。"})
+    ext = st.session_state.get("current_file_ext")
+    if ext in {"segy", "sgy"}:
+        set_current_segy_path(st.session_state.current_file_path)
+    elif ext in {"mseed", "miniseed"}:
+        set_current_miniseed_path(st.session_state.current_file_path)
+    elif ext in {"h5","hdf5"}:
+        set_current_hdf5_path(st.session_state.current_file_path)
 
 # Chat Interface
 for message in st.session_state.messages:
@@ -166,7 +155,7 @@ for message in st.session_state.messages:
 
 # User Input
 prompt = st.chat_input(
-    "输入你的问题 (例如: 读取segy文件，给我说明其内部的结构)",
+    "输入你的问题（可先在上方上传文件）",
     disabled=not agent_ready,
 )
 

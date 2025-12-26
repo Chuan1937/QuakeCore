@@ -7,13 +7,26 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from agent.tools import (
+    get_loaded_context,
+    get_file_structure,
+    read_file_trace,
+    get_hdf5_structure,
+    read_hdf5_trace,
+    convert_hdf5_to_numpy,
+    convert_hdf5_to_excel,
+    get_hdf5_keys,
     get_segy_binary_header,
     get_segy_structure,
     get_segy_text_header,
     read_trace_sample,
     convert_segy_to_numpy,
     convert_segy_to_excel,
-    convert_segy_to_hdf5
+    convert_segy_to_hdf5,
+    get_miniseed_structure,
+    read_miniseed_trace,
+    convert_miniseed_to_numpy,
+    convert_miniseed_to_hdf5,
+    convert_miniseed_to_sac,
 )
 
 Provider = Literal["deepseek", "ollama"]
@@ -65,6 +78,14 @@ def get_agent_executor(
     llm = _build_llm(provider=provider, model_name=model_name, api_key=api_key, base_url=base_url)
 
     tools = [
+        get_loaded_context,
+        get_file_structure,
+        read_file_trace,
+        get_hdf5_keys,
+        get_hdf5_structure,
+        read_hdf5_trace,
+        convert_hdf5_to_numpy,
+        convert_hdf5_to_excel,
         get_segy_structure,
         get_segy_text_header,
         get_segy_binary_header,
@@ -72,6 +93,11 @@ def get_agent_executor(
         convert_segy_to_numpy,
         convert_segy_to_excel,
         convert_segy_to_hdf5,
+        get_miniseed_structure,
+        read_miniseed_trace,
+        convert_miniseed_to_numpy,
+        convert_miniseed_to_hdf5,
+        convert_miniseed_to_sac,
     ]
 
     template = '''Answer the following questions as best you can. You have access to the following tools:
@@ -86,6 +112,10 @@ Important rules:
     If you must proceed without clarification, assume 0-based trace index and interpret as start_trace=100, count=100 (100..199).
 - Always choose an output path under data/convert/ unless the user explicitly requests another folder.
 - Output MUST follow the exact format below. Do not add extra text (no markdown, no explanations) outside the fields.
+- For generic requests like "读取这个文件" or "给我结构", call get_file_structure.
+- Before choosing SEGY/MiniSEED specific tools, use get_loaded_context to determine the loaded file type.
+- For "读取第X条轨迹", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
+- If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 
 Use the following format:
 
