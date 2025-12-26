@@ -500,7 +500,7 @@ def convert_hdf5_to_numpy(params: Union[str, dict, None] = None):
     result = handler.to_numpy(output_path=output_path, dataset=parsed.get("dataset"))
     if "error" in result:
         return json.dumps(result, indent=2)
-    result["saved_to"] = output_path
+    result["saved_to"] = result.get("output_path", output_path)
     return json.dumps(result, indent=2)
 
 # 工具：HDF5 转 Excel
@@ -523,7 +523,7 @@ def convert_hdf5_to_excel(params: Union[str, dict, None] = None):
     handler = HDF5Handler(path)
     result = handler.to_excel(output_path=output_path, start_trace=start_trace, count=count, dataset=parsed.get("dataset"))
     if isinstance(result, dict):
-        result["saved_to"] = output_path
+        result["saved_to"] = result.get("output_path", output_path)
         return json.dumps(result, indent=2)
     return result
 

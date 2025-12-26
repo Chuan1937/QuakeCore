@@ -2,7 +2,6 @@
     "workbench.editorAssociations": {
         "*.copilotmd": "vscode.markdown.preview.editor",
         "*.rst": "default",
-        "file:/**/*.xlsx": "jupyter-data-wrangler",
-        "*.xlsx": "jupyter-data-wrangler"
+        "file:/**/*.xlsx": "jupyter-data-wrangler"
     }
 }
