@@ -1,7 +1,10 @@
+from dataclasses import asdict
+
 from langchain.tools import tool
 from utils.segy_handler import SegyHandler
 from utils.miniseed_handler import MiniSEEDHandler
 from utils.hdf5_handler import HDF5Handler
+from utils.phase_picker import pick_phases, summarize_pick_results
 import json
 from typing import Union
 import numpy as np
@@ -69,6 +72,121 @@ def _coerce_int(value, *, allow_none=False, default=None, field_name="value"):
             return None
         return int(lowered)
     raise ValueError(f"{field_name} must be an integer, got {value!r}")
+
+
+def _coerce_float(value, *, allow_none=False, default=None, field_name="value"):
+    if value is None:
+        if allow_none:
+            return default
+        if default is not None:
+            return float(default)
+        raise ValueError(f"{field_name} must be provided")
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value)
+    if isinstance(value, str):
+        lowered = value.strip()
+        if allow_none and lowered.lower() in {"none", "null", ""}:
+            return default
+        return float(lowered)
+    raise ValueError(f"{field_name} must be a float, got {value!r}")
+
+
+def _normalize_method_list(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, str):
+        candidate = raw_value.strip()
+        if not candidate:
+            return None
+        if candidate.startswith("["):
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, list):
+                    return [str(item).strip() for item in data if str(item).strip()]
+            except json.JSONDecodeError:
+                pass
+        return [part.strip() for part in candidate.split(",") if part.strip()]
+    if isinstance(raw_value, (list, tuple, set)):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    return None
+
+
+def _parse_method_params(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, dict):
+        return raw_value
+    if isinstance(raw_value, str):
+        candidate = raw_value.strip()
+        if not candidate:
+            return None
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _normalize_source_type(value: str | None):
+    if not value:
+        return None
+    normalized = value.lower().strip()
+    alias = {
+        "miniseed": "mseed",
+        "mseed": "mseed",
+        "segy": "segy",
+        "sgy": "segy",
+        "hdf5": "hdf5",
+        "h5": "hdf5",
+        "npy": "npy",
+        "npz": "npz",
+        "sac": "sac",
+    }
+    return alias.get(normalized, normalized)
+
+
+def _infer_file_type_from_path(path: str | None):
+    if not path:
+        return None
+    ext = os.path.splitext(path)[1].lower()
+    mapping = {
+        ".segy": "segy",
+        ".sgy": "segy",
+        ".mseed": "mseed",
+        ".miniseed": "mseed",
+        ".h5": "hdf5",
+        ".hdf5": "hdf5",
+        ".npy": "npy",
+        ".npz": "npz",
+        ".sac": "sac",
+    }
+    return mapping.get(ext)
+
+
+def _resolve_source_path(path: str | None, source_type: str | None):
+    normalized_type = _normalize_source_type(source_type)
+    if path:
+        inferred = normalized_type or _infer_file_type_from_path(path)
+        return path, inferred
+
+    candidates = [
+        ("segy", CURRENT_SEGY_PATH),
+        ("mseed", CURRENT_MINISEED_PATH),
+        ("hdf5", CURRENT_HDF5_PATH),
+    ]
+
+    if normalized_type:
+        for ctype, cpath in candidates:
+            if ctype == normalized_type and cpath:
+                return cpath, ctype
+        return None, normalized_type
+
+    for ctype, cpath in candidates:
+        if cpath:
+            return cpath, ctype
+    return None, None
 
 
 def _resolve_output_path(output_path: str | None, *, default_filename: str) -> str:
@@ -603,3 +721,64 @@ def convert_miniseed_to_sac(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     return json.dumps(result, indent=2)
+
+# 运行传统拾取方法
+@tool
+def run_phase_picking(params: Union[str, dict, None] = None):
+    """
+    Run classical phase picking on the loaded file (SEGY/MiniSEED/HDF5/NumPy) or a specified path.
+    Args: path (optional), file_type/source_type, dataset (HDF5), sampling_rate (for NumPy), methods, method_params.
+    """
+    """在已加载或指定的地震数据文件上运行传统初至拾取。参数：path（可选）、file_type/source_type、dataset、sampling_rate、methods、method_params。"""
+    parsed = _parse_param_dict(params)
+
+    requested_path = parsed.get("path")
+    source_type = parsed.get("file_type") or parsed.get("source_type")
+    dataset = parsed.get("dataset")
+
+    try:
+        sampling_rate = _coerce_float(
+            parsed.get("sampling_rate"),
+            allow_none=True,
+            default=None,
+            field_name="sampling_rate",
+        )
+    except ValueError as exc:
+        return str(exc)
+
+    methods = _normalize_method_list(parsed.get("methods"))
+    method_params = _parse_method_params(parsed.get("method_params"))
+
+    resolved_path, inferred_type = _resolve_source_path(requested_path, source_type)
+    if not resolved_path:
+        return "No suitable data file is currently loaded. Please upload or specify a file path."
+
+    file_type = _normalize_source_type(source_type) or inferred_type
+
+    try:
+        picks = pick_phases(
+            resolved_path,
+            file_type=file_type,
+            dataset=dataset,
+            sampling_rate=sampling_rate,
+            methods=methods,
+            method_params=method_params,
+        )
+    except Exception as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+
+    if not picks:
+        return "No phase arrivals were detected."
+
+    serialized = [asdict(item) for item in picks]
+    summary = summarize_pick_results(picks)
+    return json.dumps(
+        {
+            "file": resolved_path,
+            "file_type": file_type,
+            "count": len(serialized),
+            "results": serialized,
+            "summary": summary,
+        },
+        indent=2,
+    )
