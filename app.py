@@ -4,7 +4,12 @@ import tempfile
 import json
 import shutil
 from agent.core import get_agent_executor
-from agent.tools import set_current_segy_path, set_current_miniseed_path, set_current_hdf5_path
+from agent.tools import (
+    set_current_segy_path,
+    set_current_miniseed_path,
+    set_current_hdf5_path,
+    set_current_sac_path,
+)
 from langchain_core.messages import HumanMessage, AIMessage
 
 
@@ -118,8 +123,8 @@ elif not agent_ready:
 
 # Attachment upload near chat
 uploaded_file_main = st.file_uploader(
-    "上传数据文件（SEGY/SGY/MiniSEED/HDF5）",
-    type=["segy", "sgy", "mseed", "miniseed","h5","hdf5"],
+    "上传数据文件（SEGY/SGY/MiniSEED/HDF5/SAC）",
+    type=["segy", "sgy", "mseed", "miniseed","h5","hdf5","sac"],
     help="选择单个文件并复制到 data 目录"
 )
 
@@ -144,6 +149,9 @@ if "current_file_path" in st.session_state:
         set_current_miniseed_path(st.session_state.current_file_path)
     elif ext in {"h5","hdf5"}:
         set_current_hdf5_path(st.session_state.current_file_path)
+    elif ext == "sac":
+        set_current_sac_path(st.session_state.current_file_path)
+
 
 # Chat Interface
 for message in st.session_state.messages:
