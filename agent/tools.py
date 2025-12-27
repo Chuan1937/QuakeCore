@@ -5,6 +5,7 @@ from utils.segy_handler import SegyHandler
 from utils.miniseed_handler import MiniSEEDHandler
 from utils.hdf5_handler import HDF5Handler
 from utils.phase_picker import pick_phases, summarize_pick_results
+from utils.sac_handler import SACHandler
 import json
 from typing import Union
 import numpy as np
@@ -15,6 +16,7 @@ import os
 CURRENT_SEGY_PATH = None
 CURRENT_MINISEED_PATH = None
 CURRENT_HDF5_PATH = None
+CURRENT_SAC_PATH = None
 
 
 DEFAULT_CONVERT_DIR = "data/convert"
@@ -34,6 +36,11 @@ def set_current_miniseed_path(path):
 def set_current_hdf5_path(path):
     global CURRENT_HDF5_PATH
     CURRENT_HDF5_PATH = path
+
+# 设置当前 SAC 文件路径的辅助函数
+def set_current_sac_path(path):
+    global CURRENT_SAC_PATH
+    CURRENT_SAC_PATH = path
 
 # 解析参数字典的辅助函数
 def _parse_param_dict(raw_params):
@@ -495,12 +502,15 @@ def get_loaded_context():
         current_type = "miniseed"
     elif CURRENT_HDF5_PATH:
         current_type = "hdf5"
+    elif CURRENT_SAC_PATH:
+        current_type = "sac"
     return json.dumps(
         {
             "current_type": current_type,
             "segy_path": CURRENT_SEGY_PATH,
             "miniseed_path": CURRENT_MINISEED_PATH,
             "hdf5_path": CURRENT_HDF5_PATH,
+            "sac_path": CURRENT_SAC_PATH,
         },
         indent=2,
     )
@@ -509,9 +519,9 @@ def get_loaded_context():
 @tool
 def get_file_structure():
     """
-    Read structure of currently loaded file (SEGY or MiniSEED).
+    Read structure of currently loaded file (SEGY/MiniSEED/HDF5/SAC).
     """
-    """读取当前已加载文件（SEGY/MiniSEED/HDF5）的结构信息。"""
+    """读取当前已加载文件（SEGY/MiniSEED/HDF5/SAC）的结构信息。"""
     if CURRENT_SEGY_PATH:
         handler = SegyHandler(CURRENT_SEGY_PATH)
         info = handler.get_basic_info()
@@ -522,6 +532,10 @@ def get_file_structure():
         return json.dumps(info, indent=2)
     if CURRENT_HDF5_PATH:
         handler = HDF5Handler(CURRENT_HDF5_PATH)
+        info = handler.get_basic_info()
+        return json.dumps(info, indent=2)
+    if CURRENT_SAC_PATH:
+        handler = SACHandler(CURRENT_SAC_PATH)
         info = handler.get_basic_info()
         return json.dumps(info, indent=2)
     return "No data file is currently loaded."
@@ -565,6 +579,12 @@ def read_file_trace(params: Union[str, dict, None] = None):
         result = handler.get_trace_data(trace_index=trace_index)
         if isinstance(result, dict):
             result["type"] = "hdf5"
+        return json.dumps(result, indent=2)
+    if CURRENT_SAC_PATH:
+        handler = SACHandler(CURRENT_SAC_PATH)
+        result = handler.get_trace_data(trace_index=trace_index)
+        if isinstance(result, dict):
+            result["type"] = "sac"
         return json.dumps(result, indent=2)
     return "No data file is currently loaded."
 
@@ -722,63 +742,115 @@ def convert_miniseed_to_sac(params: Union[str, dict, None] = None):
         return json.dumps(result, indent=2)
     return json.dumps(result, indent=2)
 
-# 运行传统拾取方法
+# 读取 SAC 结构信息
 @tool
-def run_phase_picking(params: Union[str, dict, None] = None):
+def get_sac_structure(params: Union[str, dict, None] = None):
     """
-    Run classical phase picking on the loaded file (SEGY/MiniSEED/HDF5/NumPy) or a specified path.
-    Args: path (optional), file_type/source_type, dataset (HDF5), sampling_rate (for NumPy), methods, method_params.
+    Read SAC file basic structure info. Args: path (optional).
     """
-    """在已加载或指定的地震数据文件上运行传统初至拾取。参数：path（可选）、file_type/source_type、dataset、sampling_rate、methods、method_params。"""
+    """读取 SAC 文件的基本结构信息。参数：path（可选）。"""
     parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_SAC_PATH
+    if not path:
+        return "No SAC file is currently loaded."
+    handler = SACHandler(path)
+    info = handler.get_basic_info()
+    return json.dumps(info, indent=2)
 
-    requested_path = parsed.get("path")
-    source_type = parsed.get("file_type") or parsed.get("source_type")
-    dataset = parsed.get("dataset")
-
+# 读取 SAC 轨迹
+@tool
+def read_sac_trace(params: Union[str, dict, None] = None):
+    """
+    Read SAC trace by 0-based index. Args: path (optional), trace_index.
+    """
+    """按 0 基索引读取 SAC 轨迹。参数：path（可选）、trace_index。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_SAC_PATH
+    if not path:
+        return "No SAC file is currently loaded."
     try:
-        sampling_rate = _coerce_float(
-            parsed.get("sampling_rate"),
-            allow_none=True,
-            default=None,
-            field_name="sampling_rate",
-        )
+        trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
     except ValueError as exc:
         return str(exc)
+    handler = SACHandler(path)
+    result = handler.get_trace_data(trace_index=trace_index)
+    return json.dumps(result, indent=2)
 
-    methods = _normalize_method_list(parsed.get("methods"))
-    method_params = _parse_method_params(parsed.get("method_params"))
+# 将 SAC 转换为 NumPy
+@tool
+def convert_sac_to_numpy(params: Union[str, dict, None] = None):
+    """
+    Convert SAC data to NumPy. Args: path (optional), output_path.
+    """
+    """将 SAC 数据转换为 NumPy。参数：path（可选）、output_path。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_SAC_PATH
+    if not path:
+        return "No SAC file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="sac_data.npy")
+    handler = SACHandler(path)
+    result = handler.to_numpy(output_path=output_path)
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    result["saved_to"] = result.get("output_path", output_path)
+    return json.dumps(result, indent=2)
 
-    resolved_path, inferred_type = _resolve_source_path(requested_path, source_type)
-    if not resolved_path:
-        return "No suitable data file is currently loaded. Please upload or specify a file path."
+# 将 SAC 转换为 HDF5
+@tool
+def convert_sac_to_hdf5(params: Union[str, dict, None] = None):
+    """
+    Convert SAC data to HDF5. Args: path (optional), output_path, compression.
+    """
+    """将 SAC 数据写入 HDF5。参数：path（可选）、output_path、compression。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_SAC_PATH
+    if not path:
+        return "No SAC file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="sac_data.h5")
+    compression = parsed.get("compression", "gzip")
+    if isinstance(compression, str) and compression.lower() in {"none", "null", ""}:
+        compression = None
+    handler = SACHandler(path)
+    result = handler.to_hdf5(output_path=output_path, compression=compression)
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    result["saved_to"] = result.get("output_path", output_path)
+    return json.dumps(result, indent=2)
 
-    file_type = _normalize_source_type(source_type) or inferred_type
+# 将 SAC 转换为 MiniSEED
+@tool
+def convert_sac_to_miniseed(params: Union[str, dict, None] = None):
+    """
+    Convert SAC traces to MiniSEED. Args: path (optional), output_path.
+    """
+    """将 SAC 数据转换为 MiniSEED。参数：path（可选）、output_path。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_SAC_PATH
+    if not path:
+        return "No SAC file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="sac_data.mseed")
+    handler = SACHandler(path)
+    result = handler.to_miniseed(output_path=output_path)
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    result["saved_to"] = result.get("output_path", output_path)
+    return json.dumps(result, indent=2)
 
-    try:
-        picks = pick_phases(
-            resolved_path,
-            file_type=file_type,
-            dataset=dataset,
-            sampling_rate=sampling_rate,
-            methods=methods,
-            method_params=method_params,
-        )
-    except Exception as exc:
-        return json.dumps({"error": str(exc)}, indent=2)
-
-    if not picks:
-        return "No phase arrivals were detected."
-
-    serialized = [asdict(item) for item in picks]
-    summary = summarize_pick_results(picks)
-    return json.dumps(
-        {
-            "file": resolved_path,
-            "file_type": file_type,
-            "count": len(serialized),
-            "results": serialized,
-            "summary": summary,
-        },
-        indent=2,
-    )
+# 将 SAC 转换为 Excel
+@tool
+def convert_sac_to_excel(params: Union[str, dict, None] = None):
+    """
+    Convert SAC data to Excel. Args: path (optional), output_path.
+    """
+    """将 SAC 数据转换为 Excel。参数：path（可选）、output_path。"""
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_SAC_PATH
+    if not path:
+        return "No SAC file is currently loaded."
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="sac_data.xlsx")
+    handler = SACHandler(path)
+    result = handler.to_excel(output_path=output_path)
+    if "error" in result:
+        return json.dumps(result, indent=2)
+    result["saved_to"] = result.get("output_path", output_path)
+    return json.dumps(result, indent=2)
