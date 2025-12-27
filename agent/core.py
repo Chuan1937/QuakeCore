@@ -27,6 +27,12 @@ from agent.tools import (
     convert_miniseed_to_numpy,
     convert_miniseed_to_hdf5,
     convert_miniseed_to_sac,
+    get_sac_structure,
+    read_sac_trace,
+    convert_sac_to_numpy,
+    convert_sac_to_hdf5,
+    convert_sac_to_miniseed,
+    convert_sac_to_excel,
 )
 
 Provider = Literal["deepseek", "ollama"]
@@ -98,6 +104,12 @@ def get_agent_executor(
         convert_miniseed_to_numpy,
         convert_miniseed_to_hdf5,
         convert_miniseed_to_sac,
+        get_sac_structure,
+        read_sac_trace,
+        convert_sac_to_numpy,
+        convert_sac_to_hdf5,
+        convert_sac_to_miniseed,
+        convert_sac_to_excel,
     ]
 
     template = '''Answer the following questions as best you can. You have access to the following tools:
