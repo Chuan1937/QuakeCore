@@ -1,7 +1,10 @@
+from dataclasses import asdict
+
 from langchain.tools import tool
 from utils.segy_handler import SegyHandler
 from utils.miniseed_handler import MiniSEEDHandler
 from utils.hdf5_handler import HDF5Handler
+from utils.phase_picker import pick_phases, summarize_pick_results
 from utils.sac_handler import SACHandler
 import json
 from typing import Union
@@ -76,6 +79,121 @@ def _coerce_int(value, *, allow_none=False, default=None, field_name="value"):
             return None
         return int(lowered)
     raise ValueError(f"{field_name} must be an integer, got {value!r}")
+
+
+def _coerce_float(value, *, allow_none=False, default=None, field_name="value"):
+    if value is None:
+        if allow_none:
+            return default
+        if default is not None:
+            return float(default)
+        raise ValueError(f"{field_name} must be provided")
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value)
+    if isinstance(value, str):
+        lowered = value.strip()
+        if allow_none and lowered.lower() in {"none", "null", ""}:
+            return default
+        return float(lowered)
+    raise ValueError(f"{field_name} must be a float, got {value!r}")
+
+
+def _normalize_method_list(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, str):
+        candidate = raw_value.strip()
+        if not candidate:
+            return None
+        if candidate.startswith("["):
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, list):
+                    return [str(item).strip() for item in data if str(item).strip()]
+            except json.JSONDecodeError:
+                pass
+        return [part.strip() for part in candidate.split(",") if part.strip()]
+    if isinstance(raw_value, (list, tuple, set)):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    return None
+
+
+def _parse_method_params(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, dict):
+        return raw_value
+    if isinstance(raw_value, str):
+        candidate = raw_value.strip()
+        if not candidate:
+            return None
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _normalize_source_type(value: str | None):
+    if not value:
+        return None
+    normalized = value.lower().strip()
+    alias = {
+        "miniseed": "mseed",
+        "mseed": "mseed",
+        "segy": "segy",
+        "sgy": "segy",
+        "hdf5": "hdf5",
+        "h5": "hdf5",
+        "npy": "npy",
+        "npz": "npz",
+        "sac": "sac",
+    }
+    return alias.get(normalized, normalized)
+
+
+def _infer_file_type_from_path(path: str | None):
+    if not path:
+        return None
+    ext = os.path.splitext(path)[1].lower()
+    mapping = {
+        ".segy": "segy",
+        ".sgy": "segy",
+        ".mseed": "mseed",
+        ".miniseed": "mseed",
+        ".h5": "hdf5",
+        ".hdf5": "hdf5",
+        ".npy": "npy",
+        ".npz": "npz",
+        ".sac": "sac",
+    }
+    return mapping.get(ext)
+
+
+def _resolve_source_path(path: str | None, source_type: str | None):
+    normalized_type = _normalize_source_type(source_type)
+    if path:
+        inferred = normalized_type or _infer_file_type_from_path(path)
+        return path, inferred
+
+    candidates = [
+        ("segy", CURRENT_SEGY_PATH),
+        ("mseed", CURRENT_MINISEED_PATH),
+        ("hdf5", CURRENT_HDF5_PATH),
+    ]
+
+    if normalized_type:
+        for ctype, cpath in candidates:
+            if ctype == normalized_type and cpath:
+                return cpath, ctype
+        return None, normalized_type
+
+    for ctype, cpath in candidates:
+        if cpath:
+            return cpath, ctype
+    return None, None
 
 
 def _resolve_output_path(output_path: str | None, *, default_filename: str) -> str:

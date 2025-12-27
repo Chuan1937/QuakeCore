@@ -5,6 +5,8 @@ import h5py
 
 
 class HDF5Handler:
+    _PREFERRED_DATASETS = ("traces", "data", "dataset", "waveforms", "waveform", "values")
+
     def __init__(self, filepath: str):
         self.filepath = filepath
         self._validate_file()
@@ -35,19 +37,29 @@ class HDF5Handler:
         return datasets
 
     def _select_dataset(self, h5f, dataset_name: str | None):
+        def _candidate_names(name: str):
+            norm = str(name).strip()
+            if not norm:
+                return []
+            candidates = [norm]
+            if norm.startswith("/"):
+                candidates.append(norm.lstrip("/"))
+            else:
+                candidates.append(f"/{norm}")
+            return [c for c in candidates if c]
+
         if dataset_name:
-            if dataset_name in h5f:
-                node = h5f[dataset_name]
-                if isinstance(node, h5py.Dataset):
-                    return node, dataset_name
-                raise ValueError(f"Path {dataset_name} is not a dataset")
-            if dataset_name.startswith("/") and dataset_name[1:] in h5f:
-                node = h5f[dataset_name[1:]]
-                if isinstance(node, h5py.Dataset):
-                    return node, dataset_name
+            for candidate in _candidate_names(dataset_name):
+                node = h5f.get(candidate)
+                if node is not None and isinstance(node, h5py.Dataset):
+                    return node, candidate
             raise ValueError(f"Dataset {dataset_name} not found")
-        if "traces" in h5f and isinstance(h5f["traces"], h5py.Dataset):
-            return h5f["traces"], "traces"
+
+        for preferred in self._PREFERRED_DATASETS:
+            node = h5f.get(preferred)
+            if node is not None and isinstance(node, h5py.Dataset):
+                return node, preferred
+
         datasets = self._collect_datasets(h5f)
         if datasets:
             return datasets[0]
