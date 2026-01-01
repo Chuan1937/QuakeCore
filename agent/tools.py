@@ -4,7 +4,7 @@ from langchain.tools import tool
 from utils.segy_handler import SegyHandler
 from utils.miniseed_handler import MiniSEEDHandler
 from utils.hdf5_handler import HDF5Handler
-from utils.phase_picker import pick_phases, summarize_pick_results
+from utils.phase_picker import pick_phases, summarize_pick_results, load_traces, plot_waveform_with_picks
 from utils.sac_handler import SACHandler
 import json
 from typing import Union
@@ -854,3 +854,135 @@ def convert_sac_to_excel(params: Union[str, dict, None] = None):
         return json.dumps(result, indent=2)
     result["saved_to"] = result.get("output_path", output_path)
     return json.dumps(result, indent=2)
+
+
+@tool
+def pick_first_arrivals(params: Union[str, dict, None] = None):
+    """
+    Pick first arrivals (phases) on the currently loaded file.
+    Args:
+      path (optional): File path override.
+      file_type (optional): 'hdf5', 'sac', 'segy', 'miniseed'.
+      dataset (optional): For HDF5, specific dataset name.
+      methods (optional): Comma-separated list of methods (e.g. 'sta_lta,aic').
+      method_params (optional): JSON string or dict of params for methods.
+    """
+    """在当前加载的文件上拾取初至（震相）。参数：path（可选）、file_type（可选）、dataset（可选）、methods（可选）、method_params（可选）。"""
+    parsed = _parse_param_dict(params)
+    
+    # Determine source path and type
+    path = parsed.get("path")
+    file_type = parsed.get("file_type")
+    
+    if not path:
+        if CURRENT_HDF5_PATH:
+            path = CURRENT_HDF5_PATH
+            if not file_type: file_type = "hdf5"
+        elif CURRENT_SAC_PATH:
+            path = CURRENT_SAC_PATH
+            if not file_type: file_type = "sac"
+        elif CURRENT_SEGY_PATH:
+            path = CURRENT_SEGY_PATH
+            if not file_type: file_type = "segy"
+        elif CURRENT_MINISEED_PATH:
+            path = CURRENT_MINISEED_PATH
+            if not file_type: file_type = "miniseed"
+            
+    if not path:
+        return "No file is currently loaded. Please load a file first."
+
+    dataset = parsed.get("dataset")
+    
+    # Parse methods
+    methods_str = parsed.get("methods")
+    methods = [m.strip() for m in methods_str.split(",")] if methods_str else None
+    
+    # Parse method_params
+    method_params_raw = parsed.get("method_params")
+    method_params = None
+    if method_params_raw:
+        if isinstance(method_params_raw, dict):
+            method_params = method_params_raw
+        elif isinstance(method_params_raw, str):
+            try:
+                method_params = json.loads(method_params_raw)
+            except json.JSONDecodeError:
+                pass # Or handle error appropriately
+
+    try:
+        # 1. Pick phases
+        picks = pick_phases(
+            source=path,
+            file_type=file_type,
+            dataset=dataset,
+            methods=methods,
+            method_params=method_params
+        )
+        summary = summarize_pick_results(picks)
+        
+        # 2. Load traces for plotting
+        traces = load_traces(
+            source=path,
+            file_type=file_type,
+            dataset=dataset
+        )
+        
+        # 3. Generate plot
+        plot_path = _resolve_output_path(None, default_filename="picks_plot.png")
+        plot_waveform_with_picks(traces, picks, plot_path)
+
+        # 4. Build a brief Chinese summary (best P / best S per trace)
+        best_by_trace: dict[int, dict[str, dict]] = {}
+        for item in summary:
+            trace_index = int(item.get("trace_index", 0))
+            best_by_trace.setdefault(trace_index, {})
+            for m in item.get("methods", []):
+                phase = (m.get("phase_type") or "P").upper()
+                score = m.get("normalized_score")
+                if score is None:
+                    continue
+                current = best_by_trace[trace_index].get(phase)
+                if current is None or (current.get("normalized_score") is None) or (score > current.get("normalized_score")):
+                    best_by_trace[trace_index][phase] = m
+        
+        # Format as a Markdown output (Chinese)
+        lines = []
+        lines.append(f"![拾取结果图]({plot_path})")
+        lines.append("")
+
+        lines.append(f"初至拾取已完成，结果图表已保存至：`{plot_path}`")
+        for trace_index in sorted(best_by_trace.keys()):
+            best_p = best_by_trace[trace_index].get("P")
+            best_s = best_by_trace[trace_index].get("S")
+            parts = []
+            if best_p:
+                parts.append(
+                    f"最佳P波：方法 {best_p.get('method')}，样本点 {best_p.get('sample_index')}，时间 {best_p.get('absolute_time')}，评分 {best_p.get('normalized_score'):.4f}"
+                )
+            else:
+                parts.append("最佳P波：未检出")
+            if best_s:
+                parts.append(
+                    f"最佳S波：方法 {best_s.get('method')}，样本点 {best_s.get('sample_index')}，时间 {best_s.get('absolute_time')}，评分 {best_s.get('normalized_score'):.4f}"
+                )
+            else:
+                parts.append("最佳S波：未检出")
+            lines.append(f"摘要（Trace {trace_index}）：" + "；".join(parts))
+        lines.append("")
+        
+        for item in summary:
+            lines.append(f"### Trace {item['trace_index']}")
+            lines.append("| 相位 | 方法 | 样本点 | 评分 | 绝对时间 |")
+            lines.append("| :--- | :--- | :--- | :--- | :--- |")
+            
+            # Sort methods by score descending
+            sorted_methods = sorted(item['methods'], key=lambda x: x['normalized_score'] or 0, reverse=True)
+            for m in sorted_methods:
+                score = f"{m['normalized_score']:.4f}" if m['normalized_score'] is not None else "N/A"
+                phase = m.get('phase_type', 'P')
+                lines.append(f"| {phase} | {m['method']} | {m['sample_index']} | {score} | {m['absolute_time']} |")
+            lines.append("")
+            
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error picking phases: {str(e)}"

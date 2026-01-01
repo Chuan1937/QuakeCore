@@ -33,6 +33,7 @@ from agent.tools import (
     convert_sac_to_hdf5,
     convert_sac_to_miniseed,
     convert_sac_to_excel,
+    pick_first_arrivals,
 )
 
 Provider = Literal["deepseek", "ollama"]
@@ -110,13 +111,15 @@ def get_agent_executor(
         convert_sac_to_hdf5,
         convert_sac_to_miniseed,
         convert_sac_to_excel,
+        pick_first_arrivals,
     ]
 
-    template = '''Answer the following questions as best you can. You have access to the following tools:
+    template = '''请尽力用中文回答用户问题。你可以使用以下工具：
 
 {tools}
 
 Important rules:
+- Final Answer 必须使用中文（文件路径、表格内容、方法名可保留原样）。
 - Do NOT invent parameters the user did not request.
 - For data export/conversion tools: if the user does NOT specify a range, do NOT set `count`.
     (The tools default to exporting ALL traces when `count` is omitted or set to null.)
@@ -128,6 +131,11 @@ Important rules:
 - Before choosing SEGY/MiniSEED specific tools, use get_loaded_context to determine the loaded file type.
 - For "读取第X条轨迹", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
+- CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
+- ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
+
+语言要求：
+- 不要输出英文段落或英文“Summary: ...”。如需总结，请使用中文“摘要：...”。
 
 Use the following format:
 

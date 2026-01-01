@@ -3,6 +3,7 @@ import os
 import tempfile
 import json
 import shutil
+import re
 from agent.core import get_agent_executor
 from agent.tools import (
     set_current_segy_path,
@@ -11,6 +12,7 @@ from agent.tools import (
     set_current_sac_path,
 )
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_community.callbacks import StreamlitCallbackHandler
 
 
 def format_intermediate_steps(intermediate_steps):
@@ -35,14 +37,76 @@ def format_intermediate_steps(intermediate_steps):
 
     return "\n\n".join(blocks)
 
+
+def render_message_content(content, msg_idx=0):
+    """Render message content, extracting images to the right column if present."""
+    # Regex to find markdown images: ![alt](path)
+    image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
+    images = image_pattern.findall(content)
+    
+    if images:
+        # Remove image tags from content to avoid double rendering
+        text_without_images = image_pattern.sub('', content)
+        
+        col1, col2 = st.columns([3, 2])
+        with col1:
+            st.markdown(text_without_images)
+        with col2:
+            for idx, (alt, path) in enumerate(images):
+                path = path.strip()
+                if os.path.exists(path):
+                    st.image(path, caption=alt, width='stretch')
+                    with open(path, "rb") as file:
+                        st.download_button(
+                            label="⬇️ 下载图片",
+                            data=file,
+                            file_name=os.path.basename(path),
+                            mime="image/png",
+                            key=f"download_{msg_idx}_{idx}_{os.path.basename(path)}"
+                        )
+                else:
+                    st.warning(f"无法加载图片: {path}")
+    else:
+        st.markdown(content)
+
+
 # Page Config
 st.set_page_config(page_title="QuakeCore AI Agent", layout="wide")
+
+# Custom CSS for "Cool" effects
+st.markdown("""
+<style>
+    /* Neon Pulse Animation for st.status */
+    div[data-testid="stStatusWidget"] {
+        border: 2px solid #00e676;
+        box-shadow: 0 0 15px #00e676, inset 0 0 10px rgba(0, 230, 118, 0.2);
+        animation: neon-pulse 2s infinite alternate;
+        border-radius: 8px;
+        background-color: rgba(0, 20, 0, 0.3);
+    }
+
+    @keyframes neon-pulse {
+        0% { box-shadow: 0 0 5px #00e676, 0 0 10px #00e676; border-color: #00e676; }
+        100% { box-shadow: 0 0 20px #00e676, 0 0 30px #00e676; border-color: #69f0ae; }
+    }
+    
+    /* Chat message styling */
+    .stChatMessage {
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 st.title("🌋 QuakeCore AI - 地震数据智能助手")
 
 # Initialize Session State
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+if "show_data_panel" not in st.session_state:
+    st.session_state.show_data_panel = True
 
 if "agent" not in st.session_state:
     st.session_state.agent = None
@@ -96,6 +160,14 @@ with st.sidebar:
             "base_url": deepseek_base_url,
         }
         st.info("使用 DeepSeek 时需要有效的 API Key，可在环境变量 DEEPSEEK_API_KEY 中配置。")
+
+    st.divider()
+    st.header("数据面板")
+    st.session_state.show_data_panel = st.checkbox(
+        "显示可视化结果",
+        value=bool(st.session_state.show_data_panel),
+        key="show_data_panel_checkbox",
+    )
 
 config_changed = current_agent_config != st.session_state.agent_config
 if config_changed:
@@ -153,10 +225,47 @@ if "current_file_path" in st.session_state:
         set_current_sac_path(st.session_state.current_file_path)
 
 
-# Chat Interface
-for message in st.session_state.messages:
+# Sidebar data panel content (latest visualization)
+with st.sidebar:
+    if st.session_state.show_data_panel:
+        st.caption("最近一次生成的图像：")
+        latest_image_path = None
+        latest_image_caption = None
+        image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
+        for msg in reversed(st.session_state.messages):
+            if msg.get("role") != "assistant":
+                continue
+            match = image_pattern.search(msg.get("content", ""))
+            if match:
+                latest_image_caption = match.group(1)
+                latest_image_path = match.group(2).strip()
+                break
+
+        if latest_image_path and os.path.exists(latest_image_path):
+            st.image(latest_image_path, caption=latest_image_caption or "结果图", width='stretch')
+            with open(latest_image_path, "rb") as file:
+                st.download_button(
+                    label="⬇️ 下载当前图表",
+                    data=file,
+                    file_name=os.path.basename(latest_image_path),
+                    mime="image/png",
+                    key="download_latest_vis"
+                )
+        else:
+            st.info("暂无可视化结果")
+
+
+def render_message_content_no_image(content):
+    """Render message content but strip images (since they are in the right column)."""
+    image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
+    text_without_images = image_pattern.sub('', content)
+    st.markdown(text_without_images)
+
+
+# Chat Interface (full width)
+for idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        render_message_content_no_image(message["content"])
         if steps := message.get("steps"):
             with st.expander("思考过程", expanded=False):
                 st.markdown(steps)
@@ -175,7 +284,6 @@ if prompt and agent_ready:
     # Generate response
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        message_placeholder.markdown("思考中...")
         
         try:
             # Prepare chat history for LangChain
@@ -186,24 +294,31 @@ if prompt and agent_ready:
                 else:
                     chat_history.append(AIMessage(content=msg["content"]))
             
-            # Run Agent
-            response = st.session_state.agent.invoke({
-                "input": prompt,
-                "chat_history": chat_history
-            })
+            # Run Agent with a visible status (so the neon animation actually applies)
+            status = st.status("正在思考…", expanded=True)
+            st_callback = StreamlitCallbackHandler(status.container(), expand_new_thoughts=True)
+            
+            response = st.session_state.agent.invoke(
+                {"input": prompt, "chat_history": chat_history},
+                config={"callbacks": [st_callback]}
+            )
             
             answer = response["output"]
             steps_markdown = format_intermediate_steps(response.get("intermediate_steps", []))
 
-            message_placeholder.markdown(answer)
-            with st.expander("思考过程", expanded=False):
-                st.markdown(steps_markdown)
-
+            message_placeholder.empty()
+            render_message_content_no_image(answer)
+            
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": answer,
                 "steps": steps_markdown
             })
+
+            status.update(label="完成", state="complete", expanded=False)
+            
+            # Refresh so sidebar data panel picks up latest image
+            st.rerun()
             
         except Exception as e:
             active_provider = (st.session_state.agent_config or current_agent_config or {}).get("provider", "ollama")

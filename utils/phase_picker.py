@@ -4,6 +4,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import h5py
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from obspy import UTCDateTime, read as obspy_read
 from obspy.signal.filter import bandpass
 from obspy.signal.trigger import classic_sta_lta, trigger_onset
@@ -71,6 +73,7 @@ class PickResult:
     absolute_time: Optional[str]
     raw_score: Optional[float]
     normalized_score: Optional[float]
+    phase_type: str = "P"  # "P" or "S"
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -337,7 +340,7 @@ def load_traces(
     ext = os.path.splitext(path)[1].lower()
     fmt = file_type or ext_map.get(ext)
 
-    if fmt in {"mseed", "sac"}:
+    if fmt in {"mseed", "miniseed", "sac"}:
         return _collect_obspy_traces(path)
     if fmt == "segy":
         return _collect_segy_traces(path)
@@ -398,6 +401,7 @@ class PhasePickingEngine:
             "feature_threshold": self._pick_feature_threshold,
             "ar_model": self._pick_ar_model,
             "template_correlation": self._pick_template_correlation,
+            "s_phase": self._pick_s_basic,  # New S-wave picker
         }
         selected = list(methods) if methods else list(available.keys())
         params = method_params or {}
@@ -407,6 +411,10 @@ class PhasePickingEngine:
                 picker = available.get(name)
                 if picker is None:
                     continue
+                # Some pickers might return a list of picks (e.g. P and S)
+                # But current signature is Optional[PickResult].
+                # I will modify _pick_s_basic to return a single S-pick.
+                # If the user wants both, they select 'sta_lta' (for P) and 's_phase' (for S).
                 pick = picker(idx, record, params.get(name, {}))
                 if pick:
                     results.append(pick)
@@ -420,6 +428,7 @@ class PhasePickingEngine:
         sample_index: int,
         raw_score: Optional[float],
         normalized_score: Optional[float],
+        phase_type: str = "P",
         extra: Optional[Dict[str, Any]] = None,
     ) -> PickResult:
         time_offset = sample_index / record.sampling_rate if record.sampling_rate else None
@@ -436,6 +445,7 @@ class PhasePickingEngine:
             absolute_time=abs_time,
             raw_score=raw_score,
             normalized_score=normalized_score,
+            phase_type=phase_type,
             metadata=payload,
         )
 
@@ -671,6 +681,67 @@ class PhasePickingEngine:
         normalized = (best_score + 1.0) / 2.0 if np.isfinite(best_score) else None
         return self._format_result(trace_index, "template_correlation", record, best_idx, best_score, normalized)
 
+    def _pick_s_basic(
+        self,
+        trace_index: int,
+        record: TraceRecord,
+        options: Dict[str, Any],
+    ) -> Optional[PickResult]:
+        """Basic S-wave picker using STA/LTA and time delay."""
+        data = self._signal(trace_index)
+        short = float(options.get("short_window", 1.0))
+        long = float(options.get("long_window", 10.0))
+        trig_on = float(options.get("trigger_on", 3.5))
+        trig_off = float(options.get("trigger_off", 1.0))
+        min_s_delay = float(options.get("min_s_delay", 2.0)) # Minimum delay after P to look for S
+        
+        nsta = max(1, int(short * record.sampling_rate))
+        nlta = max(nsta + 1, int(long * record.sampling_rate))
+        
+        if nlta >= data.size:
+            return None
+            
+        cft = classic_sta_lta(data, nsta, nlta)
+        on_off = trigger_onset(cft, trig_on, trig_off)
+        
+        if on_off.size == 0:
+            return None
+            
+        # Assume first trigger is P
+        p_idx = int(on_off[0][0])
+        
+        # Look for S after P + delay
+        s_search_start = p_idx + int(min_s_delay * record.sampling_rate)
+        
+        if s_search_start >= cft.size:
+            return None
+            
+        # Find max STA/LTA in the search window
+        s_window = cft[s_search_start:]
+        if s_window.size == 0:
+            return None
+            
+        s_relative_idx = np.argmax(s_window)
+        s_idx = s_search_start + s_relative_idx
+        
+        raw_score = float(cft[s_idx])
+        
+        # Check if it's a valid trigger (above threshold)
+        if raw_score < trig_on:
+            return None
+            
+        normalized = max(0.0, min(1.0, (raw_score - trig_on) / max(trig_on * 2.0, 1e-6)))
+        
+        return self._format_result(
+            trace_index, 
+            "s_phase", 
+            record, 
+            s_idx, 
+            raw_score, 
+            normalized, 
+            phase_type="S"
+        )
+
 
 def pick_phases(
     source: Any,
@@ -709,6 +780,7 @@ def summarize_pick_results(picks: Sequence[PickResult]) -> List[Dict[str, Any]]:
                 "sample_index": pick.sample_index,
                 "absolute_time": pick.absolute_time,
                 "normalized_score": pick.normalized_score,
+                "phase_type": pick.phase_type,
             }
         )
         if pick.normalized_score is not None:
@@ -720,6 +792,7 @@ def summarize_pick_results(picks: Sequence[PickResult]) -> List[Dict[str, Any]]:
                     "method": pick.method,
                     "sample_index": pick.sample_index,
                     "absolute_time": pick.absolute_time,
+                    "phase_type": pick.phase_type,
                 }
 
     summaries: List[Dict[str, Any]] = []
@@ -735,7 +808,92 @@ def summarize_pick_results(picks: Sequence[PickResult]) -> List[Dict[str, Any]]:
                 "best_method": best.get("method"),
                 "best_sample_index": best.get("sample_index"),
                 "best_absolute_time": best.get("absolute_time"),
+                "best_phase_type": best.get("phase_type"),
                 "methods": info["methods"],
             }
         )
     return summaries
+
+
+def plot_waveform_with_picks(
+    traces: List[TraceRecord],
+    picks: List[PickResult],
+    output_path: str,
+    max_traces: int = 5
+) -> str:
+    """Plot waveforms with picks and save to file."""
+
+    def _method_to_color(method: str):
+        # Stable method->color mapping using matplotlib categorical palettes.
+        # Falls back gracefully if method list exceeds palette length.
+        palette = plt.get_cmap('tab20')
+        if not method:
+            return palette(0)
+        idx = abs(hash(method)) % palette.N
+        return palette(idx)
+    
+    # Group picks by trace index
+    picks_by_trace = {}
+    for p in picks:
+        if p.trace_index not in picks_by_trace:
+            picks_by_trace[p.trace_index] = []
+        picks_by_trace[p.trace_index].append(p)
+        
+    # Select traces to plot (first N)
+    traces_to_plot = traces[:max_traces]
+    
+    n_traces = len(traces_to_plot)
+    if n_traces == 0:
+        return "No traces to plot."
+        
+    fig, axes = plt.subplots(n_traces, 1, figsize=(10, 3 * n_traces), sharex=True, squeeze=False)
+    
+    for i, trace in enumerate(traces_to_plot):
+        ax = axes[i, 0]
+        data = trace.data
+        sr = trace.sampling_rate
+        times = np.arange(len(data)) / sr
+        
+        waveform_line, = ax.plot(times, data, 'k-', linewidth=0.6, label="Waveform")
+        ax.set_ylabel("Amplitude")
+        
+        # Plot picks
+        trace_picks = picks_by_trace.get(i, [])
+
+        legend_items = {"Waveform": waveform_line}
+
+        for p in trace_picks:
+            if p.sample_index < 0 or p.sample_index >= len(data):
+                continue
+                
+            t_pick = p.sample_index / sr
+
+            color = _method_to_color(p.method)
+            linestyle = '-.' if p.phase_type == "S" else '--'
+            
+            # Vertical line
+
+            legend_label = f"{p.phase_type}-{p.method}" if p.method else f"{p.phase_type}"
+            line = ax.axvline(
+                x=t_pick,
+                color=color,
+                linestyle=linestyle,
+                alpha=0.9,
+                linewidth=1.2,
+            )
+
+            # Keep one legend item per (phase, method) to avoid a huge legend.
+            legend_items.setdefault(legend_label, line)
+
+        if len(legend_items) > 1:
+            ax.legend(list(legend_items.values()), list(legend_items.keys()), loc='upper right', fontsize=9)
+        else:
+            # No picks: avoid showing a redundant legend.
+            ax.legend().remove()
+            
+    axes[-1, 0].set_xlabel("Time (s)")
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close(fig)
+    
+    return output_path
