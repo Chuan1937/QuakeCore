@@ -4,6 +4,7 @@ pandas
 numpy
 h5py
 matplotlib
+hdf5plugin
 langchain
 langchain-community
 langchain-ollama

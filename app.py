@@ -71,35 +71,116 @@ def render_message_content(content, msg_idx=0):
 
 
 # Page Config
-st.set_page_config(page_title="QuakeCore AI Agent", layout="wide")
+LOGO_PATH = "/home/yuan/code/QuakeCore/resources/QuakeCore.png"
+USER_AVATAR_PATH = "/home/yuan/code/QuakeCore/resources/chuanjun.jpg"
+
+st.set_page_config(
+    page_title="QuakeCore AI Agent",
+    page_icon=LOGO_PATH,
+    layout="wide"
+)
 
 # Custom CSS for "Cool" effects
 st.markdown("""
 <style>
-    /* Neon Pulse Animation for st.status */
+    :root {
+        /* Light Theme Variables from Seismic Design */
+        --bg-app: rgba(255, 255, 255, 0.65);
+        --bg-sidebar: rgba(255, 255, 255, 0.5);
+        --text-primary: #4a4a4a;
+        --accent-color: #8ec5fc; /* Light Blue */
+        --accent-hover: #ff9a9e; /* Light Pink */
+        --message-user-bg: #bde0fe;
+        --message-ai-bg: #ffffff;
+        --radius-lg: 30px;
+        --radius-md: 20px;
+    }
+
+    /* Global Background - Pure White */
+    .stApp {
+        background-color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        color: var(--text-primary);
+    }
+
+    /* Sidebar Glassmorphism */
+    section[data-testid="stSidebar"] {
+        background-color: var(--bg-sidebar);
+        backdrop-filter: blur(30px);
+        border-right: 1px solid rgba(255, 255, 255, 0.8);
+        box-shadow: 0 2px 8px rgba(142, 197, 252, 0.15);
+    }
+    
+    /* Chat Message Styling */
+    .stChatMessage {
+        background-color: rgba(255, 255, 255, 0.6);
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        padding: 15px;
+        margin-bottom: 10px;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        background-color: var(--accent-color);
+        color: white;
+        border-radius: 20px;
+        border: none;
+        box-shadow: 0 4px 6px rgba(142, 197, 252, 0.3);
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        background-color: var(--accent-hover);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(255, 154, 158, 0.4);
+        color: white;
+    }
+
+    /* Status Widget (The "Thinking" box) */
     div[data-testid="stStatusWidget"] {
-        border: 2px solid #00e676;
-        box-shadow: 0 0 15px #00e676, inset 0 0 10px rgba(0, 230, 118, 0.2);
+        background-color: rgba(255, 255, 255, 0.8);
+        border: 2px solid var(--accent-color);
+        border-radius: 15px;
+        box-shadow: 0 0 15px rgba(142, 197, 252, 0.4);
         animation: neon-pulse 2s infinite alternate;
-        border-radius: 8px;
-        background-color: rgba(0, 20, 0, 0.3);
     }
 
     @keyframes neon-pulse {
-        0% { box-shadow: 0 0 5px #00e676, 0 0 10px #00e676; border-color: #00e676; }
-        100% { box-shadow: 0 0 20px #00e676, 0 0 30px #00e676; border-color: #69f0ae; }
+        0% { box-shadow: 0 0 5px var(--accent-color); border-color: var(--accent-color); }
+        100% { box-shadow: 0 0 15px var(--accent-color); border-color: #69f0ae; }
     }
     
-    /* Chat message styling */
-    .stChatMessage {
-        border-radius: 10px;
-        padding: 10px;
+    /* Headers */
+    h1, h2, h3 {
+        color: #2c3e50;
+        font-weight: 700;
+    }
+    
+    /* Window Controls Simulation */
+    .window-controls {
+        display: flex;
+        gap: 8px;
         margin-bottom: 10px;
     }
+    .control {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+    .control.red { background-color: #ffadad; }
+    .control.yellow { background-color: #ffd6a5; }
+    .control.green { background-color: #caffbf; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🌋 QuakeCore AI - 地震数据智能助手")
+col_logo, col_title = st.columns([1, 8])
+with col_logo:
+    if os.path.exists(LOGO_PATH):
+        st.image(LOGO_PATH, width=100)
+with col_title:
+    st.title("震元引擎 (QuakeCore Engine)")
 
 # Initialize Session State
 if "messages" not in st.session_state:
@@ -122,6 +203,17 @@ if "current_file_ext" not in st.session_state:
     st.session_state.current_file_ext = None
 
 with st.sidebar:
+    st.header("数据面板")
+    st.session_state.show_data_panel = st.checkbox(
+        "显示可视化结果",
+        value=bool(st.session_state.show_data_panel),
+        key="show_data_panel_checkbox",
+    )
+    
+    # Placeholder for data panel content
+    data_panel_placeholder = st.empty()
+
+    st.divider()
     st.header("模型配置")
     provider_options = {
         "DeepSeek API": "deepseek",
@@ -162,11 +254,11 @@ with st.sidebar:
         st.info("使用 DeepSeek 时需要有效的 API Key，可在环境变量 DEEPSEEK_API_KEY 中配置。")
 
     st.divider()
-    st.header("数据面板")
-    st.session_state.show_data_panel = st.checkbox(
-        "显示可视化结果",
-        value=bool(st.session_state.show_data_panel),
-        key="show_data_panel_checkbox",
+    st.markdown(
+        "<div style='font-size: 0.8em; color: #7a7a7a; text-align: center;'>"
+        "AI 生成的内容可能存在误差，请结合专业工具核实。"
+        "</div>",
+        unsafe_allow_html=True
     )
 
 config_changed = current_agent_config != st.session_state.agent_config
@@ -225,35 +317,6 @@ if "current_file_path" in st.session_state:
         set_current_sac_path(st.session_state.current_file_path)
 
 
-# Sidebar data panel content (latest visualization)
-with st.sidebar:
-    if st.session_state.show_data_panel:
-        st.caption("最近一次生成的图像：")
-        latest_image_path = None
-        latest_image_caption = None
-        image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
-        for msg in reversed(st.session_state.messages):
-            if msg.get("role") != "assistant":
-                continue
-            match = image_pattern.search(msg.get("content", ""))
-            if match:
-                latest_image_caption = match.group(1)
-                latest_image_path = match.group(2).strip()
-                break
-
-        if latest_image_path and os.path.exists(latest_image_path):
-            st.image(latest_image_path, caption=latest_image_caption or "结果图", width='stretch')
-            with open(latest_image_path, "rb") as file:
-                st.download_button(
-                    label="⬇️ 下载当前图表",
-                    data=file,
-                    file_name=os.path.basename(latest_image_path),
-                    mime="image/png",
-                    key="download_latest_vis"
-                )
-        else:
-            st.info("暂无可视化结果")
-
 
 def render_message_content_no_image(content):
     """Render message content but strip images (since they are in the right column)."""
@@ -264,7 +327,9 @@ def render_message_content_no_image(content):
 
 # Chat Interface (full width)
 for idx, message in enumerate(st.session_state.messages):
-    with st.chat_message(message["role"]):
+    role = message["role"]
+    avatar = USER_AVATAR_PATH if role == "user" else LOGO_PATH
+    with st.chat_message(role, avatar=avatar):
         render_message_content_no_image(message["content"])
         if steps := message.get("steps"):
             with st.expander("思考过程", expanded=False):
@@ -278,11 +343,11 @@ prompt = st.chat_input(
 
 if prompt and agent_ready:
     # Display user message
-    st.chat_message("user").markdown(prompt)
+    st.chat_message("user", avatar=USER_AVATAR_PATH).markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     # Generate response
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=LOGO_PATH):
         message_placeholder = st.empty()
         
         try:
@@ -317,9 +382,6 @@ if prompt and agent_ready:
 
             status.update(label="完成", state="complete", expanded=False)
             
-            # Refresh so sidebar data panel picks up latest image
-            st.rerun()
-            
         except Exception as e:
             active_provider = (st.session_state.agent_config or current_agent_config or {}).get("provider", "ollama")
             provider_hint = "Ollama 本地服务" if active_provider == "ollama" else "DeepSeek API 配置或网络状态"
@@ -327,5 +389,59 @@ if prompt and agent_ready:
             message_placeholder.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-# Cleanup on exit (Optional - Streamlit handles temp files differently depending on OS, 
-# but explicit cleanup is good practice if we were managing sessions manually)
+# Helper for modal image view
+if hasattr(st, "dialog"):
+    image_dialog = st.dialog
+elif hasattr(st, "experimental_dialog"):
+    image_dialog = st.experimental_dialog
+else:
+    image_dialog = None
+
+if image_dialog:
+    @image_dialog("可视化详情", width="large")
+    def view_image_modal(path, caption):
+        st.image(path, caption=caption, use_column_width=True)
+
+def update_data_panel():
+    if not st.session_state.show_data_panel:
+        data_panel_placeholder.empty()
+        return
+
+    with data_panel_placeholder.container():
+        st.caption("最近一次生成的图像：")
+        latest_image_path = None
+        latest_image_caption = None
+        image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
+        for msg in reversed(st.session_state.messages):
+            if msg.get("role") != "assistant":
+                continue
+            match = image_pattern.search(msg.get("content", ""))
+            if match:
+                latest_image_caption = match.group(1)
+                latest_image_path = match.group(2).strip()
+                break
+
+        if latest_image_path and os.path.exists(latest_image_path):
+            st.image(latest_image_path, caption=latest_image_caption or "结果图", width='stretch')
+            
+            # Action buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                if image_dialog:
+                    if st.button("🔍 放大", key=f"view_{os.path.basename(latest_image_path)}", use_container_width=True):
+                        view_image_modal(latest_image_path, latest_image_caption)
+            with col2:
+                with open(latest_image_path, "rb") as file:
+                    st.download_button(
+                        label="⬇️ 下载",
+                        data=file,
+                        file_name=os.path.basename(latest_image_path),
+                        mime="image/png",
+                        key=f"download_latest_vis_{os.path.basename(latest_image_path)}",
+                        use_container_width=True
+                    )
+        else:
+            st.info("暂无可视化结果")
+
+# Update data panel at the end of the script
+update_data_panel()

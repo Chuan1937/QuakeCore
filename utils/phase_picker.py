@@ -401,6 +401,8 @@ class PhasePickingEngine:
             "feature_threshold": self._pick_feature_threshold,
             "ar_model": self._pick_ar_model,
             "template_correlation": self._pick_template_correlation,
+            "pai_k": self._pick_pai_k,
+            "pai_s": self._pick_pai_s,
             "s_phase": self._pick_s_basic,  # New S-wave picker
         }
         selected = list(methods) if methods else list(available.keys())
@@ -680,6 +682,88 @@ class PhasePickingEngine:
             return None
         normalized = (best_score + 1.0) / 2.0 if np.isfinite(best_score) else None
         return self._format_result(trace_index, "template_correlation", record, best_idx, best_score, normalized)
+
+    def _pick_pai_k(
+        self,
+        trace_index: int,
+        record: TraceRecord,
+        options: Dict[str, Any],
+    ) -> Optional[PickResult]:
+        """PAI-K (kurtosis-based) picker: rolling kurtosis with simple threshold."""
+        data = self._signal(trace_index)
+        win_sec = float(options.get("window", 0.6))
+        threshold = float(options.get("threshold", 3.5))
+        min_index = int(options.get("min_index", 0))
+
+        win = max(3, int(win_sec * record.sampling_rate))
+        if win >= data.size:
+            return None
+
+        x = data
+        mean = np.convolve(x, np.ones(win), mode="valid") / win
+        x2 = np.convolve(x * x, np.ones(win), mode="valid") / win
+        x4 = np.convolve(x**4, np.ones(win), mode="valid") / win
+        var = np.maximum(x2 - mean**2, 1e-12)
+        std = np.sqrt(var)
+        kurtosis = x4 / (var * var) - 3.0
+
+        if kurtosis.size == 0:
+            return None
+
+        start_offset = win // 2
+        idx = int(np.argmax(kurtosis))
+        if idx < 0 or idx >= kurtosis.size:
+            return None
+
+        raw_score = float(kurtosis[idx])
+        pick_idx = idx + start_offset
+
+        if pick_idx < min_index or raw_score < threshold:
+            return None
+
+        normalized = max(0.0, min(1.0, (raw_score - threshold) / max(threshold * 2.0, 1e-6)))
+        return self._format_result(trace_index, "pai_k", record, pick_idx, raw_score, normalized)
+
+    def _pick_pai_s(
+        self,
+        trace_index: int,
+        record: TraceRecord,
+        options: Dict[str, Any],
+    ) -> Optional[PickResult]:
+        """PAI-S (skewness-based) picker: rolling skewness with simple threshold."""
+        data = self._signal(trace_index)
+        win_sec = float(options.get("window", 0.6))
+        threshold = float(options.get("threshold", 2.5))
+        min_index = int(options.get("min_index", 0))
+
+        win = max(3, int(win_sec * record.sampling_rate))
+        if win >= data.size:
+            return None
+
+        x = data
+        mean = np.convolve(x, np.ones(win), mode="valid") / win
+        x2 = np.convolve(x * x, np.ones(win), mode="valid") / win
+        x3 = np.convolve(x**3, np.ones(win), mode="valid") / win
+        var = np.maximum(x2 - mean**2, 1e-12)
+        std = np.sqrt(var)
+        skewness = (x3 - 3 * mean * var - mean**3) / (std**3 + 1e-12)
+
+        if skewness.size == 0:
+            return None
+
+        start_offset = win // 2
+        idx = int(np.argmax(np.abs(skewness)))
+        if idx < 0 or idx >= skewness.size:
+            return None
+
+        raw_score = float(skewness[idx])
+        pick_idx = idx + start_offset
+
+        if pick_idx < min_index or abs(raw_score) < threshold:
+            return None
+
+        normalized = max(0.0, min(1.0, (abs(raw_score) - threshold) / max(threshold * 2.0, 1e-6)))
+        return self._format_result(trace_index, "pai_s", record, pick_idx, raw_score, normalized)
 
     def _pick_s_basic(
         self,

@@ -10,6 +10,7 @@ import json
 from typing import Union
 import numpy as np
 import os
+import h5py
 
 # Global variable to store the current file path being analyzed
 # In a multi-user web app, this should be handled via session state or context
@@ -665,6 +666,109 @@ def convert_hdf5_to_excel(params: Union[str, dict, None] = None):
         return json.dumps(result, indent=2)
     return result
 
+# 工具：HDF5 ZFP 压缩
+@tool
+def compress_hdf5_to_zfp(params: Union[str, dict, None] = None):
+    """
+    Compress a dataset in HDF5 using ZFP. Args: path (optional), dataset (optional), output_path, mode (rate|accuracy), value.
+    """
+    """对 HDF5 数据集使用 ZFP 压缩。参数：path（可选）、dataset（可选）、output_path、mode（rate|accuracy）、value。"""
+
+    parsed = _parse_param_dict(params)
+    path = parsed.get("path") or CURRENT_HDF5_PATH
+    if not path:
+        return "No HDF5 file is currently loaded."
+
+    output_path = _resolve_output_path(parsed.get("output_path"), default_filename="hdf5_zfp.h5")
+    dataset_name = parsed.get("dataset")
+    mode = (parsed.get("mode") or "rate").strip().lower()
+    value = parsed.get("value")
+
+    try:
+        import hdf5plugin  # type: ignore
+    except Exception as exc:
+        return f"需要先安装 hdf5plugin 才能使用 ZFP 压缩: {exc}"
+
+    def _pick_dataset(h5f):
+        if dataset_name:
+            node = h5f.get(dataset_name)
+            if node is not None:
+                return node
+            raise ValueError(f"Dataset {dataset_name} not found in file")
+        for preferred in getattr(HDF5Handler, "_PREFERRED_DATASETS", ()):  # type: ignore
+            node = h5f.get(preferred)
+            if node is not None:
+                return node
+        # Fallback: first dataset encountered
+        chosen = None
+        def visitor(name, node):
+            nonlocal chosen
+            if chosen is None and isinstance(node, h5py.Dataset):
+                chosen = node
+        h5f.visititems(visitor)
+        if chosen is None:
+            raise ValueError("No dataset found to compress")
+        return chosen
+
+    compression_kwargs = None
+    mode_desc = None
+    try:
+        if mode == "rate":
+            rate = float(value) if value is not None else 8.0
+            compression_kwargs = hdf5plugin.Zfp(rate=rate)
+            mode_desc = f"rate={rate}"
+        elif mode == "accuracy":
+            accuracy = float(value) if value is not None else 1e-3
+            compression_kwargs = hdf5plugin.Zfp(accuracy=accuracy)
+            mode_desc = f"accuracy={accuracy}"
+        else:
+            return "mode 仅支持 rate 或 accuracy"
+    except Exception as exc:
+        return f"ZFP 参数解析失败: {exc}"
+
+    with h5py.File(path, "r") as src:
+        try:
+            source_dset = _pick_dataset(src)
+        except Exception as exc:
+            return str(exc)
+
+        data = source_dset[()]
+        source_name = source_dset.name or "/dataset"
+
+        with h5py.File(output_path, "w") as dst:
+            group = dst
+            parent = os.path.dirname(source_name)
+            if parent and parent not in {"", "/"}:
+                group = dst.require_group(parent.lstrip("/"))
+
+            target_name = os.path.basename(source_name) or "dataset"
+            try:
+                new_dset = group.create_dataset(target_name, data=data, **compression_kwargs)
+            except Exception as exc:
+                return f"创建压缩数据集失败: {exc}"
+
+            # 复制属性
+            for key, val in source_dset.attrs.items():
+                new_dset.attrs[key] = val
+
+            dst.attrs["source_file"] = os.path.abspath(path)
+            dst.attrs["compression"] = "zfp"
+            dst.attrs["zfp_mode"] = mode
+            dst.attrs["zfp_param"] = mode_desc
+
+    return json.dumps(
+        {
+            "source": os.path.abspath(path),
+            "dataset": source_name,
+            "output_path": os.path.abspath(output_path),
+            "compression": "zfp",
+            "mode": mode_desc,
+            "shape": getattr(data, "shape", None),
+            "dtype": str(getattr(data, "dtype", "")),
+        },
+        indent=2,
+    )
+
 # 工具：列出 HDF5 键
 @tool
 def get_hdf5_keys(params: Union[str, dict, None] = None):
@@ -860,6 +964,19 @@ def convert_sac_to_excel(params: Union[str, dict, None] = None):
 def pick_first_arrivals(params: Union[str, dict, None] = None):
     """
     Pick first arrivals (phases) on the currently loaded file.
+
+    Available Methods:
+    - sta_lta: Classic Short-Term/Long-Term Average ratio trigger.
+    - aic: Akaike Information Criterion for precise onset refinement.
+    - frequency_ratio: Detection based on spectral content changes.
+    - autocorr: Autocorrelation-based detection.
+    - feature_threshold: Simple amplitude/envelope thresholding.
+    - ar_model: Auto-Regressive model prediction error.
+    - template_correlation: Matched filtering with a waveform template.
+    - pai_k: PAI-K kurtosis-based picker.
+    - pai_s: PAI-S skewness-based picker.
+    - s_phase: Heuristic S-wave picker (STA/LTA max after P-wave delay).
+
     Args:
       path (optional): File path override.
       file_type (optional): 'hdf5', 'sac', 'segy', 'miniseed'.
@@ -867,7 +984,27 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
       methods (optional): Comma-separated list of methods (e.g. 'sta_lta,aic').
       method_params (optional): JSON string or dict of params for methods.
     """
-    """在当前加载的文件上拾取初至（震相）。参数：path（可选）、file_type（可选）、dataset（可选）、methods（可选）、method_params（可选）。"""
+    """在当前加载的文件上拾取初至（震相）。
+    
+    可用方法：
+    - sta_lta: 经典的短长时窗平均比值法 (STA/LTA)。
+    - aic: 赤池信息准则 (AIC)，用于精确到时优化。
+    - frequency_ratio: 基于频谱变化的检测方法。
+    - autocorr: 基于自相关的检测方法。
+    - feature_threshold: 简单的振幅/包络阈值法。
+    - ar_model: 自回归模型预测误差法。
+    - template_correlation: 模板匹配滤波法。
+    - pai_k: 基于峰度的 PAI-K 拾取。
+    - pai_s: 基于偏度的 PAI-S 拾取。
+    - s_phase: 启发式 S 波拾取（P 波后延迟寻找最大 STA/LTA）。
+
+    参数：
+      path（可选）：文件路径覆盖。
+      file_type（可选）：'hdf5', 'sac', 'segy', 'miniseed'。
+      dataset（可选）：针对 HDF5 的特定数据集名称。
+      methods（可选）：逗号分隔的方法列表（例如 'sta_lta,aic'）。
+      method_params（可选）：方法的参数（JSON 字符串或字典）。
+    """
     parsed = _parse_param_dict(params)
     
     # Determine source path and type
@@ -975,12 +1112,27 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
             lines.append("| 相位 | 方法 | 样本点 | 评分 | 绝对时间 |")
             lines.append("| :--- | :--- | :--- | :--- | :--- |")
             
+            METHOD_TRANSLATIONS = {
+                "sta_lta": "STA/LTA (sta_lta)",
+                "aic": "AIC (aic)",
+                "frequency_ratio": "频率比 (frequency_ratio)",
+                "autocorr": "自相关 (autocorr)",
+                "feature_threshold": "特征阈值 (feature_threshold)",
+                "ar_model": "AR 模型 (ar_model)",
+                "template_correlation": "模板相关 (template_correlation)",
+                "s_phase": "S 波拾取 (s_phase)",
+                "pai_k": "PAI-K (pai_k)",
+                "pai_s": "PAI-S (pai_s)"
+            }
+
             # Sort methods by score descending
             sorted_methods = sorted(item['methods'], key=lambda x: x['normalized_score'] or 0, reverse=True)
             for m in sorted_methods:
                 score = f"{m['normalized_score']:.4f}" if m['normalized_score'] is not None else "N/A"
                 phase = m.get('phase_type', 'P')
-                lines.append(f"| {phase} | {m['method']} | {m['sample_index']} | {score} | {m['absolute_time']} |")
+                method_key = m['method']
+                method_display = METHOD_TRANSLATIONS.get(method_key, method_key)
+                lines.append(f"| {phase} | {method_display} | {m['sample_index']} | {score} | {m['absolute_time']} |")
             lines.append("")
             
         return "\n".join(lines)
