@@ -161,3 +161,22 @@ class SegyHandler:
         except Exception as e:
             return {"error": str(e)}
 
+    def get_trace_record_data(self, trace_index: int = 0):
+        """获取特定道的完整数据用于绘图"""
+        try:
+            with segyio.open(self.filepath, ignore_geometry=True) as f:
+                if trace_index >= f.tracecount:
+                    return {"error": "Trace index out of bounds"}
+                
+                data = f.trace[trace_index]
+                dt_micro = segyio.tools.dt(f)
+                sampling_rate = 1.0 / (dt_micro / 1_000_000.0) if dt_micro else 100.0
+                
+                return {
+                    "data": data,
+                    "sampling_rate": sampling_rate,
+                    "start_time": None
+                }
+        except Exception as e:
+            return {"error": str(e)}
+

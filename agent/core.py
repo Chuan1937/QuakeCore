@@ -132,6 +132,8 @@ Important rules:
 - For generic requests like "读取这个文件" or "给我结构", call get_file_structure.
 - Before choosing SEGY/MiniSEED specific tools, use get_loaded_context to determine the loaded file type.
 - For "读取第X条轨迹", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
+- If the user asks to "plot" or "draw" the waveform while reading, set `plot=True` in the read tool arguments.
+- Plotting IS supported; never tell the user that the system cannot draw waveforms.
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.

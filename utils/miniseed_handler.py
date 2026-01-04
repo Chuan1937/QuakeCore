@@ -71,6 +71,28 @@ class MiniSEEDHandler:
         except Exception as e:
             return {"error": str(e)}
 
+    def get_trace_record_data(self, trace_index: int = 0):
+        """获取特定道的完整数据用于绘图"""
+        try:
+            stream = obspy_read(self.filepath)
+            if trace_index < 0 or trace_index >= len(stream):
+                return {"error": "Trace index out of bounds"}
+
+            tr = stream[trace_index]
+            data = tr.data
+            if isinstance(data, np.ndarray):
+                vals = data.astype(np.float64)
+            else:
+                vals = np.array(data, dtype=np.float64)
+
+            return {
+                "data": vals,
+                "sampling_rate": float(tr.stats.sampling_rate),
+                "start_time": tr.stats.starttime
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
     def to_numpy(self, output_path: str | None = None):
         try:
             stream = obspy_read(self.filepath)

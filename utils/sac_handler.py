@@ -81,6 +81,22 @@ class SACHandler:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def get_trace_record_data(self, trace_index: int = 0):
+        """获取特定道的完整数据用于绘图"""
+        try:
+            stream = self._load_stream()
+            if trace_index < 0 or trace_index >= len(stream):
+                return {"error": "Trace index out of bounds"}
+            tr = stream[trace_index]
+            data = self._to_array(tr.data)
+            return {
+                "data": data,
+                "sampling_rate": float(tr.stats.sampling_rate),
+                "start_time": tr.stats.starttime
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def to_numpy(self, output_path: str | None = None):
         try:
             stream = self._load_stream()

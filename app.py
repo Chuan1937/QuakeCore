@@ -15,6 +15,19 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.callbacks import StreamlitCallbackHandler
 
 
+def _agent_code_fingerprint() -> tuple[float, float]:
+    """Return a fingerprint for agent code so we can refresh cached executors when code changes."""
+    try:
+        core_mtime = os.path.getmtime(os.path.join(os.getcwd(), "agent", "core.py"))
+    except OSError:
+        core_mtime = 0.0
+    try:
+        tools_mtime = os.path.getmtime(os.path.join(os.getcwd(), "agent", "tools.py"))
+    except OSError:
+        tools_mtime = 0.0
+    return core_mtime, tools_mtime
+
+
 def format_intermediate_steps(intermediate_steps):
     """Turn LangChain intermediate steps into markdown for display."""
     if not intermediate_steps:
@@ -195,6 +208,9 @@ if "agent" not in st.session_state:
 if "agent_config" not in st.session_state:
     st.session_state.agent_config = None
 
+if "agent_code_fingerprint" not in st.session_state:
+    st.session_state.agent_code_fingerprint = None
+
 if "agent_error" not in st.session_state:
     st.session_state.agent_error = None
 if "uploaded_filename" not in st.session_state:
@@ -260,6 +276,13 @@ with st.sidebar:
         "</div>",
         unsafe_allow_html=True
     )
+
+current_fingerprint = _agent_code_fingerprint()
+if st.session_state.agent_code_fingerprint != current_fingerprint:
+    # Agent code changed (e.g., tools/prompt updated) -> rebuild executor
+    st.session_state.agent = None
+    st.session_state.agent_config = None
+    st.session_state.agent_code_fingerprint = current_fingerprint
 
 config_changed = current_agent_config != st.session_state.agent_config
 if config_changed:
@@ -400,7 +423,7 @@ else:
 if image_dialog:
     @image_dialog("可视化详情", width="large")
     def view_image_modal(path, caption):
-        st.image(path, caption=caption, use_column_width=True)
+        st.image(path, caption=caption, width="stretch")
 
 def update_data_panel():
     if not st.session_state.show_data_panel:

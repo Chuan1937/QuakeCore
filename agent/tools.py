@@ -4,7 +4,7 @@ from langchain.tools import tool
 from utils.segy_handler import SegyHandler
 from utils.miniseed_handler import MiniSEEDHandler
 from utils.hdf5_handler import HDF5Handler
-from utils.phase_picker import pick_phases, summarize_pick_results, load_traces, plot_waveform_with_picks
+from utils.phase_picker import pick_phases, summarize_pick_results, load_traces, plot_waveform_with_picks, TraceRecord
 from utils.sac_handler import SACHandler
 import json
 from typing import Union
@@ -283,16 +283,18 @@ def get_segy_binary_header():
 # tool to read a specific trace sample
 # 读取特定地震道样本的工具
 @tool
-def read_trace_sample(trace_index: Union[int, str] = 0):
+def read_trace_sample(trace_index: Union[int, str] = 0, plot: bool = False):
     """
     Reads data from a specific trace index.
     Args:
         trace_index: The 0-based index of the trace to read. Defaults to 0.
+        plot: Whether to generate a plot of the waveform. Defaults to False.
     Use this tool to inspect actual seismic data values.
     """
     """读取特定地震道索引的数据。
     参数:
         trace_index: 要读取的地震道的 0 基索引。默认为 0。
+        plot: 是否生成波形图。默认为 False。
     使用此工具检查实际的地震数据值。
     """
     global CURRENT_SEGY_PATH
@@ -318,6 +320,8 @@ def read_trace_sample(trace_index: Union[int, str] = 0):
                 data = json.loads(raw_value)
                 if isinstance(data, dict) and "trace_index" in data:
                     trace_index = int(data["trace_index"])
+                    if "plot" in data:
+                        plot = data["plot"]
                 elif isinstance(data, int):
                     trace_index = data
             except Exception:
@@ -343,6 +347,28 @@ def read_trace_sample(trace_index: Union[int, str] = 0):
             "first_10_samples": trace_vals[:10],
             "total_samples": len(trace_vals)
         }
+        
+        plot_markdown = None
+        if plot:
+            record_data = handler.get_trace_record_data(trace_index=trace_index)
+            if "error" not in record_data:
+                tr = TraceRecord(
+                    data=record_data["data"],
+                    sampling_rate=record_data["sampling_rate"],
+                    start_time=record_data["start_time"],
+                    metadata={"trace_index": trace_index, "type": "segy"}
+                )
+                output_filename = f"trace_plot_segy_{trace_index}.png"
+                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+                os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+                
+                plot_path = plot_waveform_with_picks([tr], [], output_path)
+                summary["plot_path"] = plot_path
+                if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                    plot_markdown = f"![波形图]({plot_path})"
+        
+        if plot_markdown:
+            return json.dumps(summary, indent=2) + "\n\n" + plot_markdown
         return json.dumps(summary, indent=2)
     return json.dumps(data)
 
@@ -474,9 +500,9 @@ def get_miniseed_structure(params: Union[str, dict, None] = None):
 @tool
 def read_miniseed_trace(params: Union[str, dict, None] = None):
     """
-    Read one MiniSEED trace by 0-based index. Args: path, trace_index.
+    Read one MiniSEED trace by 0-based index. Args: path, trace_index, plot (bool).
     """
-    """按 0 基索引读取一条 MiniSEED 轨迹。参数：path，trace_index。"""
+    """按 0 基索引读取一条 MiniSEED 轨迹。参数：path，trace_index, plot (bool)。"""
     parsed = _parse_param_dict(params)
     path = parsed.get("path") or CURRENT_MINISEED_PATH
     if not path:
@@ -485,8 +511,35 @@ def read_miniseed_trace(params: Union[str, dict, None] = None):
         trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
     except ValueError as exc:
         return str(exc)
+    
+    plot = parsed.get("plot", False)
+    if isinstance(plot, str):
+        plot = plot.lower() in ("true", "yes", "1")
+
     handler = MiniSEEDHandler(path)
     result = handler.get_trace_data(trace_index=trace_index)
+    
+    plot_markdown = None
+    if plot and "error" not in result:
+        record_data = handler.get_trace_record_data(trace_index=trace_index)
+        if "error" not in record_data:
+            tr = TraceRecord(
+                data=record_data["data"],
+                sampling_rate=record_data["sampling_rate"],
+                start_time=record_data["start_time"],
+                metadata={"trace_index": trace_index, "type": "miniseed"}
+            )
+            output_filename = f"trace_plot_miniseed_{trace_index}.png"
+            output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            
+            plot_path = plot_waveform_with_picks([tr], [], output_path)
+            result["plot_path"] = plot_path
+            if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                plot_markdown = f"![波形图]({plot_path})"
+
+    if plot_markdown:
+        return json.dumps(result, indent=2) + "\n\n" + plot_markdown
     return json.dumps(result, indent=2)
 
 # 返回当前已加载的文件上下文（类型与路径）
@@ -545,20 +598,47 @@ def get_file_structure():
 @tool
 def read_file_trace(params: Union[str, dict, None] = None):
     """
-    Read one trace from currently loaded file. Args: trace_index.
+    Read one trace from currently loaded file. Args: trace_index, plot (bool).
     """
-    """读取当前已加载文件的一条轨迹。参数：trace_index。"""
+    """读取当前已加载文件的一条轨迹。参数：trace_index, plot (bool)。"""
     parsed = _parse_param_dict(params)
     try:
         trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
     except ValueError as exc:
         return str(exc)
+    
+    plot = parsed.get("plot", False)
+    if isinstance(plot, str):
+        plot = plot.lower() in ("true", "yes", "1")
+
+    handler = None
+    file_type = None
+    
     if CURRENT_SEGY_PATH:
         handler = SegyHandler(CURRENT_SEGY_PATH)
+        file_type = "segy"
+    elif CURRENT_MINISEED_PATH:
+        handler = MiniSEEDHandler(CURRENT_MINISEED_PATH)
+        file_type = "miniseed"
+    elif CURRENT_HDF5_PATH:
+        handler = HDF5Handler(CURRENT_HDF5_PATH)
+        file_type = "hdf5"
+    elif CURRENT_SAC_PATH:
+        handler = SACHandler(CURRENT_SAC_PATH)
+        file_type = "sac"
+    
+    if not handler:
+        return "No data file is currently loaded."
+
+    # Get data/summary
+    # 获取数据/摘要
+    if file_type == "segy":
+        # SEGY handler returns full data, we need to summarize it
+        # SEGY handler 返回完整数据，我们需要对其进行摘要
         data = handler.get_trace_data(trace_index=trace_index, count=1)
         if "data" in data:
             trace_vals = data["data"][0]
-            summary = {
+            result = {
                 "trace_index": trace_index,
                 "min_value": float(np.min(trace_vals)),
                 "max_value": float(np.max(trace_vals)),
@@ -567,27 +647,42 @@ def read_file_trace(params: Union[str, dict, None] = None):
                 "total_samples": len(trace_vals),
                 "type": "segy",
             }
-            return json.dumps(summary, indent=2)
-        return json.dumps(data, indent=2)
-    if CURRENT_MINISEED_PATH:
-        handler = MiniSEEDHandler(CURRENT_MINISEED_PATH)
+        else:
+            result = data
+    else:
+        # Other handlers return summary by default
+        # 其他 handler 默认返回摘要
         result = handler.get_trace_data(trace_index=trace_index)
         if isinstance(result, dict):
-            result["type"] = "miniseed"
+            result["type"] = file_type
+
+    if "error" in result:
         return json.dumps(result, indent=2)
-    if CURRENT_HDF5_PATH:
-        handler = HDF5Handler(CURRENT_HDF5_PATH)
-        result = handler.get_trace_data(trace_index=trace_index)
-        if isinstance(result, dict):
-            result["type"] = "hdf5"
-        return json.dumps(result, indent=2)
-    if CURRENT_SAC_PATH:
-        handler = SACHandler(CURRENT_SAC_PATH)
-        result = handler.get_trace_data(trace_index=trace_index)
-        if isinstance(result, dict):
-            result["type"] = "sac"
-        return json.dumps(result, indent=2)
-    return "No data file is currently loaded."
+
+    # Handle plotting
+    # 处理绘图
+    plot_markdown = None
+    if plot:
+        record_data = handler.get_trace_record_data(trace_index=trace_index)
+        if "error" not in record_data:
+            tr = TraceRecord(
+                data=record_data["data"],
+                sampling_rate=record_data["sampling_rate"],
+                start_time=record_data["start_time"],
+                metadata={"trace_index": trace_index, "type": file_type}
+            )
+            output_filename = f"trace_plot_{file_type}_{trace_index}.png"
+            output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            
+            plot_path = plot_waveform_with_picks([tr], [], output_path)
+            result["plot_path"] = plot_path
+            if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                plot_markdown = f"![波形图]({plot_path})"
+
+    if plot_markdown:
+        return json.dumps(result, indent=2) + "\n\n" + plot_markdown
+    return json.dumps(result, indent=2)
 
 # 工具：读取 HDF5 结构信息
 @tool
@@ -608,9 +703,9 @@ def get_hdf5_structure(params: Union[str, dict, None] = None):
 @tool
 def read_hdf5_trace(params: Union[str, dict, None] = None):
     """
-    Read one trace from HDF5 file. Args: path (optional), dataset (optional), trace_index.
+    Read one trace from HDF5 file. Args: path (optional), dataset (optional), trace_index, plot (bool).
     """
-    """从 HDF5 文件读取一条轨迹。参数：path（可选）、dataset（可选）、trace_index。"""
+    """从 HDF5 文件读取一条轨迹。参数：path（可选）、dataset（可选）、trace_index, plot (bool)。"""
     parsed = _parse_param_dict(params)
     path = parsed.get("path") or CURRENT_HDF5_PATH
     if not path:
@@ -619,8 +714,35 @@ def read_hdf5_trace(params: Union[str, dict, None] = None):
         trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
     except ValueError as exc:
         return str(exc)
+    
+    plot = parsed.get("plot", False)
+    if isinstance(plot, str):
+        plot = plot.lower() in ("true", "yes", "1")
+
     handler = HDF5Handler(path)
     result = handler.get_trace_data(trace_index=trace_index, dataset=parsed.get("dataset"))
+
+    plot_markdown = None
+    if plot and "error" not in result:
+        record_data = handler.get_trace_record_data(trace_index=trace_index, dataset=parsed.get("dataset"))
+        if "error" not in record_data:
+            tr = TraceRecord(
+                data=record_data["data"],
+                sampling_rate=record_data["sampling_rate"],
+                start_time=record_data["start_time"],
+                metadata={"trace_index": trace_index, "type": "hdf5"}
+            )
+            output_filename = f"trace_plot_hdf5_{trace_index}.png"
+            output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+
+            plot_path = plot_waveform_with_picks([tr], [], output_path)
+            result["plot_path"] = plot_path
+            if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                plot_markdown = f"![波形图]({plot_path})"
+
+    if plot_markdown:
+        return json.dumps(result, indent=2) + "\n\n" + plot_markdown
     return json.dumps(result, indent=2)
 
 # 工具：HDF5 转 NumPy
@@ -865,9 +987,9 @@ def get_sac_structure(params: Union[str, dict, None] = None):
 @tool
 def read_sac_trace(params: Union[str, dict, None] = None):
     """
-    Read SAC trace by 0-based index. Args: path (optional), trace_index.
+    Read SAC trace by 0-based index. Args: path (optional), trace_index, plot (bool).
     """
-    """按 0 基索引读取 SAC 轨迹。参数：path（可选）、trace_index。"""
+    """按 0 基索引读取 SAC 轨迹。参数：path（可选）、trace_index, plot (bool)。"""
     parsed = _parse_param_dict(params)
     path = parsed.get("path") or CURRENT_SAC_PATH
     if not path:
@@ -876,8 +998,35 @@ def read_sac_trace(params: Union[str, dict, None] = None):
         trace_index = _coerce_int(parsed.get("trace_index"), default=0, field_name="trace_index")
     except ValueError as exc:
         return str(exc)
+    
+    plot = parsed.get("plot", False)
+    if isinstance(plot, str):
+        plot = plot.lower() in ("true", "yes", "1")
+
     handler = SACHandler(path)
     result = handler.get_trace_data(trace_index=trace_index)
+
+    plot_markdown = None
+    if plot and "error" not in result:
+        record_data = handler.get_trace_record_data(trace_index=trace_index)
+        if "error" not in record_data:
+            tr = TraceRecord(
+                data=record_data["data"],
+                sampling_rate=record_data["sampling_rate"],
+                start_time=record_data["start_time"],
+                metadata={"trace_index": trace_index, "type": "sac"}
+            )
+            output_filename = f"trace_plot_sac_{trace_index}.png"
+            output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+
+            plot_path = plot_waveform_with_picks([tr], [], output_path)
+            result["plot_path"] = plot_path
+            if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                plot_markdown = f"![波形图]({plot_path})"
+
+    if plot_markdown:
+        return json.dumps(result, indent=2) + "\n\n" + plot_markdown
     return json.dumps(result, indent=2)
 
 # 将 SAC 转换为 NumPy

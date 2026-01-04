@@ -166,6 +166,31 @@ class HDF5Handler:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def get_trace_record_data(self, trace_index: int = 0, dataset: str | None = None):
+        """获取特定道的完整数据用于绘图"""
+        try:
+            with h5py.File(self.filepath, "r") as h5f:
+                dset, _ = self._select_dataset(h5f, dataset)
+                total = int(dset.shape[0]) if dset.shape else 0
+                if trace_index < 0 or trace_index >= total:
+                    return {"error": "Trace index out of bounds"}
+                
+                raw = dset[trace_index]
+                trace = np.asarray(raw, dtype=np.float64)
+                
+                # Try to get sampling rate from attributes
+                sr_attr = dset.attrs.get("sampling_rate") if hasattr(dset, "attrs") else None
+                sr_global = h5f.attrs.get("sampling_rate") if hasattr(h5f, "attrs") else None
+                sr = sr_attr or sr_global or 100.0
+                
+                return {
+                    "data": trace,
+                    "sampling_rate": float(sr),
+                    "start_time": None
+                }
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def to_numpy(self, output_path: str, dataset: str | None = None):
         try:
             with h5py.File(self.filepath, "r") as h5f:
