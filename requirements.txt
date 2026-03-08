@@ -1,14 +1,13 @@
 streamlit
 segyio
+obspy
 pandas
 numpy
-h5py
 matplotlib
-hdf5plugin
 langchain
-langchain-community
-langchain-ollama
-openpyxl
 langchain-openai
-openai
-obspy
+langchain-community
+pillow
+# Deep learning phase picking
+seisbench
+torch

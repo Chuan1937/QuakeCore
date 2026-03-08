@@ -1,8 +1,6 @@
 import streamlit as st
 import os
-import tempfile
 import json
-import shutil
 import re
 from agent.core import get_agent_executor
 from agent.tools import (
@@ -14,459 +12,416 @@ from agent.tools import (
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.callbacks import StreamlitCallbackHandler
 
-
-def _agent_code_fingerprint() -> tuple[float, float]:
-    """Return a fingerprint for agent code so we can refresh cached executors when code changes."""
-    try:
-        core_mtime = os.path.getmtime(os.path.join(os.getcwd(), "agent", "core.py"))
-    except OSError:
-        core_mtime = 0.0
-    try:
-        tools_mtime = os.path.getmtime(os.path.join(os.getcwd(), "agent", "tools.py"))
-    except OSError:
-        tools_mtime = 0.0
-    return core_mtime, tools_mtime
-
-
-def format_intermediate_steps(intermediate_steps):
-    """Turn LangChain intermediate steps into markdown for display."""
-    if not intermediate_steps:
-        return "（本次没有调用工具）"
-
-    blocks = []
-    for idx, (action, observation) in enumerate(intermediate_steps, start=1):
-        tool_input = action.tool_input
-        if isinstance(tool_input, dict):
-            tool_input_str = json.dumps(tool_input, ensure_ascii=False)
-        else:
-            tool_input_str = str(tool_input)
-
-        block = (
-            f"{idx}. **工具** `{action.tool}`\n"
-            f"   - 输入: `{tool_input_str}`\n"
-            f"   - 观察: {observation}"
-        )
-        blocks.append(block)
-
-    return "\n\n".join(blocks)
-
-
-def render_message_content(content, msg_idx=0):
-    """Render message content, extracting images to the right column if present."""
-    # Regex to find markdown images: ![alt](path)
-    image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
-    images = image_pattern.findall(content)
-    
-    if images:
-        # Remove image tags from content to avoid double rendering
-        text_without_images = image_pattern.sub('', content)
-        
-        col1, col2 = st.columns([3, 2])
-        with col1:
-            st.markdown(text_without_images)
-        with col2:
-            for idx, (alt, path) in enumerate(images):
-                path = path.strip()
-                if os.path.exists(path):
-                    st.image(path, caption=alt, width='stretch')
-                    with open(path, "rb") as file:
-                        st.download_button(
-                            label="⬇️ 下载图片",
-                            data=file,
-                            file_name=os.path.basename(path),
-                            mime="image/png",
-                            key=f"download_{msg_idx}_{idx}_{os.path.basename(path)}"
-                        )
-                else:
-                    st.warning(f"无法加载图片: {path}")
-    else:
-        st.markdown(content)
-
-
 # Page Config
-import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOGO_PATH = os.path.join(BASE_DIR, "resources", "QuakeCore.png")
-USER_AVATAR_PATH = os.path.join(BASE_DIR, "resources", "chuanjun.jpg")
+LOGO_PNG = os.path.join(BASE_DIR, "resources", "QuakeCore.png")
+LOGO_SVG = os.path.join(BASE_DIR, "resources", "QuakeCore_Logo.svg")
+USER_AVATAR = os.path.join(BASE_DIR, "resources", "chuanjun.jpg")
+
+
+def render_logo_svg(width=40):
+    """Render SVG logo inline."""
+    if os.path.exists(LOGO_SVG):
+        with open(LOGO_SVG, "r") as f:
+            svg_content = f.read()
+        return f'<div style="width:{width}px; height:{width}px;">{svg_content}</div>'
+    return ""
 
 st.set_page_config(
-    page_title="QuakeCore AI Agent",
-    page_icon=LOGO_PATH,
-    layout="wide"
+    page_title="QuakeCore Engine",
+    page_icon=LOGO_PNG if os.path.exists(LOGO_PNG) else "🌊",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
-# Custom CSS for "Cool" effects
+# Modern Dark Theme CSS
 st.markdown("""
 <style>
-    :root {
-        /* Light Theme Variables from Seismic Design */
-        --bg-app: rgba(255, 255, 255, 0.65);
-        --bg-sidebar: rgba(255, 255, 255, 0.5);
-        --text-primary: #4a4a4a;
-        --accent-color: #8ec5fc; /* Light Blue */
-        --accent-hover: #ff9a9e; /* Light Pink */
-        --message-user-bg: #bde0fe;
-        --message-ai-bg: #ffffff;
-        --radius-lg: 30px;
-        --radius-md: 20px;
-    }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 
-    /* Global Background - Pure White */
+    /* Hide sidebar completely */
+    section[data-testid="stSidebar"] {display: none !important;}
+
     .stApp {
-        background-color: #ffffff;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
-        color: var(--text-primary);
+        background: #0f0f1a;
     }
 
-    /* Sidebar Glassmorphism */
-    section[data-testid="stSidebar"] {
-        background-color: var(--bg-sidebar);
-        backdrop-filter: blur(30px);
-        border-right: 1px solid rgba(255, 255, 255, 0.8);
-        box-shadow: 0 2px 8px rgba(142, 197, 252, 0.15);
+    .main .block-container {
+        max-width: 800px;
+        padding: 1.5rem 1.5rem 6rem;
     }
-    
-    /* Chat Message Styling */
-    .stChatMessage {
-        background-color: rgba(255, 255, 255, 0.6);
-        border-radius: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.6);
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        padding: 15px;
-        margin-bottom: 10px;
+
+    /* Chat messages container */
+    [data-testid="stChatMessage"] {
+        padding: 0.25rem 0 !important;
+    }
+
+    /* User message - align right */
+    [data-testid="stChatMessageUser"] {
+        display: flex !important;
+        justify-content: flex-end !important;
+    }
+
+    /* User message bubble */
+    [data-testid="stChatMessageUser"] [data-testid="stChatMessageContent"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        border-radius: 18px 18px 4px 18px !important;
+        padding: 10px 14px !important;
+        color: white !important;
+        display: inline-block !important;
+        max-width: 70% !important;
+    }
+
+    [data-testid="stChatMessageUser"] [data-testid="stChatMessageContent"] p,
+    [data-testid="stChatMessageUser"] [data-testid="stChatMessageContent"] span,
+    [data-testid="stChatMessageUser"] [data-testid="stChatMessageContent"] div {
+        color: white !important;
+    }
+
+    /* Assistant message - align left */
+    [data-testid="stChatMessageAssistant"] {
+        display: flex !important;
+        justify-content: flex-start !important;
+    }
+
+    /* Assistant message bubble */
+    [data-testid="stChatMessageAssistant"] [data-testid="stChatMessageContent"] {
+        background: #1e1e32 !important;
+        border: 1px solid #2a2a4a !important;
+        border-radius: 18px !important;
+        padding: 10px 14px !important;
+        display: inline-block !important;
+        max-width: 85% !important;
+    }
+
+    /* Chat input */
+    .stChatInput > div {
+        background: #1a1a2e !important;
+        border: 1px solid #2a2a4a !important;
+        border-radius: 24px !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+
+    .stChatInput textarea {
+        color: #e2e8f0 !important;
+    }
+
+    .stChatInput textarea::placeholder {
+        color: #6b7280 !important;
     }
 
     /* Buttons */
     .stButton > button {
-        background-color: var(--accent-color);
-        color: white;
-        border-radius: 20px;
-        border: none;
-        box-shadow: 0 4px 6px rgba(142, 197, 252, 0.3);
-        transition: all 0.3s ease;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        border: none !important;
+        border-radius: 20px !important;
+        color: white !important;
+        padding: 0.5rem 1rem !important;
+        font-weight: 500 !important;
     }
+
     .stButton > button:hover {
-        background-color: var(--accent-hover);
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(255, 154, 158, 0.4);
-        color: white;
+        opacity: 0.9;
     }
 
-    /* Status Widget (The "Thinking" box) */
+    /* Status widget */
     div[data-testid="stStatusWidget"] {
-        background-color: rgba(255, 255, 255, 0.8);
-        border: 2px solid var(--accent-color);
-        border-radius: 15px;
-        box-shadow: 0 0 15px rgba(142, 197, 252, 0.4);
-        animation: neon-pulse 2s infinite alternate;
+        background: rgba(102, 126, 234, 0.1) !important;
+        border: 1px solid rgba(102, 126, 234, 0.3) !important;
+        border-radius: 12px !important;
     }
 
-    @keyframes neon-pulse {
-        0% { box-shadow: 0 0 5px var(--accent-color); border-color: var(--accent-color); }
-        100% { box-shadow: 0 0 15px var(--accent-color); border-color: #69f0ae; }
+    /* Images in chat */
+    .stImage img {
+        border-radius: 12px;
+        margin-top: 0.5rem;
     }
-    
-    /* Headers */
-    h1, h2, h3 {
-        color: #2c3e50;
-        font-weight: 700;
+
+    /* Expander */
+    .streamlit-expanderHeader {
+        background: #1a1a2e !important;
+        border: 1px solid #2a2a4a !important;
+        border-radius: 10px !important;
+        font-size: 0.85rem !important;
     }
-    
-    /* Window Controls Simulation */
-    .window-controls {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 10px;
+
+    /* Dialog */
+    .stDialog {
+        background: #1a1a2e !important;
+        border: 1px solid #2a2a4a !important;
+        border-radius: 16px !important;
     }
-    .control {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        display: inline-block;
-    }
-    .control.red { background-color: #ffadad; }
-    .control.yellow { background-color: #ffd6a5; }
-    .control.green { background-color: #caffbf; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {width: 6px;}
+    ::-webkit-scrollbar-track {background: transparent;}
+    ::-webkit-scrollbar-thumb {background: #3b3b5c; border-radius: 3px;}
 </style>
 """, unsafe_allow_html=True)
 
-col_logo, col_title = st.columns([1, 8])
-with col_logo:
-    if os.path.exists(LOGO_PATH):
-        st.image(LOGO_PATH, width=100)
-with col_title:
-    st.title("震元引擎 (QuakeCore Engine)")
+# Header with settings button
+header_col1, header_col2, header_col3 = st.columns([1, 8, 1])
+with header_col1:
+    logo_svg = render_logo_svg(40)
+    if logo_svg:
+        st.markdown(logo_svg, unsafe_allow_html=True)
+    elif os.path.exists(LOGO_PNG):
+        st.image(LOGO_PNG, width=40)
 
-# Initialize Session State
+with header_col2:
+    st.markdown("""
+    <h1 style="margin: 0; font-size: 1.5rem; font-weight: 600;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        text-align: center;">
+        QuakeCore Engine
+    </h1>
+    """, unsafe_allow_html=True)
+
+with header_col3:
+    if st.button("⚙️", key="settings_btn", help="模型配置"):
+        st.session_state.show_settings = True
+
+# Settings Dialog
+if st.session_state.get("show_settings"):
+    @st.dialog("模型配置", width="small")
+    def settings_dialog():
+        st.markdown("### 选择推理引擎")
+
+        provider_options = {"DeepSeek API": "deepseek", "本地 Ollama": "ollama"}
+        provider_label = st.selectbox("推理引擎", list(provider_options.keys()), label_visibility="collapsed")
+        provider = provider_options[provider_label]
+
+        current_config = {}
+        if provider == "ollama":
+            model_name = st.text_input("模型名称", value="qwen2.5:3b")
+            st.caption("确保本地已安装 Ollama 并运行对应模型")
+            current_config = {"provider": "ollama", "model_name": model_name, "api_key": None, "base_url": None}
+        else:
+            api_key = st.text_input("API Key", value=os.getenv("DEEPSEEK_API_KEY", ""), type="password")
+            model_name = st.text_input("模型", value="deepseek-chat")
+            current_config = {"provider": "deepseek", "model_name": model_name, "api_key": api_key, "base_url": "https://api.deepseek.com"}
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("保存", use_container_width=True):
+                st.session_state.agent_config = current_config
+                st.session_state.agent = None  # Force re-initialize
+                st.session_state.show_settings = False
+                st.rerun()
+        with col2:
+            if st.button("取消", use_container_width=True):
+                st.session_state.show_settings = False
+                st.rerun()
+
+    settings_dialog()
+
+# Session State
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-if "show_data_panel" not in st.session_state:
-    st.session_state.show_data_panel = True
-
 if "agent" not in st.session_state:
     st.session_state.agent = None
-
 if "agent_config" not in st.session_state:
-    st.session_state.agent_config = None
-
+    st.session_state.agent_config = {"provider": "deepseek", "model_name": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY", ""), "base_url": "https://api.deepseek.com"}
 if "agent_code_fingerprint" not in st.session_state:
     st.session_state.agent_code_fingerprint = None
-
 if "agent_error" not in st.session_state:
     st.session_state.agent_error = None
-if "uploaded_filename" not in st.session_state:
-    st.session_state.uploaded_filename = None
-if "current_file_ext" not in st.session_state:
-    st.session_state.current_file_ext = None
+if "show_settings" not in st.session_state:
+    st.session_state.show_settings = False
 
-with st.sidebar:
-    st.header("数据面板")
-    st.session_state.show_data_panel = st.checkbox(
-        "显示可视化结果",
-        value=bool(st.session_state.show_data_panel),
-        key="show_data_panel_checkbox",
-    )
-    
-    # Placeholder for data panel content
-    data_panel_placeholder = st.empty()
+# Agent initialization
+def _get_fingerprint():
+    try:
+        return os.path.getmtime(os.path.join(os.getcwd(), "agent", "core.py")), os.path.getmtime(os.path.join(os.getcwd(), "agent", "tools.py"))
+    except:
+        return 0.0, 0.0
 
-    st.divider()
-    st.header("模型配置")
-    provider_options = {
-        "DeepSeek API": "deepseek",
-        "本地 Ollama": "ollama",
-    }
-    provider_label = st.selectbox("选择推理引擎", list(provider_options.keys()), index=0, key="provider_select")
-    provider = provider_options[provider_label]
-
-    current_agent_config = {}
-    if provider == "ollama":
-        model_name = st.text_input("本地模型名称 (Ollama)", value="qwen2.5:3b", key="ollama_model_input")
-        st.info("请确保本地已安装 Ollama 并运行了对应模型")
-        current_agent_config = {
-            "provider": "ollama",
-            "model_name": model_name,
-            "api_key": None,
-            "base_url": None,
-        }
-    else:
-        deepseek_model = st.text_input("DeepSeek 模型名称", value="deepseek-chat", key="deepseek_model_input")
-        deepseek_api_key = st.text_input(
-            "DeepSeek API Key",
-            value=os.getenv("DEEPSEEK_API_KEY", ""),
-            type="password",
-            key="deepseek_api_key_input",
-        )
-        deepseek_base_url = st.text_input(
-            "DeepSeek Base URL",
-            value="https://api.deepseek.com",
-            key="deepseek_base_url_input",
-        )
-        current_agent_config = {
-            "provider": "deepseek",
-            "model_name": deepseek_model,
-            "api_key": deepseek_api_key,
-            "base_url": deepseek_base_url,
-        }
-        st.info("使用 DeepSeek 时需要有效的 API Key，可在环境变量 DEEPSEEK_API_KEY 中配置。")
-
-    st.divider()
-    st.markdown(
-        "<div style='font-size: 0.8em; color: #7a7a7a; text-align: center;'>"
-        "AI 生成的内容可能存在误差，请结合专业工具核实。"
-        "</div>",
-        unsafe_allow_html=True
-    )
-
-current_fingerprint = _agent_code_fingerprint()
+current_fingerprint = _get_fingerprint()
 if st.session_state.agent_code_fingerprint != current_fingerprint:
-    # Agent code changed (e.g., tools/prompt updated) -> rebuild executor
     st.session_state.agent = None
-    st.session_state.agent_config = None
     st.session_state.agent_code_fingerprint = current_fingerprint
 
-config_changed = current_agent_config != st.session_state.agent_config
-if config_changed:
-    if current_agent_config["provider"] == "deepseek" and not current_agent_config.get("api_key"):
-        st.session_state.agent = None
-        st.session_state.agent_config = None
-        st.session_state.agent_error = "DeepSeek 模式需要提供 API Key。"
+# Initialize agent
+config = st.session_state.agent_config
+if config and not st.session_state.agent:
+    if config["provider"] == "deepseek" and not config.get("api_key"):
+        st.session_state.agent_error = "请先配置 API Key"
     else:
         try:
-            st.session_state.agent = get_agent_executor(**current_agent_config)
-            st.session_state.agent_config = current_agent_config
+            st.session_state.agent = get_agent_executor(**config)
             st.session_state.agent_error = None
-        except Exception as err:
-            st.session_state.agent = None
-            st.session_state.agent_config = None
-            st.session_state.agent_error = str(err)
+        except Exception as e:
+            st.session_state.agent_error = str(e)
 
 agent_error = st.session_state.agent_error
 agent_ready = st.session_state.agent is not None
 
-if agent_error:
-    st.error(agent_error)
-elif not agent_ready:
-    st.info("请在侧边栏完成模型配置以启动对话。")
+# Welcome screen
+if not st.session_state.messages:
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem 0;">
+        <div style="font-size: 2rem; font-weight: 700;
+            background: linear-gradient(135deg, #4A6591 0%, #E64B35 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+            震元引擎
+        </div>
+        <p style="color: #94a3b8; font-size: 0.9rem; margin: 0.5rem 0;">
+            智能地震数据分析助手
+        </p>
+        <p style="color: #6b7280; font-size: 0.8rem;">
+            支持 SEGY / MiniSEED / HDF5 / SAC 格式 · 拖拽上传
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-# Attachment upload near chat
-uploaded_file_main = st.file_uploader(
-    "上传数据文件（SEGY/SGY/MiniSEED/HDF5/SAC）",
-    type=["segy", "sgy", "mseed", "miniseed","h5","hdf5","sac"],
-    help="选择单个文件并复制到 data 目录"
-)
+# Display chat history
+for msg in st.session_state.messages:
+    role = msg["role"]
 
-if uploaded_file_main:
-    filename = uploaded_file_main.name
-    ext = os.path.splitext(filename)[1].lower().lstrip(".")
-    data_dir = os.path.join(os.getcwd(), "data")
-    os.makedirs(data_dir, exist_ok=True)
-    target_path = os.path.join(data_dir, filename)
-    with open(target_path, "wb") as f:
-        f.write(uploaded_file_main.getvalue())
-    st.session_state.current_file_path = target_path
-    st.session_state.uploaded_filename = filename
-    st.session_state.current_file_ext = ext
-    st.success(f"文件已复制到 data: `{filename}`")
+    # Set avatar based on role
+    if role == "user":
+        avatar = USER_AVATAR if os.path.exists(USER_AVATAR) else "👤"
+    else:
+        avatar = LOGO_PNG if os.path.exists(LOGO_PNG) else "🤖"
 
-if "current_file_path" in st.session_state:
-    ext = st.session_state.get("current_file_ext")
-    if ext in {"segy", "sgy"}:
-        set_current_segy_path(st.session_state.current_file_path)
-    elif ext in {"mseed", "miniseed"}:
-        set_current_miniseed_path(st.session_state.current_file_path)
-    elif ext in {"h5","hdf5"}:
-        set_current_hdf5_path(st.session_state.current_file_path)
-    elif ext == "sac":
-        set_current_sac_path(st.session_state.current_file_path)
-
-
-
-def render_message_content_no_image(content):
-    """Render message content but strip images (since they are in the right column)."""
-    image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
-    text_without_images = image_pattern.sub('', content)
-    st.markdown(text_without_images)
-
-
-# Chat Interface (full width)
-for idx, message in enumerate(st.session_state.messages):
-    role = message["role"]
-    avatar = USER_AVATAR_PATH if role == "user" else LOGO_PATH
     with st.chat_message(role, avatar=avatar):
-        render_message_content_no_image(message["content"])
-        if steps := message.get("steps"):
-            with st.expander("思考过程", expanded=False):
-                st.markdown(steps)
+        # Display text content
+        st.markdown(msg["content"])
 
-# User Input
+        # Display uploaded files info
+        if msg.get("files"):
+            for f_info in msg["files"]:
+                st.caption(f"📎 {f_info['name']}")
+
+        # Display images inline (like GPT)
+        if msg.get("images"):
+            for img_path in msg["images"]:
+                if os.path.exists(img_path):
+                    st.image(img_path, use_container_width=True)
+
+        # Thinking process expander
+        if steps := msg.get("steps"):
+            with st.expander("💭 思考过程"):
+                st.markdown(f"<div style='font-size: 0.85rem; color: #9ca3af;'>{steps}</div>", unsafe_allow_html=True)
+
+# Chat input with file upload
 prompt = st.chat_input(
-    "输入你的问题（可先在上方上传文件）",
+    placeholder="输入问题或拖拽文件...",
+    accept_file="multiple",
+    file_type=["segy", "sgy", "mseed", "miniseed", "h5", "hdf5", "sac", "png", "jpg", "jpeg", "gif"],
     disabled=not agent_ready,
 )
 
 if prompt and agent_ready:
-    # Display user message
-    st.chat_message("user", avatar=USER_AVATAR_PATH).markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    # Get text and files
+    text = prompt.text if hasattr(prompt, 'text') else ""
+    files = prompt.files if hasattr(prompt, 'files') else []
+
+    # Process uploaded files
+    files_info = []
+    if files:
+        for f in files:
+            data_dir = os.path.join(os.getcwd(), "data")
+            os.makedirs(data_dir, exist_ok=True)
+            target_path = os.path.join(data_dir, f.name)
+
+            with open(target_path, "wb") as out:
+                out.write(f.getvalue())
+
+            files_info.append({"name": f.name, "path": target_path})
+
+            ext = os.path.splitext(f.name)[1].lower().lstrip(".")
+            if ext in {"segy", "sgy"}:
+                set_current_segy_path(target_path)
+            elif ext in {"mseed", "miniseed"}:
+                set_current_miniseed_path(target_path)
+            elif ext in {"h5", "hdf5"}:
+                set_current_hdf5_path(target_path)
+            elif ext == "sac":
+                set_current_sac_path(target_path)
+
+    # Build content
+    content = text or ""
+    if files_info:
+        file_names = ", ".join([f["name"] for f in files_info])
+        if text:
+            content = f"[上传: {file_names}]\n\n{text}"
+        else:
+            content = f"[上传: {file_names}]\n\n请读取这个文件的基本信息。"
+
+
+    # Add user message
+    st.session_state.messages.append({
+        "role": "user",
+        "content": content,
+        "files": files_info if files_info else None
+    })
+
+    # Display user message immediately
+    user_avatar = USER_AVATAR if os.path.exists(USER_AVATAR) else "👤"
+    with st.chat_message("user", avatar=user_avatar):
+        st.markdown(content)
+        if files_info:
+            for f_info in files_info:
+                st.caption(f"📎 {f_info['name']}")
 
     # Generate response
-    with st.chat_message("assistant", avatar=LOGO_PATH):
-        message_placeholder = st.empty()
-        
+    with st.chat_message("assistant", avatar=LOGO_PNG if os.path.exists(LOGO_PNG) else "🤖"):
+        placeholder = st.empty()
         try:
-            # Prepare chat history for LangChain
             chat_history = []
-            for msg in st.session_state.messages[:-1]: # Exclude current prompt
+            for msg in st.session_state.messages[:-1]:
                 if msg["role"] == "user":
                     chat_history.append(HumanMessage(content=msg["content"]))
                 else:
                     chat_history.append(AIMessage(content=msg["content"]))
-            
-            # Run Agent with a visible status (so the neon animation actually applies)
-            status = st.status("正在思考…", expanded=True)
-            st_callback = StreamlitCallbackHandler(status.container(), expand_new_thoughts=True)
-            
-            response = st.session_state.agent.invoke(
-                {"input": prompt, "chat_history": chat_history},
-                config={"callbacks": [st_callback]}
-            )
-            
-            answer = response["output"]
-            steps_markdown = format_intermediate_steps(response.get("intermediate_steps", []))
 
-            message_placeholder.empty()
-            render_message_content_no_image(answer)
-            
+            status = st.status("思考中...", expanded=True)
+            callback = StreamlitCallbackHandler(status.container(), expand_new_thoughts=True)
+
+            response = st.session_state.agent.invoke(
+                {"input": content, "chat_history": chat_history},
+                config={"callbacks": [callback]}
+            )
+
+            answer = response["output"]
+            steps_text = ""
+            if response.get("intermediate_steps"):
+                for i, (action, obs) in enumerate(response["intermediate_steps"], 1):
+                    tool_input = action.tool_input
+                    if isinstance(tool_input, dict):
+                        tool_input = json.dumps(tool_input, ensure_ascii=False)
+                    steps_text += f"{i}. **{action.tool}**\n   → {obs}\n\n"
+
+            # Extract images from markdown
+            img_pattern = re.compile(r'!\[.*?\]\((.*?)\)')
+            response_images = [p.strip() for p in img_pattern.findall(answer)]
+
+            # Remove image markdown from text for cleaner display
+            text_only = img_pattern.sub('', answer).strip()
+
+            placeholder.markdown(text_only)
+
+            # Display images inline
+            if response_images:
+                for img_path in response_images:
+                    if os.path.exists(img_path):
+                        st.image(img_path, use_container_width=True)
+
+            # Store message with images
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": answer,
-                "steps": steps_markdown
+                "images": response_images,
+                "steps": steps_text
             })
 
-            status.update(label="完成", state="complete", expanded=False)
-            
+            status.update(label="完成", state="complete")
+
         except Exception as e:
-            active_provider = (st.session_state.agent_config or current_agent_config or {}).get("provider", "ollama")
-            provider_hint = "Ollama 本地服务" if active_provider == "ollama" else "DeepSeek API 配置或网络状态"
-            error_msg = f"发生错误: {str(e)}\n\n请检查 {provider_hint}。"
-            message_placeholder.error(error_msg)
+            error_msg = f"错误: {str(e)}"
+            placeholder.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
-# Helper for modal image view
-if hasattr(st, "dialog"):
-    image_dialog = st.dialog
-elif hasattr(st, "experimental_dialog"):
-    image_dialog = st.experimental_dialog
-else:
-    image_dialog = None
-
-if image_dialog:
-    @image_dialog("可视化详情", width="large")
-    def view_image_modal(path, caption):
-        st.image(path, caption=caption, width="stretch")
-
-def update_data_panel():
-    if not st.session_state.show_data_panel:
-        data_panel_placeholder.empty()
-        return
-
-    with data_panel_placeholder.container():
-        st.caption("最近一次生成的图像：")
-        latest_image_path = None
-        latest_image_caption = None
-        image_pattern = re.compile(r'!\[(.*?)\]\((.*?)\)')
-        for msg in reversed(st.session_state.messages):
-            if msg.get("role") != "assistant":
-                continue
-            match = image_pattern.search(msg.get("content", ""))
-            if match:
-                latest_image_caption = match.group(1)
-                latest_image_path = match.group(2).strip()
-                break
-
-        if latest_image_path and os.path.exists(latest_image_path):
-            st.image(latest_image_path, caption=latest_image_caption or "结果图", width='stretch')
-            
-            # Action buttons
-            col1, col2 = st.columns(2)
-            with col1:
-                if image_dialog:
-                    if st.button("🔍 放大", key=f"view_{os.path.basename(latest_image_path)}", use_container_width=True):
-                        view_image_modal(latest_image_path, latest_image_caption)
-            with col2:
-                with open(latest_image_path, "rb") as file:
-                    st.download_button(
-                        label="⬇️ 下载",
-                        data=file,
-                        file_name=os.path.basename(latest_image_path),
-                        mime="image/png",
-                        key=f"download_latest_vis_{os.path.basename(latest_image_path)}",
-                        use_container_width=True
-                    )
-        else:
-            st.info("暂无可视化结果")
-
-# Update data panel at the end of the script
-update_data_panel()

@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+import warnings
 
 import h5py
 import numpy as np
@@ -17,6 +18,18 @@ except ImportError:  # pragma: no cover - fallback for older releases
         from obspy.signal.util import envelope as _obspy_envelope
     except ImportError:
         _obspy_envelope = None
+
+# SeisBench lazy import for deep learning models
+try:
+    import seisbench
+    import seisbench.models as sbm
+    import torch
+    SEISBENCH_AVAILABLE = True
+except ImportError:
+    SEISBENCH_AVAILABLE = False
+    seisbench = None
+    sbm = None
+    torch = None
 
 
 def _fallback_envelope(data: np.ndarray) -> np.ndarray:
@@ -380,19 +393,61 @@ def _burg_prediction_error(signal: np.ndarray, order: int) -> float:
 
 
 class PhasePickingEngine:
-    """Run a suite of classical phase picking algorithms on waveform data."""
+    """Run a suite of classical and deep learning phase picking algorithms on waveform data."""
 
     def __init__(self, traces: Sequence[TraceRecord]):
         if not traces:
             raise ValueError("No traces supplied for picking.")
         self.traces = list(traces)
         self._processed_traces = [_standardize_signal(rec.data) for rec in self.traces]
+        self._seisbench_models = {}  # Cache for loaded models
+
+    def _get_seisbench_model(self, model_name: str, pretrained: bool = True):
+        """Load and cache a SeisBench model."""
+        if not SEISBENCH_AVAILABLE:
+            return None
+
+        cache_key = f"{model_name}_{pretrained}"
+        if cache_key in self._seisbench_models:
+            return self._seisbench_models[cache_key]
+
+        try:
+            if model_name.lower() == "phasenet":
+                model = sbm.PhaseNet.from_pretrained("instance" if pretrained else "original")
+            elif model_name.lower() == "eqtransformer":
+                model = sbm.EQTransformer.from_pretrained("instance" if pretrained else "original")
+            elif model_name.lower() == "gpd":
+                model = sbm.GPD.from_pretrained("instance" if pretrained else "original")
+            else:
+                return None
+
+            # Set to evaluation mode
+            if torch is not None:
+                model.eval()
+
+            self._seisbench_models[cache_key] = model
+            return model
+        except Exception as e:
+            warnings.warn(f"Failed to load SeisBench model {model_name}: {e}")
+            return None
 
     def run(
         self,
         methods: Optional[Iterable[str]] = None,
         method_params: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[PickResult]:
+        # Default methods: deep learning + key conventional methods
+        DEFAULT_METHODS = [
+            # Deep learning methods (higher priority)
+            "phasenet",
+            "eqtransformer",
+            # Conventional methods
+            "sta_lta",
+            "aic",
+            "pai_k",
+            "s_phase",
+        ]
+
         available = {
             "sta_lta": self._pick_sta_lta,
             "aic": self._pick_aic,
@@ -403,9 +458,13 @@ class PhasePickingEngine:
             "template_correlation": self._pick_template_correlation,
             "pai_k": self._pick_pai_k,
             "pai_s": self._pick_pai_s,
-            "s_phase": self._pick_s_basic,  # New S-wave picker
+            "s_phase": self._pick_s_basic,
+            # SeisBench deep learning methods
+            "phasenet": self._pick_phasenet,
+            "eqtransformer": self._pick_eqtransformer,
+            "gpd": self._pick_gpd,
         }
-        selected = list(methods) if methods else list(available.keys())
+        selected = list(methods) if methods else DEFAULT_METHODS
         params = method_params or {}
         results: List[PickResult] = []
         for idx, record in enumerate(self.traces):
@@ -413,13 +472,13 @@ class PhasePickingEngine:
                 picker = available.get(name)
                 if picker is None:
                     continue
-                # Some pickers might return a list of picks (e.g. P and S)
-                # But current signature is Optional[PickResult].
-                # I will modify _pick_s_basic to return a single S-pick.
-                # If the user wants both, they select 'sta_lta' (for P) and 's_phase' (for S).
                 pick = picker(idx, record, params.get(name, {}))
                 if pick:
-                    results.append(pick)
+                    # Handle both single pick and list of picks
+                    if isinstance(pick, list):
+                        results.extend(pick)
+                    else:
+                        results.append(pick)
         return results
 
     def _format_result(
@@ -471,7 +530,7 @@ class PhasePickingEngine:
             return None
         cft = classic_sta_lta(data, nsta, nlta)
         on_off = trigger_onset(cft, trig_on, trig_off)
-        if on_off.size == 0:
+        if len(on_off) == 0:
             return None
         start_idx = int(on_off[0][0])
         raw_score = float(cft[start_idx]) if start_idx < cft.size else None
@@ -787,8 +846,8 @@ class PhasePickingEngine:
             
         cft = classic_sta_lta(data, nsta, nlta)
         on_off = trigger_onset(cft, trig_on, trig_off)
-        
-        if on_off.size == 0:
+
+        if len(on_off) == 0:
             return None
             
         # Assume first trigger is P
@@ -817,14 +876,459 @@ class PhasePickingEngine:
         normalized = max(0.0, min(1.0, (raw_score - trig_on) / max(trig_on * 2.0, 1e-6)))
         
         return self._format_result(
-            trace_index, 
-            "s_phase", 
-            record, 
-            s_idx, 
-            raw_score, 
-            normalized, 
+            trace_index,
+            "s_phase",
+            record,
+            s_idx,
+            raw_score,
+            normalized,
             phase_type="S"
         )
+
+    def _pick_phasenet(
+        self,
+        trace_index: int,
+        record: TraceRecord,
+        options: Dict[str, Any],
+    ) -> Optional[List[PickResult]]:
+        """
+        PhaseNet deep learning picker from SeisBench.
+        Uses a U-Net architecture for P and S phase picking.
+
+        Options:
+            - threshold: Detection threshold (default: 0.3)
+            - pretrained: Use pretrained weights (default: True)
+        """
+        if not SEISBENCH_AVAILABLE:
+            return None
+
+        threshold = float(options.get("threshold", 0.3))
+        pretrained = options.get("pretrained", True)
+
+        model = self._get_seisbench_model("phasenet", pretrained)
+        if model is None:
+            return None
+
+        try:
+            data = self._signal(trace_index)
+            sr = record.sampling_rate
+
+            # Get model's expected input size
+            model_samples = model.in_samples if hasattr(model, 'in_samples') else 3001
+
+            # Handle data length - use windowing for long traces
+            if len(data) >= model_samples:
+                # For long data, use sliding window and take best result
+                best_p_score = 0
+                best_p_idx = 0
+                best_s_score = 0
+                best_s_idx = 0
+
+                step = model_samples // 2  # 50% overlap
+                for start in range(0, len(data) - model_samples + 1, step):
+                    window = data[start:start + model_samples]
+
+                    # Create 3-component data
+                    window_data = np.zeros((3, model_samples), dtype=np.float32)
+                    window_data[0] = window
+                    window_data[1] = window
+                    window_data[2] = window
+
+                    # Normalize per component
+                    for i in range(3):
+                        std = np.std(window_data[i]) + 1e-10
+                        window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
+
+                    # Convert to tensor
+                    tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
+
+                    # Run inference
+                    with torch.no_grad():
+                        output = model(tensor_data)
+
+                    # Get predictions
+                    p_pred = output[0, 0, :].cpu().numpy()
+                    s_pred = output[0, 1, :].cpu().numpy()
+
+                    # Find best peak in this window
+                    p_peaks = self._find_peaks_simple(p_pred, threshold)
+                    if len(p_peaks) > 0:
+                        local_p_idx = int(p_peaks[np.argmax(p_pred[p_peaks])])
+                        global_p_idx = start + local_p_idx
+                        if p_pred[local_p_idx] > best_p_score:
+                            best_p_score = p_pred[local_p_idx]
+                            best_p_idx = global_p_idx
+
+                    s_peaks = self._find_peaks_simple(s_pred, threshold)
+                    if len(s_peaks) > 0:
+                        local_s_idx = int(s_peaks[np.argmax(s_pred[s_peaks])])
+                        global_s_idx = start + local_s_idx
+                        if s_pred[local_s_idx] > best_s_score:
+                            best_s_score = s_pred[local_s_idx]
+                            best_s_idx = global_s_idx
+
+                results = []
+                if best_p_score > threshold:
+                    results.append(self._format_result(
+                        trace_index, "phasenet", record, best_p_idx, best_p_score, min(1.0, best_p_score),
+                        phase_type="P", extra={"model": "PhaseNet"}
+                    ))
+                if best_s_score > threshold:
+                    results.append(self._format_result(
+                        trace_index, "phasenet", record, best_s_idx, best_s_score, min(1.0, best_s_score),
+                        phase_type="S", extra={"model": "PhaseNet"}
+                    ))
+                return results if results else None
+            else:
+                # Data is shorter than model expects - pad it
+                padded_data = np.zeros(model_samples, dtype=np.float32)
+                padded_data[:len(data)] = data
+
+                # Create 3-component data
+                window_data = np.zeros((3, model_samples), dtype=np.float32)
+                window_data[0] = padded_data
+                window_data[1] = padded_data
+                window_data[2] = padded_data
+
+                # Normalize per component
+                for i in range(3):
+                    std = np.std(window_data[i]) + 1e-10
+                    window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
+
+                # Convert to tensor
+                tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
+
+                # Run inference
+                with torch.no_grad():
+                    output = model(tensor_data)
+
+            # Get predictions (P and S probabilities)
+            # Output shape is (batch, n_classes, n_samples), so use output[0, class_idx, :]
+            p_pred = output[0, 0, :].cpu().numpy()  # P probability
+            s_pred = output[0, 1, :].cpu().numpy()  # S probability
+
+            results = []
+
+            # Find P pick
+            p_peaks = self._find_peaks_simple(p_pred, threshold)
+            if len(p_peaks) > 0:
+                p_idx = int(p_peaks[0])  # Take first P pick
+                p_score = float(p_pred[p_idx])
+                normalized = min(1.0, p_score)
+                results.append(self._format_result(
+                    trace_index, "phasenet", record, p_idx, p_score, normalized,
+                    phase_type="P", extra={"model": "PhaseNet"}
+                ))
+
+            # Find S pick
+            s_peaks = self._find_peaks_simple(s_pred, threshold)
+            if len(s_peaks) > 0:
+                s_idx = int(s_peaks[0])  # Take first S pick
+                s_score = float(s_pred[s_idx])
+                normalized = min(1.0, s_score)
+                results.append(self._format_result(
+                    trace_index, "phasenet", record, s_idx, s_score, normalized,
+                    phase_type="S", extra={"model": "PhaseNet"}
+                ))
+
+            return results if results else None
+
+        except Exception as e:
+            warnings.warn(f"PhaseNet picking failed: {e}")
+            return None
+
+    def _pick_eqtransformer(
+        self,
+        trace_index: int,
+        record: TraceRecord,
+        options: Dict[str, Any],
+    ) -> Optional[List[PickResult]]:
+        """
+        EQTransformer deep learning picker from SeisBench.
+        Uses a transformer architecture for earthquake detection and picking.
+
+        Options:
+            - threshold: Detection threshold (default: 0.3)
+            - pretrained: Use pretrained weights (default: True)
+        """
+        if not SEISBENCH_AVAILABLE:
+            return None
+
+        threshold = float(options.get("threshold", 0.3))
+        pretrained = options.get("pretrained", True)
+
+        model = self._get_seisbench_model("eqtransformer", pretrained)
+        if model is None:
+            return None
+
+        try:
+            data = self._signal(trace_index)
+            sr = record.sampling_rate
+
+            # EQTransformer expects 6000 samples (60 seconds at 100 Hz)
+            model_samples = model.in_samples if hasattr(model, 'in_samples') else 6000
+
+            # Handle data length
+            if len(data) < model_samples:
+                # Pad data if too short
+                padded_data = np.zeros(model_samples, dtype=np.float32)
+                padded_data[:len(data)] = data
+                data_for_model = padded_data
+                offset = 0  # No offset for padded data
+            elif len(data) > model_samples:
+                # Use sliding window for long data
+                best_p_score = 0
+                best_p_idx = 0
+                best_s_score = 0
+                best_s_idx = 0
+
+                step = model_samples // 2  # 50% overlap
+                for start in range(0, len(data) - model_samples + 1, step):
+                    window = data[start:start + model_samples]
+
+                    # Create 3-component data
+                    window_data = np.zeros((3, model_samples), dtype=np.float32)
+                    window_data[0] = window
+                    window_data[1] = window
+                    window_data[2] = window
+
+                    # Normalize per component
+                    for i in range(3):
+                        std = np.std(window_data[i]) + 1e-10
+                        window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
+
+                    # Convert to tensor
+                    tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
+
+                    # Run inference
+                    with torch.no_grad():
+                        output = model(tensor_data)
+
+                    # Get predictions
+                    if isinstance(output, dict):
+                        p_pred = output.get("p_pick", output.get("p", None))
+                        s_pred = output.get("s_pick", output.get("s", None))
+                    elif isinstance(output, (list, tuple)) and len(output) >= 3:
+                        p_pred = output[1][0].cpu().numpy() if output[1] is not None else None
+                        s_pred = output[2][0].cpu().numpy() if output[2] is not None else None
+                    else:
+                        output_np = output[0].cpu().numpy()
+                        if output_np.shape[0] >= 3:
+                            p_pred = output_np[1]
+                            s_pred = output_np[2]
+                        else:
+                            continue
+
+                    # Find best peaks
+                    if p_pred is not None:
+                        p_peaks = self._find_peaks_simple(p_pred, threshold)
+                        if len(p_peaks) > 0:
+                            local_idx = int(p_peaks[np.argmax(p_pred[p_peaks])])
+                            global_idx = start + local_idx
+                            if p_pred[local_idx] > best_p_score:
+                                best_p_score = p_pred[local_idx]
+                                best_p_idx = global_idx
+
+                    if s_pred is not None:
+                        s_peaks = self._find_peaks_simple(s_pred, threshold)
+                        if len(s_peaks) > 0:
+                            local_idx = int(s_peaks[np.argmax(s_pred[s_peaks])])
+                            global_idx = start + local_idx
+                            if s_pred[local_idx] > best_s_score:
+                                best_s_score = s_pred[local_idx]
+                                best_s_idx = global_idx
+
+                results = []
+                if best_p_score > threshold:
+                    results.append(self._format_result(
+                        trace_index, "eqtransformer", record, best_p_idx, best_p_score, min(1.0, best_p_score),
+                        phase_type="P", extra={"model": "EQTransformer"}
+                    ))
+                if best_s_score > threshold:
+                    results.append(self._format_result(
+                        trace_index, "eqtransformer", record, best_s_idx, best_s_score, min(1.0, best_s_score),
+                        phase_type="S", extra={"model": "EQTransformer"}
+                    ))
+                return results if results else None
+            else:
+                data_for_model = data
+                offset = 0
+
+            # Single window case
+            # Create 3-component data
+            window_data = np.zeros((3, model_samples), dtype=np.float32)
+            window_data[0] = data_for_model
+            window_data[1] = data_for_model
+            window_data[2] = data_for_model
+
+            # Normalize per component
+            for i in range(3):
+                std = np.std(window_data[i]) + 1e-10
+                window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
+
+            # Convert to tensor with shape (1, 3, n_samples)
+            tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
+
+            # Run inference
+            with torch.no_grad():
+                output = model(tensor_data)
+
+            # EQTransformer outputs: detection, p_pick, s_pick
+            if isinstance(output, dict):
+                p_pred = output.get("p_pick", output.get("p", None))
+                s_pred = output.get("s_pick", output.get("s", None))
+            elif isinstance(output, (list, tuple)) and len(output) >= 3:
+                p_pred = output[1][0].cpu().numpy() if output[1] is not None else None
+                s_pred = output[2][0].cpu().numpy() if output[2] is not None else None
+            else:
+                output_np = output[0].cpu().numpy()
+                if output_np.shape[0] >= 3:
+                    p_pred = output_np[1]
+                    s_pred = output_np[2]
+                else:
+                    return None
+
+            results = []
+
+            # Find P pick
+            if p_pred is not None:
+                p_peaks = self._find_peaks_simple(p_pred, threshold)
+                if len(p_peaks) > 0:
+                    p_idx = int(p_peaks[0])
+                    p_score = float(p_pred[p_idx])
+                    normalized = min(1.0, p_score)
+                    results.append(self._format_result(
+                        trace_index, "eqtransformer", record, p_idx + offset, p_score, normalized,
+                        phase_type="P", extra={"model": "EQTransformer"}
+                    ))
+
+            # Find S pick
+            if s_pred is not None:
+                s_peaks = self._find_peaks_simple(s_pred, threshold)
+                if len(s_peaks) > 0:
+                    s_idx = int(s_peaks[0])
+                    s_score = float(s_pred[s_idx])
+                    normalized = min(1.0, s_score)
+                    results.append(self._format_result(
+                        trace_index, "eqtransformer", record, s_idx + offset, s_score, normalized,
+                        phase_type="S", extra={"model": "EQTransformer"}
+                    ))
+
+            return results if results else None
+
+        except Exception as e:
+            warnings.warn(f"EQTransformer picking failed: {e}")
+            return None
+
+    def _pick_gpd(
+        self,
+        trace_index: int,
+        record: TraceRecord,
+        options: Dict[str, Any],
+    ) -> Optional[List[PickResult]]:
+        """
+        GPD (Generalized Phase Detection) deep learning picker from SeisBench.
+        Uses a CNN architecture with sliding windows for phase picking.
+
+        Options:
+            - threshold: Detection threshold (default: 0.5)
+            - pretrained: Use pretrained weights (default: True)
+        """
+        if not SEISBENCH_AVAILABLE:
+            return None
+
+        threshold = float(options.get("threshold", 0.5))
+        pretrained = options.get("pretrained", True)
+
+        model = self._get_seisbench_model("gpd", pretrained)
+        if model is None:
+            return None
+
+        try:
+            data = self._signal(trace_index)
+            sr = record.sampling_rate
+
+            # GPD uses fixed window size (typically 400 samples)
+            window_size = model.in_samples if hasattr(model, 'in_samples') else 400
+            step = window_size // 4  # 75% overlap
+
+            # Prepare 3-component data
+            if data.ndim == 1:
+                window_data = np.zeros((3, len(data)), dtype=np.float32)
+                window_data[0] = data
+                window_data[1] = data
+                window_data[2] = data
+            else:
+                window_data = np.asarray(data, dtype=np.float32)
+                if window_data.shape[0] != 3 and window_data.shape[1] == 3:
+                    window_data = window_data.T
+
+            # Normalize per component
+            for i in range(3):
+                std = np.std(window_data[i]) + 1e-10
+                window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
+
+            # Sliding window inference
+            p_probs = np.zeros(len(data))
+            s_probs = np.zeros(len(data))
+            n_windows = 0
+
+            for start in range(0, len(data) - window_size + 1, step):
+                end = start + window_size
+                win = window_data[:, start:end]
+
+                # Convert to tensor
+                tensor_win = torch.tensor(win, dtype=torch.float32).unsqueeze(0)
+
+                with torch.no_grad():
+                    output = model(tensor_win)
+
+                # Get probabilities
+                output_np = output[0].cpu().numpy()
+                exp_output = np.exp(output_np - np.max(output_np))
+                probs = exp_output / np.sum(exp_output)
+
+                center = start + window_size // 2
+                if center < len(data):
+                    p_probs[center] = max(p_probs[center], probs[1] if len(probs) > 1 else 0)
+                    s_probs[center] = max(s_probs[center], probs[2] if len(probs) > 2 else 0)
+                n_windows += 1
+
+            results = []
+
+            # Find P peaks
+            p_peaks = self._find_peaks_simple(p_probs, threshold)
+            if len(p_peaks) > 0:
+                p_idx = int(p_peaks[0])
+                p_score = float(p_probs[p_idx])
+                results.append(self._format_result(
+                    trace_index, "gpd", record, p_idx, p_score, min(1.0, p_score),
+                    phase_type="P", extra={"model": "GPD"}
+                ))
+
+            # Find S peaks
+            s_peaks = self._find_peaks_simple(s_probs, threshold)
+            if len(s_peaks) > 0:
+                s_idx = int(s_peaks[0])
+                s_score = float(s_probs[s_idx])
+                results.append(self._format_result(
+                    trace_index, "gpd", record, s_idx, s_score, min(1.0, s_score),
+                    phase_type="S", extra={"model": "GPD"}
+                ))
+
+            return results if results else None
+
+        except Exception as e:
+            warnings.warn(f"GPD picking failed: {e}")
+            return None
+
+    def _find_peaks_simple(self, data: np.ndarray, threshold: float) -> np.ndarray:
+        """Simple peak finding above threshold."""
+        peaks = []
+        for i in range(1, len(data) - 1):
+            if data[i] > threshold and data[i] > data[i-1] and data[i] > data[i+1]:
+                peaks.append(i)
+        return np.array(peaks)
 
 
 def pick_phases(
@@ -844,19 +1348,46 @@ def pick_phases(
 
 
 def summarize_pick_results(picks: Sequence[PickResult]) -> List[Dict[str, Any]]:
-    """Aggregate pick confidences per trace for quick consumption."""
+    """
+    Aggregate pick confidences per trace for quick consumption.
+    Includes scoring that prioritizes deep learning methods and consensus.
+    """
 
+    # Method priority weights (deep learning methods get higher weight)
+    METHOD_WEIGHTS = {
+        "phasenet": 1.2,
+        "eqtransformer": 1.2,
+        "gpd": 1.1,
+        "sta_lta": 1.0,
+        "aic": 0.9,
+        "pai_k": 0.9,
+        "pai_s": 0.9,
+        "s_phase": 0.8,
+        "frequency_ratio": 0.8,
+        "autocorr": 0.7,
+        "feature_threshold": 0.7,
+        "ar_model": 0.7,
+        "template_correlation": 0.8,
+    }
+
+    # Group picks by trace and phase type
     summary: Dict[int, Dict[str, Any]] = {}
     for pick in picks:
-        info = summary.setdefault(
-            pick.trace_index,
-            {
+        trace_key = pick.trace_index
+        phase_key = pick.phase_type or "P"
+
+        if trace_key not in summary:
+            summary[trace_key] = {
                 "count": 0,
                 "scores": [],
-                "best": None,
+                "best_p": None,
+                "best_s": None,
                 "methods": [],
-            },
-        )
+                "p_picks": [],
+                "s_picks": [],
+            }
+
+        info = summary[trace_key]
         info["count"] += 1
         info["methods"].append(
             {
@@ -864,120 +1395,205 @@ def summarize_pick_results(picks: Sequence[PickResult]) -> List[Dict[str, Any]]:
                 "sample_index": pick.sample_index,
                 "absolute_time": pick.absolute_time,
                 "normalized_score": pick.normalized_score,
-                "phase_type": pick.phase_type,
+                "phase_type": phase_key,
             }
         )
+
+        # Store picks by phase type
+        if phase_key == "P":
+            info["p_picks"].append(pick)
+        else:
+            info["s_picks"].append(pick)
+
         if pick.normalized_score is not None:
             info["scores"].append(pick.normalized_score)
-            best = info.get("best")
-            if best is None or (best["score"] < pick.normalized_score):
-                info["best"] = {
-                    "score": pick.normalized_score,
-                    "method": pick.method,
-                    "sample_index": pick.sample_index,
-                    "absolute_time": pick.absolute_time,
-                    "phase_type": pick.phase_type,
-                }
+
+    # Find best picks with scoring
+    def _score_pick(pick: PickResult) -> float:
+        """Score a pick considering confidence and method weight."""
+        base_score = pick.normalized_score or 0.5
+        method_weight = METHOD_WEIGHTS.get(pick.method, 0.8)
+        return base_score * method_weight
+
+    def _find_best_pick(picks_list: List[PickResult]):
+        """Find the best pick from a list based on scoring."""
+        if not picks_list:
+            return None
+        best = max(picks_list, key=_score_pick)
+        return {
+            "score": best.normalized_score,
+            "weighted_score": _score_pick(best),
+            "method": best.method,
+            "sample_index": best.sample_index,
+            "absolute_time": best.absolute_time,
+            "phase_type": best.phase_type,
+        }
 
     summaries: List[Dict[str, Any]] = []
     for trace_index, info in summary.items():
         scores = info["scores"]
         avg = float(sum(scores) / len(scores)) if scores else None
-        best = info.get("best") or {}
+
+        # Find best P and S picks
+        best_p = _find_best_pick(info["p_picks"])
+        best_s = _find_best_pick(info["s_picks"])
+
         summaries.append(
             {
                 "trace_index": trace_index,
                 "method_count": info["count"],
                 "average_score": avg,
-                "best_method": best.get("method"),
-                "best_sample_index": best.get("sample_index"),
-                "best_absolute_time": best.get("absolute_time"),
-                "best_phase_type": best.get("phase_type"),
+                "best_p": best_p,
+                "best_s": best_s,
+                "best_method": (best_p or best_s or {}).get("method"),
+                "best_sample_index": (best_p or best_s or {}).get("sample_index"),
+                "best_absolute_time": (best_p or best_s or {}).get("absolute_time"),
+                "best_phase_type": (best_p or best_s or {}).get("phase_type"),
                 "methods": info["methods"],
             }
         )
     return summaries
 
 
+def get_best_picks_for_plotting(
+    picks: List[PickResult],
+    max_per_phase: int = 3
+) -> List[PickResult]:
+    """
+    Select the best picks for plotting.
+    Returns top N picks per trace per phase type, prioritizing:
+    1. Deep learning methods (PhaseNet, EQTransformer)
+    2. High confidence scores
+    3. Method consensus
+    """
+    # Group picks by trace and phase
+    grouped: Dict[Tuple[int, str], List[PickResult]] = {}
+    for pick in picks:
+        key = (pick.trace_index, pick.phase_type or "P")
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(pick)
+
+    # Method priority for plotting
+    PLOT_PRIORITY = {
+        "phasenet": 0,
+        "eqtransformer": 1,
+        "gpd": 2,
+        "sta_lta": 3,
+        "aic": 4,
+        "pai_k": 5,
+    }
+
+    def _sort_key(pick: PickResult) -> Tuple[int, float]:
+        """Sort by method priority, then by score."""
+        priority = PLOT_PRIORITY.get(pick.method, 10)
+        score = pick.normalized_score or 0
+        return (priority, -score)  # Negative score for descending
+
+    best_picks = []
+    for (trace_idx, phase), pick_list in grouped.items():
+        # Sort by priority and score
+        sorted_picks = sorted(pick_list, key=_sort_key)
+        # Take top N
+        best_picks.extend(sorted_picks[:max_per_phase])
+
+    return best_picks
+
+
 def plot_waveform_with_picks(
     traces: List[TraceRecord],
     picks: List[PickResult],
     output_path: str,
-    max_traces: int = 5
+    max_traces: int = 5,
+    max_picks_per_phase: int = 2
 ) -> str:
-    """Plot waveforms with picks and save to file."""
+    """Plot waveforms with best picks and save to file."""
+
+    # Filter to best picks for cleaner visualization
+    plot_picks = get_best_picks_for_plotting(picks, max_per_phase=max_picks_per_phase)
 
     def _method_to_color(method: str):
-        # Stable method->color mapping using matplotlib categorical palettes.
-        # Falls back gracefully if method list exceeds palette length.
-        palette = plt.get_cmap('tab20')
-        if not method:
-            return palette(0)
-        idx = abs(hash(method)) % palette.N
-        return palette(idx)
-    
-    # Group picks by trace index
+        # Color scheme: deep learning = warm colors, conventional = cool colors
+        colors = {
+            "phasenet": "#E64B35",        # Red
+            "eqtransformer": "#F39B7F",   # Orange
+            "gpd": "#8491B4B8",           # Blue-gray
+            "sta_lta": "#4DBBD5",         # Cyan
+            "aic": "#00A087",             # Green
+            "pai_k": "#3C5488",           # Dark blue
+            "s_phase": "#91D1C2",         # Light green
+        }
+        return colors.get(method, "#999999")
+
+    # Group filtered picks by trace index
     picks_by_trace = {}
-    for p in picks:
+    for p in plot_picks:
         if p.trace_index not in picks_by_trace:
             picks_by_trace[p.trace_index] = []
         picks_by_trace[p.trace_index].append(p)
-        
+
     # Select traces to plot (first N)
     traces_to_plot = traces[:max_traces]
-    
+
     n_traces = len(traces_to_plot)
     if n_traces == 0:
         return "No traces to plot."
-        
-    fig, axes = plt.subplots(n_traces, 1, figsize=(10, 3 * n_traces), sharex=True, squeeze=False)
-    
+
+    fig, axes = plt.subplots(n_traces, 1, figsize=(12, 3 * n_traces), sharex=True, squeeze=False)
+
     for i, trace in enumerate(traces_to_plot):
         ax = axes[i, 0]
         data = trace.data
         sr = trace.sampling_rate
         times = np.arange(len(data)) / sr
-        
-        waveform_line, = ax.plot(times, data, 'k-', linewidth=0.6, label="Waveform")
-        ax.set_ylabel("Amplitude")
-        
-        # Plot picks
-        trace_picks = picks_by_trace.get(i, [])
 
-        legend_items = {"Waveform": waveform_line}
+        # Plot waveform
+        ax.plot(times, data, 'k-', linewidth=0.6, label="Waveform")
+        ax.set_ylabel("Amplitude")
+
+        # Plot only the best picks for this trace
+        trace_picks = picks_by_trace.get(i, [])
+        legend_items = {}
 
         for p in trace_picks:
             if p.sample_index < 0 or p.sample_index >= len(data):
                 continue
-                
-            t_pick = p.sample_index / sr
 
+            t_pick = p.sample_index / sr
             color = _method_to_color(p.method)
             linestyle = '-.' if p.phase_type == "S" else '--'
-            
-            # Vertical line
 
-            legend_label = f"{p.phase_type}-{p.method}" if p.method else f"{p.phase_type}"
-            line = ax.axvline(
+            # Create legend label with score
+            score_str = f" ({p.normalized_score:.2f})" if p.normalized_score else ""
+            legend_label = f"{p.phase_type}: {p.method}{score_str}"
+
+            ax.axvline(
                 x=t_pick,
                 color=color,
                 linestyle=linestyle,
                 alpha=0.9,
-                linewidth=1.2,
+                linewidth=1.5,
+                label=legend_label
             )
 
-            # Keep one legend item per (phase, method) to avoid a huge legend.
-            legend_items.setdefault(legend_label, line)
+            # Track legend items
+            if legend_label not in legend_items:
+                legend_items[legend_label] = True
 
-        if len(legend_items) > 1:
-            ax.legend(list(legend_items.values()), list(legend_items.keys()), loc='upper right', fontsize=9)
+        if legend_items:
+            ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
         else:
-            # No picks: avoid showing a redundant legend.
-            ax.legend().remove()
-            
+            ax.text(0.5, 0.5, 'No picks detected', transform=ax.transAxes,
+                   ha='center', va='center', fontsize=12, color='gray')
+
+        # Add trace info
+        if trace.metadata:
+            info_str = trace.metadata.get('id', '') or f"Trace {i}"
+            ax.set_title(info_str, fontsize=10, loc='left')
+
     axes[-1, 0].set_xlabel("Time (s)")
     plt.tight_layout()
-    plt.savefig(output_path)
+    plt.savefig(output_path, dpi=150)
     plt.close(fig)
-    
+
     return output_path

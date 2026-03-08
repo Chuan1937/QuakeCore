@@ -43,6 +43,29 @@ def set_current_sac_path(path):
     global CURRENT_SAC_PATH
     CURRENT_SAC_PATH = path
 
+# 解析文件路径的辅助函数
+def _resolve_file_path(path: str) -> str:
+    """Resolve file path, checking data/ directory if relative path doesn't exist."""
+    """解析文件路径，如果相对路径不存在则检查 data/ 目录。"""
+    if not path:
+        return path
+    # If absolute path and exists, return as is
+    if os.path.isabs(path) and os.path.exists(path):
+        return path
+    # If relative path and exists, return as is
+    if os.path.exists(path):
+        return path
+    # Try in data/ directory
+    data_path = os.path.join("data", path)
+    if os.path.exists(data_path):
+        return data_path
+    # Try with absolute path from cwd
+    cwd_data_path = os.path.join(os.getcwd(), "data", path)
+    if os.path.exists(cwd_data_path):
+        return cwd_data_path
+    return path  # Return original path even if not found (will error later)
+
+
 # 解析参数字典的辅助函数
 def _parse_param_dict(raw_params):
     """Normalize incoming tool arguments to a dict."""
@@ -50,21 +73,27 @@ def _parse_param_dict(raw_params):
     if raw_params is None:
         return {}
     if isinstance(raw_params, dict):
-        return raw_params
-    if isinstance(raw_params, str):
+        result = raw_params
+    elif isinstance(raw_params, str):
         candidate = raw_params.strip()
         if not candidate:
             return {}
         try:
-            return json.loads(candidate)
+            result = json.loads(candidate)
         except json.JSONDecodeError:
             params = {}
             for chunk in candidate.split(","):
                 if "=" in chunk:
                     key, value = chunk.split("=", 1)
                     params[key.strip()] = value.strip()
-            return params
-    return {}
+            result = params
+    else:
+        return {}
+
+    # Auto-resolve path parameter if present
+    if "path" in result and result["path"]:
+        result["path"] = _resolve_file_path(result["path"])
+    return result
 
 # 将值强制转换为整数的辅助函数
 def _coerce_int(value, *, allow_none=False, default=None, field_name="value"):
@@ -224,23 +253,54 @@ def _resolve_output_path(output_path: str | None, *, default_filename: str) -> s
 # tool to read basic SEGY structure info
 # 读取 SEGY 结构信息的工具
 @tool
-def get_segy_structure():
+def get_segy_structure(params: Union[str, dict, None] = None):
     """
     Reads the currently loaded SEGY file and returns a summary of its structure,
     including trace count, sample rate, and sample count.
     Use this tool when the user asks about the 'structure', 'basic info', or 'overview' of the SEGY file.
+    Args: plot (bool, default True) - whether to generate waveform plot.
     """
     """读取当前加载的 SEGY 文件并返回其结构摘要，
     包括道数、采样率和采样点数。
-    当用户询问 SEGY 文件的“结构”、“基本信息”或“概览”时使用此工具。
+    当用户询问 SEGY 文件的"结构"、"基本信息"或"概览"时使用此工具。
+    参数：plot（bool，默认 True）- 是否生成波形图。
     """
     global CURRENT_SEGY_PATH
     if not CURRENT_SEGY_PATH:
         return "No SEGY file is currently loaded. Please ask the user to upload a file first."
-    
+
     handler = SegyHandler(CURRENT_SEGY_PATH)
     info = handler.get_basic_info()
-    return json.dumps(info, indent=2)
+
+    # Parse params for plot option
+    parsed = _parse_param_dict(params)
+    plot = parsed.get("plot", True)
+    if isinstance(plot, str):
+        plot = plot.lower() in ("true", "yes", "1")
+
+    plot_markdown = None
+    if plot:
+        try:
+            trace_data = handler.get_trace_data(trace_index=0)
+            if "error" not in trace_data:
+                tr = TraceRecord(
+                    data=trace_data["data"],
+                    sampling_rate=trace_data["sampling_rate"],
+                    start_time=trace_data.get("start_time"),
+                    metadata={"trace_index": 0, "type": "segy"}
+                )
+                output_filename = "segy_structure_plot.png"
+                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+                plot_path = plot_waveform_with_picks([tr], [], output_path)
+                info["plot_path"] = plot_path
+                if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                    plot_markdown = f"\n\n![波形图]({plot_path})"
+        except Exception as e:
+            info["plot_error"] = str(e)
+
+    if plot_markdown:
+        return json.dumps(info, indent=2, ensure_ascii=False) + plot_markdown
+    return json.dumps(info, indent=2, ensure_ascii=False)
 
 # tool to read SEGY text header
 # 读取 SEGY 文本头的工具
@@ -485,16 +545,44 @@ def convert_segy_to_hdf5(params: Union[str, dict, None] = None):
 @tool
 def get_miniseed_structure(params: Union[str, dict, None] = None):
     """
-    Read MiniSEED file basic structure info. Args: path (optional).
+    Read MiniSEED file basic structure info. Args: path (optional), plot (bool, default True).
     """
-    """读取 MiniSEED 文件的基本结构信息。参数：path（可选）。"""
+    """读取 MiniSEED 文件的基本结构信息。参数：path（可选）、plot（bool，默认 True）。"""
     parsed = _parse_param_dict(params)
     path = parsed.get("path") or CURRENT_MINISEED_PATH
     if not path:
         return "No MiniSEED file is currently loaded."
     handler = MiniSEEDHandler(path)
     info = handler.get_basic_info()
-    return json.dumps(info, indent=2)
+
+    # Default plot=True for better UX
+    plot = parsed.get("plot", True)
+    if isinstance(plot, str):
+        plot = plot.lower() in ("true", "yes", "1")
+
+    plot_markdown = None
+    if plot:
+        try:
+            trace_data = handler.get_trace_data(trace_index=0)
+            if "error" not in trace_data:
+                tr = TraceRecord(
+                    data=trace_data["data"],
+                    sampling_rate=trace_data["sampling_rate"],
+                    start_time=trace_data["start_time"],
+                    metadata={"trace_index": 0, "type": "miniseed"}
+                )
+                output_filename = "miniseed_structure_plot.png"
+                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+                plot_path = plot_waveform_with_picks([tr], [], output_path)
+                info["plot_path"] = plot_path
+                if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                    plot_markdown = f"\n\n![波形图]({plot_path})"
+        except Exception as e:
+            info["plot_error"] = str(e)
+
+    if plot_markdown:
+        return json.dumps(info, indent=2, ensure_ascii=False) + plot_markdown
+    return json.dumps(info, indent=2, ensure_ascii=False)
 
 # 读取 MiniSEED 指定道/轨迹数据的工具
 @tool
@@ -972,16 +1060,44 @@ def convert_miniseed_to_sac(params: Union[str, dict, None] = None):
 @tool
 def get_sac_structure(params: Union[str, dict, None] = None):
     """
-    Read SAC file basic structure info. Args: path (optional).
+    Read SAC file basic structure info. Args: path (optional), plot (bool, default True).
     """
-    """读取 SAC 文件的基本结构信息。参数：path（可选）。"""
+    """读取 SAC 文件的基本结构信息。参数：path（可选）、plot（bool，默认 True）。"""
     parsed = _parse_param_dict(params)
-    path = parsed.get("path") or CURRENT_SAC_PATH
+    path = _resolve_file_path(parsed.get("path")) if parsed.get("path") else CURRENT_SAC_PATH
     if not path:
         return "No SAC file is currently loaded."
     handler = SACHandler(path)
     info = handler.get_basic_info()
-    return json.dumps(info, indent=2)
+
+    # Default plot=True for better UX
+    plot = parsed.get("plot", True)
+    if isinstance(plot, str):
+        plot = plot.lower() in ("true", "yes", "1")
+
+    plot_markdown = None
+    if plot:
+        try:
+            record_data = handler.get_trace_record_data(trace_index=0)
+            if "error" not in record_data:
+                tr = TraceRecord(
+                    data=record_data["data"],
+                    sampling_rate=record_data["sampling_rate"],
+                    start_time=record_data["start_time"],
+                    metadata={"trace_index": 0, "type": "sac"}
+                )
+                output_filename = "sac_structure_plot.png"
+                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+                plot_path = plot_waveform_with_picks([tr], [], output_path)
+                info["plot_path"] = plot_path
+                if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
+                    plot_markdown = f"\n\n![波形图]({plot_path})"
+        except Exception as e:
+            info["plot_error"] = str(e)
+
+    if plot_markdown:
+        return json.dumps(info, indent=2, ensure_ascii=False) + plot_markdown
+    return json.dumps(info, indent=2, ensure_ascii=False)
 
 # 读取 SAC 轨迹
 @tool
@@ -1125,6 +1241,9 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
     - pai_k: PAI-K kurtosis-based picker.
     - pai_s: PAI-S skewness-based picker.
     - s_phase: Heuristic S-wave picker (STA/LTA max after P-wave delay).
+    - phasenet: Deep learning P/S picker using PhaseNet (SeisBench).
+    - eqtransformer: Deep learning P/S picker using EQTransformer (SeisBench).
+    - gpd: Deep learning P/S picker using GPD (SeisBench).
 
     Args:
       path (optional): File path override.
@@ -1134,7 +1253,7 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
       method_params (optional): JSON string or dict of params for methods.
     """
     """在当前加载的文件上拾取初至（震相）。
-    
+
     可用方法：
     - sta_lta: 经典的短长时窗平均比值法 (STA/LTA)。
     - aic: 赤池信息准则 (AIC)，用于精确到时优化。
@@ -1146,12 +1265,15 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
     - pai_k: 基于峰度的 PAI-K 拾取。
     - pai_s: 基于偏度的 PAI-S 拾取。
     - s_phase: 启发式 S 波拾取（P 波后延迟寻找最大 STA/LTA）。
+    - phasenet: 深度学习 P/S 波拾取（PhaseNet，基于 SeisBench）。
+    - eqtransformer: 深度学习 P/S 波拾取（EQTransformer，基于 SeisBench）。
+    - gpd: 深度学习 P/S 波拾取（GPD，基于 SeisBench）。
 
     参数：
       path（可选）：文件路径覆盖。
       file_type（可选）：'hdf5', 'sac', 'segy', 'miniseed'。
       dataset（可选）：针对 HDF5 的特定数据集名称。
-      methods（可选）：逗号分隔的方法列表（例如 'sta_lta,aic'）。
+      methods（可选）：逗号分隔的方法列表（例如 'sta_lta,aic,phasenet'）。
       method_params（可选）：方法的参数（JSON 字符串或字典）。
     """
     parsed = _parse_param_dict(params)

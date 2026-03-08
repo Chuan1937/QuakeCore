@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="100%" height="100%">
+  <defs>
+    <linearGradient id="pillarGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4A6591" />
+      <stop offset="100%" stop-color="#2C3E5B" />
+    </linearGradient>
+    <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E64B35" />
+      <stop offset="100%" stop-color="#DC0000" />
+    </linearGradient>
+    <path id="coreWave" d="M -10 120 L 56 120 L 84 20 L 156 220 L 184 120 L 250 120" />
+    <mask id="voidMask">
+      <rect width="240" height="240" fill="white" />
+      <use href="#coreWave" fill="none" stroke="black" stroke-width="26" stroke-linejoin="miter" stroke-miterlimit="100" />
+    </mask>
+  </defs>
+  <g mask="url(#voidMask)">
+    <rect x="24" y="24" width="48" height="192" fill="url(#pillarGrad)" stroke="#1E2A3E" stroke-width="1.5" />
+    <rect x="96" y="24" width="48" height="192" fill="url(#pillarGrad)" stroke="#1E2A3E" stroke-width="1.5" />
+    <rect x="168" y="24" width="48" height="192" fill="url(#pillarGrad)" stroke="#1E2A3E" stroke-width="1.5" />
+  </g>
+  <use href="#coreWave" fill="none" stroke="url(#waveGrad)" stroke-width="6" stroke-linejoin="miter" stroke-miterlimit="100" />
+</svg>
