@@ -84,8 +84,10 @@ def render_message_content(content, msg_idx=0):
 
 
 # Page Config
-LOGO_PATH = "/home/yuan/code/QuakeCore/resources/QuakeCore.png"
-USER_AVATAR_PATH = "/home/yuan/code/QuakeCore/resources/chuanjun.jpg"
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOGO_PATH = os.path.join(BASE_DIR, "resources", "QuakeCore.png")
+USER_AVATAR_PATH = os.path.join(BASE_DIR, "resources", "chuanjun.jpg")
 
 st.set_page_config(
     page_title="QuakeCore AI Agent",
