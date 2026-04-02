@@ -1,0 +1,1143 @@
+"""
+Earthquake Location Module for QuakeCore
+
+Provides earthquake hypocenter location using:
+- Grid search method
+- Geiger's method (least squares inversion)
+- IASP91 velocity model for travel time calculation
+- Optional TauP for accurate travel times
+"""
+
+import os
+import warnings
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple, Union
+import numpy as np
+from scipy.optimize import minimize
+from scipy.spatial.distance import cdist
+
+# Try to import optional dependencies
+try:
+    from obspy.geodetics import locations2degrees, kilometer2degrees
+    from obspy.core import UTCDateTime
+    OBSPY_AVAILABLE = True
+except ImportError:
+    OBSPY_AVAILABLE = False
+    UTCDateTime = None
+
+# Try to import TauP for accurate travel times
+try:
+    from obspy.taup import TauPyModel
+    from obspy.taup.taup_create import build_taup_model
+    TAUP_AVAILABLE = True
+except ImportError:
+    TAUP_AVAILABLE = False
+    TauPyModel = None
+
+
+@dataclass
+class Station:
+    """Seismic station with coordinates."""
+    network: str
+    station: str
+    latitude: float
+    longitude: float
+    elevation: float = 0.0  # meters
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __hash__(self):
+        return hash((self.network, self.station))
+
+    def __eq__(self, other):
+        if not isinstance(other, Station):
+            return False
+        return self.network == other.network and self.station == other.station
+
+
+@dataclass
+class PhasePick:
+    """Phase pick with station association."""
+    station: Station
+    phase_type: str  # "P" or "S"
+    arrival_time: float  # Absolute time as timestamp
+    weight: float = 1.0
+    residual: float = 0.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Hypocenter:
+    """Earthquake hypocenter location result."""
+    latitude: float  # degrees
+    longitude: float  # degrees
+    depth: float  # km
+    origin_time: float  # timestamp
+    rms_residual: float = 0.0
+    gap: float = 0.0  # Azimuthal gap in degrees
+    num_picks: int = 0
+    num_stations: int = 0
+    method: str = ""
+    uncertainty_lat: float = 0.0
+    uncertainty_lon: float = 0.0
+    uncertainty_depth: float = 0.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        # Helper function to convert numpy types to Python native types
+        def to_native(val):
+            if isinstance(val, (np.floating, np.float32, np.float64)):
+                return float(val)
+            elif isinstance(val, (np.integer, np.int32, np.int64)):
+                return int(val)
+            elif isinstance(val, np.ndarray):
+                return val.tolist()
+            return val
+
+        result = {
+            "latitude": to_native(self.latitude),
+            "longitude": to_native(self.longitude),
+            "depth_km": to_native(self.depth),
+            "origin_time": to_native(self.origin_time),
+            "origin_time_iso": UTCDateTime(self.origin_time).isoformat() if OBSPY_AVAILABLE and UTCDateTime else str(self.origin_time),
+            "rms_residual": to_native(self.rms_residual),
+            "azimuthal_gap": to_native(self.gap),
+            "num_picks": to_native(self.num_picks),
+            "num_stations": to_native(self.num_stations),
+            "method": self.method,
+            "uncertainty": {
+                "latitude_km": to_native(self.uncertainty_lat),
+                "longitude_km": to_native(self.uncertainty_lon),
+                "depth_km": to_native(self.uncertainty_depth),
+            },
+        }
+        # Convert metadata values too
+        for key, val in self.metadata.items():
+            result[key] = to_native(val)
+        return result
+
+
+class IASP91VelocityModel:
+    """
+    Simplified IASP91 velocity model for travel time calculation.
+    Provides P and S wave velocities at different depths.
+    """
+
+    # IASP91 model: (depth_km, vp_km_s, vs_km_s)
+    LAYERS = [
+        (0.0, 5.80, 3.36),
+        (20.0, 5.80, 3.36),
+        (35.0, 6.50, 3.75),
+        (120.0, 8.04, 4.47),
+        (210.0, 8.05, 4.48),
+        (410.0, 8.85, 4.94),
+        (660.0, 10.27, 5.66),
+    ]
+
+    def __init__(self):
+        self.layers = np.array(self.LAYERS)
+
+    def get_velocity(self, depth: float, phase: str = "P") -> float:
+        """Get velocity at given depth."""
+        if phase.upper() == "P":
+            col = 1
+        else:
+            col = 2
+
+        # Find the layer containing this depth
+        for i in range(len(self.layers) - 1):
+            if self.layers[i, 0] <= depth < self.layers[i + 1, 0]:
+                return self.layers[i, col]
+
+        # Return deepest layer velocity
+        return self.layers[-1, col]
+
+    def get_avg_velocity(self, depth: float, phase: str = "P") -> float:
+        """Get average velocity from surface to given depth."""
+        if depth <= 0:
+            return self.get_velocity(0, phase)
+
+        col = 1 if phase.upper() == "P" else 2
+
+        total_time = 0.0
+        total_depth = 0.0
+
+        for i in range(len(self.layers) - 1):
+            layer_top = self.layers[i, 0]
+            layer_bottom = self.layers[i + 1, 0]
+            layer_vel = self.layers[i, col]
+
+            if depth <= layer_top:
+                break
+
+            actual_bottom = min(depth, layer_bottom)
+            layer_thickness = actual_bottom - layer_top
+
+            if layer_thickness > 0:
+                total_time += layer_thickness / layer_vel
+                total_depth += layer_thickness
+
+        if total_time > 0:
+            return total_depth / total_time
+        return self.get_velocity(depth, phase)
+
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calculate great circle distance between two points in km.
+    Uses Haversine formula.
+    """
+    R = 6371.0  # Earth radius in km
+
+    lat1_rad = np.radians(lat1)
+    lat2_rad = np.radians(lat2)
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+
+    return R * c
+
+
+def calculate_epicentral_distance(
+    sta_lat: float, sta_lon: float,
+    evt_lat: float, evt_lon: float
+) -> float:
+    """Calculate epicentral distance in degrees."""
+    if OBSPY_AVAILABLE:
+        try:
+            return locations2degrees(sta_lat, sta_lon, evt_lat, evt_lon)
+        except Exception:
+            pass
+
+    # Fallback using haversine
+    distance_km = haversine_distance(sta_lat, sta_lon, evt_lat, evt_lon)
+    return distance_km / 111.19  # Approximate conversion
+
+
+def calculate_ray_parameter(distance_deg: float, depth_km: float, velocity: float) -> float:
+    """Calculate ray parameter (slowness)."""
+    # Simplified calculation
+    distance_rad = np.radians(distance_deg)
+    return distance_rad / (2 * np.pi) * 6371 / velocity
+
+
+class TravelTimeCalculator:
+    """Calculate travel times for P and S waves using TauP or simplified model."""
+
+    def __init__(self, velocity_model: Optional[IASP91VelocityModel] = None, use_taup: bool = True):
+        """
+        Initialize travel time calculator.
+
+        Args:
+            velocity_model: Simple velocity model for fallback
+            use_taup: Whether to use TauP for accurate travel times
+        """
+        self.model = velocity_model or IASP91VelocityModel()
+        self.use_taup = use_taup and TAUP_AVAILABLE
+
+        if self.use_taup:
+            try:
+                self.taup_model = TauPyModel(model="iasp91")
+                print("Using TauP IASP91 model for accurate travel times")
+            except Exception as e:
+                warnings.warn(f"Failed to load TauP model: {e}. Using simplified model.")
+                self.use_taup = False
+                self.taup_model = None
+        else:
+            self.taup_model = None
+
+    def calculate_travel_time(
+        self,
+        distance_deg: float,
+        depth_km: float,
+        phase: str = "P"
+    ) -> float:
+        """
+        Calculate travel time using TauP if available, otherwise simplified model.
+
+        Args:
+            distance_deg: Epicentral distance in degrees
+            depth_km: Source depth in km
+            phase: Phase type ("P" or "S")
+
+        Returns:
+            Travel time in seconds
+        """
+        if self.use_taup and self.taup_model is not None:
+            return self._calculate_taup(distance_deg, depth_km, phase)
+        else:
+            return self._calculate_simple(distance_deg, depth_km, phase)
+
+    def _calculate_taup(self, distance_deg: float, depth_km: float, phase: str) -> float:
+        """Calculate travel time using TauP."""
+        try:
+            # Determine phase name
+            if phase.upper() == "P":
+                phase_list = ["P", "p"]
+            elif phase.upper() == "S":
+                phase_list = ["S", "s"]
+            else:
+                phase_list = [phase.upper()]
+
+            # Get arrivals
+            arrivals = self.taup_model.get_travel_times(
+                source_depth_in_km=max(0, depth_km),
+                distance_in_degree=distance_deg,
+                phase_list=phase_list
+            )
+
+            if arrivals:
+                # Return first arrival
+                return arrivals[0].time
+            else:
+                # Fallback to simple model
+                return self._calculate_simple(distance_deg, depth_km, phase)
+
+        except Exception as e:
+            warnings.warn(f"TauP calculation failed: {e}. Using simplified model.")
+            return self._calculate_simple(distance_deg, depth_km, phase)
+
+    def _calculate_simple(self, distance_deg: float, depth_km: float, phase: str) -> float:
+        """Calculate travel time using simplified straight-ray approximation."""
+        # Convert distance to km (approximate)
+        distance_km = distance_deg * 111.19
+
+        # Get average velocity
+        v_avg = self.model.get_avg_velocity(depth_km, phase)
+
+        # Calculate slant distance
+        if depth_km <= 0:
+            slant_distance = distance_km
+        else:
+            slant_distance = np.sqrt(distance_km ** 2 + depth_km ** 2)
+
+        # Travel time
+        return slant_distance / v_avg
+
+    def calculate_travel_times_batch(
+        self,
+        station_lats: np.ndarray,
+        station_lons: np.ndarray,
+        event_lat: float,
+        event_lon: float,
+        depth_km: float,
+        phase: str = "P"
+    ) -> np.ndarray:
+        """
+        Calculate travel times for multiple stations at once.
+
+        Args:
+            station_lats: Array of station latitudes
+            station_lons: Array of station longitudes
+            event_lat: Event latitude
+            event_lon: Event longitude
+            depth_km: Source depth
+            phase: Phase type
+
+        Returns:
+            Array of travel times in seconds
+        """
+        travel_times = np.zeros(len(station_lats))
+
+        for i, (sta_lat, sta_lon) in enumerate(zip(station_lats, station_lons)):
+            dist = calculate_epicentral_distance(sta_lat, sta_lon, event_lat, event_lon)
+            travel_times[i] = self.calculate_travel_time(dist, depth_km, phase)
+
+        return travel_times
+
+    def calculate_travel_time_grid(
+        self,
+        sta_lat: float, sta_lon: float,
+        grid_lats: np.ndarray, grid_lons: np.ndarray, grid_depths: np.ndarray,
+        phase: str = "P"
+    ) -> np.ndarray:
+        """Calculate travel times to all grid points."""
+        # Create meshgrid
+        GLAT, GLON, GDEP = np.meshgrid(grid_lats, grid_lons, grid_depths, indexing='ij')
+
+        # Flatten for vectorized calculation
+        flat_lats = GLAT.flatten()
+        flat_lons = GLON.flatten()
+        flat_depths = GDEP.flatten()
+
+        # Calculate distances
+        distances = np.array([
+            calculate_epicentral_distance(sta_lat, sta_lon, lat, lon)
+            for lat, lon in zip(flat_lats, flat_lons)
+        ])
+
+        # Calculate travel times
+        v_avg = self.model.get_avg_velocity(np.mean(grid_depths), phase)
+
+        # Vectorized slant distance calculation
+        distances_km = distances * 111.19
+        slant_distances = np.sqrt(distances_km ** 2 + flat_depths ** 2)
+        travel_times = slant_distances / v_avg
+
+        return travel_times.reshape(GLAT.shape)
+
+
+class EarthquakeLocator:
+    """
+    Earthquake location using grid search and Geiger's method.
+    """
+
+    def __init__(self, velocity_model: Optional[IASP91VelocityModel] = None):
+        self.tt_calculator = TravelTimeCalculator(velocity_model)
+        self.model = velocity_model or IASP91VelocityModel()
+
+    def locate_grid_search(
+        self,
+        picks: List[PhasePick],
+        grid_center: Tuple[float, float] = None,
+        grid_size_deg: float = 2.0,
+        grid_depth_range: Tuple[float, float] = (0.0, 50.0),
+        grid_points: int = 8,
+        depth_points: int = 4,
+        use_fast_model: bool = True,
+    ) -> Hypocenter:
+        """
+        Locate earthquake using grid search method.
+
+        Args:
+            picks: List of PhasePick objects
+            grid_center: (lat, lon) center of search grid
+            grid_size_deg: Half-width of search grid in degrees
+            grid_depth_range: (min_depth, max_depth) in km
+            grid_points: Number of grid points in lat/lon
+            depth_points: Number of depth grid points
+
+        Returns:
+            Hypocenter object with location result
+        """
+        if len(picks) < 3:
+            raise ValueError("Need at least 3 picks for location")
+
+        # Use subset of picks for faster grid search (max 50)
+        if len(picks) > 50:
+            # Sort by weight and take best picks
+            sorted_picks = sorted(picks, key=lambda p: p.weight, reverse=True)
+            picks_used = sorted_picks[:50]
+            print(f"Using {len(picks_used)} best picks for grid search (of {len(picks)} total)")
+        else:
+            picks_used = picks
+
+        # Determine grid center from station coordinates
+        if grid_center is None:
+            sta_lats = [p.station.latitude for p in picks_used]
+            sta_lons = [p.station.longitude for p in picks_used]
+            grid_center = (np.mean(sta_lats), np.mean(sta_lons))
+
+        center_lat, center_lon = grid_center
+
+        # Create search grids
+        grid_lats = np.linspace(
+            center_lat - grid_size_deg,
+            center_lat + grid_size_deg,
+            grid_points
+        )
+        grid_lons = np.linspace(
+            center_lon - grid_size_deg,
+            center_lon + grid_size_deg,
+            grid_points
+        )
+        grid_depths = np.linspace(
+            grid_depth_range[0],
+            grid_depth_range[1],
+            depth_points
+        )
+
+        # Calculate travel times for each station
+        n_picks = len(picks_used)
+        n_grid = len(grid_lats) * len(grid_lons) * len(grid_depths)
+        print(f"Grid search: {n_grid} points, {n_picks} picks = {n_grid * n_picks} calculations")
+
+        # Reshape picks arrival times
+        arrival_times = np.array([p.arrival_time for p in picks_used])
+
+        # Pre-calculate station coordinates for faster lookup
+        sta_coords = [(p.station.latitude, p.station.longitude, p.phase_type) for p in picks_used]
+
+        # Grid search - use simple model for speed
+        best_residual = np.inf
+        best_lat = center_lat
+        best_lon = center_lon
+        best_depth = 10.0
+        best_origin_time = np.mean(arrival_times)
+
+        # Use simple travel time calculation for grid search (much faster)
+        def fast_travel_time(sta_lat, sta_lon, evt_lat, evt_lon, depth, phase):
+            dist_deg = calculate_epicentral_distance(sta_lat, sta_lon, evt_lat, evt_lon)
+            dist_km = dist_deg * 111.19
+            v_avg = 6.0 if phase.upper() == "P" else 3.5  # Simple average velocity
+            if depth <= 0:
+                return dist_km / v_avg
+            else:
+                slant_dist = np.sqrt(dist_km ** 2 + depth ** 2)
+                return slant_dist / v_avg
+
+        grid_count = 0
+        for lat in grid_lats:
+            for lon in grid_lons:
+                for depth in grid_depths:
+                    grid_count += 1
+                    if grid_count % 50 == 0:
+                        print(f"  Grid search progress: {grid_count}/{n_grid}")
+
+                    # Calculate travel times for all picks
+                    travel_times = np.array([
+                        fast_travel_time(sta_lat, sta_lon, lat, lon, depth, phase)
+                        for sta_lat, sta_lon, phase in sta_coords
+                    ])
+
+                    # Estimate origin time (mean of (arrival - travel_time))
+                    origin_times = arrival_times - travel_times
+                    origin_time = np.mean(origin_times)
+
+                    # Calculate residuals
+                    residuals = arrival_times - (origin_time + travel_times)
+                    rms = np.sqrt(np.mean(residuals ** 2))
+
+                    if rms < best_residual:
+                        best_residual = rms
+                        best_lat = lat
+                        best_lon = lon
+                        best_depth = depth
+                        best_origin_time = origin_time
+
+        print(f"Grid search complete. Best RMS: {best_residual:.2f}s at ({best_lat:.2f}, {best_lon:.2f}, {best_depth:.1f}km)")
+
+        # Calculate azimuthal gap
+        gap = self._calculate_azimuthal_gap(picks_used, best_lat, best_lon)
+
+        # Create result
+        result = Hypocenter(
+            latitude=best_lat,
+            longitude=best_lon,
+            depth=best_depth,
+            origin_time=best_origin_time,
+            rms_residual=best_residual,
+            gap=gap,
+            num_picks=len(picks),
+            num_stations=len(set(p.station for p in picks)),
+            method="grid_search",
+        )
+
+        # Update pick residuals
+        for pick in picks:
+            dist = calculate_epicentral_distance(
+                pick.station.latitude, pick.station.longitude,
+                best_lat, best_lon
+            )
+            tt = self.tt_calculator.calculate_travel_time(dist, best_depth, pick.phase_type)
+            pick.residual = pick.arrival_time - (best_origin_time + tt)
+
+        return result
+
+    def locate_geiger(
+        self,
+        picks: List[PhasePick],
+        initial_location: Optional[Tuple[float, float, float, float]] = None,
+        max_iterations: int = 50,
+        tolerance: float = 1e-6,
+    ) -> Hypocenter:
+        """
+        Locate earthquake using Geiger's method (least squares).
+
+        Args:
+            picks: List of PhasePick objects
+            initial_location: (lat, lon, depth_km, origin_time) initial guess
+            max_iterations: Maximum number of iterations
+            tolerance: Convergence tolerance
+
+        Returns:
+            Hypocenter object with location result
+        """
+        if len(picks) < 4:
+            # Fall back to grid search if not enough picks
+            return self.locate_grid_search(picks)
+
+        # Initial guess
+        if initial_location is None:
+            # Use centroid of stations
+            sta_lats = [p.station.latitude for p in picks]
+            sta_lons = [p.station.longitude for p in picks]
+            arrival_times = [p.arrival_time for p in picks]
+
+            lat0 = np.mean(sta_lats)
+            lon0 = np.mean(sta_lons)
+            depth0 = 10.0
+            t0 = np.mean(arrival_times) - 5.0  # Estimate origin time
+        else:
+            lat0, lon0, depth0, t0 = initial_location
+
+        def objective(params):
+            """Objective function: sum of squared residuals."""
+            lat, lon, depth, origin_time = params
+
+            residuals = []
+            for pick in picks:
+                dist = calculate_epicentral_distance(
+                    pick.station.latitude, pick.station.longitude,
+                    lat, lon
+                )
+                tt = self.tt_calculator.calculate_travel_time(
+                    dist, depth, pick.phase_type
+                )
+                predicted = origin_time + tt
+                residual = pick.arrival_time - predicted
+                residuals.append(residual * pick.weight)
+
+            return np.sum(np.array(residuals) ** 2)
+
+        # Optimize
+        result = minimize(
+            objective,
+            x0=[lat0, lon0, depth0, t0],
+            method='L-BFGS-B',
+            bounds=[
+                (-90, 90),  # latitude
+                (-180, 180),  # longitude
+                (0, 700),  # depth
+                (None, None),  # origin time
+            ],
+            options={'maxiter': max_iterations, 'ftol': tolerance}
+        )
+
+        lat, lon, depth, origin_time = result.x
+
+        # Calculate residuals for each pick
+        total_residual = 0
+        for pick in picks:
+            dist = calculate_epicentral_distance(
+                pick.station.latitude, pick.station.longitude,
+                lat, lon
+            )
+            tt = self.tt_calculator.calculate_travel_time(dist, depth, pick.phase_type)
+            pick.residual = pick.arrival_time - (origin_time + tt)
+            total_residual += pick.residual ** 2
+
+        rms = np.sqrt(total_residual / len(picks))
+
+        # Calculate azimuthal gap
+        gap = self._calculate_azimuthal_gap(picks, lat, lon)
+
+        return Hypocenter(
+            latitude=lat,
+            longitude=lon,
+            depth=max(0, depth),
+            origin_time=origin_time,
+            rms_residual=rms,
+            gap=gap,
+            num_picks=len(picks),
+            num_stations=len(set(p.station for p in picks)),
+            method="geiger",
+        )
+
+    def locate(
+        self,
+        picks: List[PhasePick],
+        method: str = "auto",
+        **kwargs
+    ) -> Hypocenter:
+        """
+        Locate earthquake using specified method.
+
+        Args:
+            picks: List of PhasePick objects
+            method: "auto", "grid_search", or "geiger"
+            **kwargs: Additional arguments for specific methods
+
+        Returns:
+            Hypocenter object
+        """
+        if method == "auto":
+            if len(picks) >= 4:
+                # Start with grid search, refine with Geiger
+                grid_result = self.locate_grid_search(picks, **kwargs)
+                initial = (grid_result.latitude, grid_result.longitude,
+                          grid_result.depth, grid_result.origin_time)
+                return self.locate_geiger(picks, initial_location=initial)
+            else:
+                return self.locate_grid_search(picks, **kwargs)
+        elif method == "grid_search":
+            return self.locate_grid_search(picks, **kwargs)
+        elif method == "geiger":
+            return self.locate_geiger(picks, **kwargs)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+    def _calculate_azimuthal_gap(
+        self,
+        picks: List[PhasePick],
+        event_lat: float,
+        event_lon: float
+    ) -> float:
+        """Calculate azimuthal gap (largest azimuthal gap between stations)."""
+        azimuths = []
+
+        for pick in picks:
+            # Calculate azimuth from event to station
+            az = self._calculate_azimuth(
+                event_lat, event_lon,
+                pick.station.latitude, pick.station.longitude
+            )
+            azimuths.append(az)
+
+        if len(azimuths) < 2:
+            return 360.0
+
+        azimuths = sorted(azimuths)
+
+        # Calculate gaps
+        gaps = []
+        for i in range(len(azimuths)):
+            next_i = (i + 1) % len(azimuths)
+            if next_i == 0:
+                gap = (360 - azimuths[i]) + azimuths[next_i]
+            else:
+                gap = azimuths[next_i] - azimuths[i]
+            gaps.append(gap)
+
+        return max(gaps)
+
+    def _calculate_azimuth(
+        self,
+        lat1: float, lon1: float,
+        lat2: float, lon2: float
+    ) -> float:
+        """Calculate azimuth from point 1 to point 2."""
+        lat1_rad = np.radians(lat1)
+        lat2_rad = np.radians(lat2)
+        dlon = np.radians(lon2 - lon1)
+
+        x = np.sin(dlon) * np.cos(lat2_rad)
+        y = np.cos(lat1_rad) * np.sin(lat2_rad) - np.sin(lat1_rad) * np.cos(lat2_rad) * np.cos(dlon)
+
+        azimuth = np.degrees(np.arctan2(x, y))
+        return (azimuth + 360) % 360
+
+
+def create_station_from_metadata(metadata: Dict[str, Any]) -> Optional[Station]:
+    """Create a Station object from metadata dictionary."""
+    # Try common field names
+    network = metadata.get("network") or metadata.get("knetwk", "")
+    station = metadata.get("station") or metadata.get("kstnm", "")
+
+    lat = metadata.get("latitude") or metadata.get("stla") or metadata.get("lat")
+    lon = metadata.get("longitude") or metadata.get("stlo") or metadata.get("lon")
+    elev = metadata.get("elevation") or metadata.get("stel") or 0.0
+
+    if lat is None or lon is None:
+        return None
+
+    return Station(
+        network=str(network),
+        station=str(station),
+        latitude=float(lat),
+        longitude=float(lon),
+        elevation=float(elev) if elev else 0.0,
+        metadata=metadata
+    )
+
+
+def picks_from_pick_results(
+    pick_results: List[Any],  # List of PickResult from phase_picker
+    stations: Optional[Dict[str, Station]] = None
+) -> List[PhasePick]:
+    """
+    Convert PickResult objects to PhasePick objects for location.
+
+    Args:
+        pick_results: List of PickResult objects from phase picking
+        stations: Optional dict mapping station_id to Station objects
+
+    Returns:
+        List of PhasePick objects
+    """
+    phase_picks = []
+
+    for pr in pick_results:
+        # Get absolute time
+        if pr.absolute_time:
+            try:
+                if OBSPY_AVAILABLE:
+                    arrival_time = UTCDateTime(pr.absolute_time).timestamp
+                else:
+                    # Parse ISO format
+                    import datetime
+                    arrival_time = datetime.datetime.fromisoformat(
+                        pr.absolute_time.replace('Z', '+00:00')
+                    ).timestamp()
+            except Exception:
+                continue
+        elif pr.time_offset_s is not None:
+            # Use relative time (will need start_time from trace)
+            arrival_time = pr.time_offset_s
+        else:
+            continue
+
+        # Get station info
+        metadata = pr.metadata or {}
+
+        # Try to find or create station
+        station_id = f"{metadata.get('network', '')}.{metadata.get('station', '')}"
+
+        if stations and station_id in stations:
+            station = stations[station_id]
+        else:
+            station = create_station_from_metadata(metadata)
+
+        if station is None:
+            # Create a dummy station (will need coordinates from user)
+            station = Station(
+                network=metadata.get("network", "XX"),
+                station=metadata.get("station", "UNK"),
+                latitude=0.0,
+                longitude=0.0,
+                metadata=metadata
+            )
+
+        phase_pick = PhasePick(
+            station=station,
+            phase_type=pr.phase_type,
+            arrival_time=arrival_time,
+            weight=pr.normalized_score or 1.0,
+            metadata={"method": pr.method, "sample_index": pr.sample_index}
+        )
+        phase_picks.append(phase_pick)
+
+    return phase_picks
+
+
+def locate_earthquake(
+    picks: List[PhasePick],
+    method: str = "auto",
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Main function to locate an earthquake.
+
+    Args:
+        picks: List of PhasePick objects with station coordinates
+        method: Location method ("auto", "grid_search", "geiger")
+        **kwargs: Additional parameters
+
+    Returns:
+        Dictionary with location results
+    """
+    # Filter picks with valid station coordinates
+    valid_picks = [
+        p for p in picks
+        if p.station.latitude != 0 or p.station.longitude != 0
+    ]
+
+    if len(valid_picks) < 3:
+        return {
+            "error": f"Need at least 3 picks with valid station coordinates. Got {len(valid_picks)}.",
+            "total_picks": len(picks),
+            "valid_picks": len(valid_picks),
+        }
+
+    # Create locator
+    locator = EarthquakeLocator()
+
+    # Locate
+    try:
+        hypocenter = locator.locate(valid_picks, method=method, **kwargs)
+        result = hypocenter.to_dict()
+
+        # Add pick residuals
+        result["picks"] = [
+            {
+                "station": p.station.station,
+                "network": p.station.network,
+                "phase": p.phase_type,
+                "residual": round(float(p.residual), 3) if p.residual is not None else None,
+                "weight": float(p.weight),
+            }
+            for p in valid_picks
+        ]
+
+        return result
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "total_picks": len(picks),
+            "valid_picks": len(valid_picks),
+        }
+
+
+def plot_location_map(
+    hypocenter: Dict[str, Any],
+    stations: List[Dict[str, Any]],
+    output_path: str,
+    region: Optional[List[float]] = None,
+    title: Optional[str] = None,
+) -> str:
+    """
+    Plot earthquake location and stations using PyGMT.
+
+    Args:
+        hypocenter: Dictionary with hypocenter location (latitude, longitude, depth_km)
+        stations: List of station dictionaries with latitude, longitude
+        output_path: Path to save the output figure
+        region: Optional [west, east, south, north] region bounds
+        title: Optional plot title
+
+    Returns:
+        Path to the saved figure
+    """
+    try:
+        import pygmt
+    except ImportError:
+        print("PyGMT not available. Skipping map generation.")
+        return None
+
+    # Get hypocenter coordinates
+    evt_lat = float(hypocenter.get("latitude", 0))
+    evt_lon = float(hypocenter.get("longitude", 0))
+    evt_depth = float(hypocenter.get("depth_km", 0))
+
+    # Get station coordinates
+    sta_lats = [float(s.get("latitude", 0)) for s in stations]
+    sta_lons = [float(s.get("longitude", 0)) for s in stations]
+    sta_names = [s.get("station", s.get("name", "UNK")) for s in stations]
+
+    # Determine region if not provided
+    if region is None:
+        all_lats = [evt_lat] + sta_lats
+        all_lons = [evt_lon] + sta_lons
+
+        lat_margin = max(5, (max(all_lats) - min(all_lats)) * 0.3)
+        lon_margin = max(5, (max(all_lons) - min(all_lons)) * 0.3)
+
+        region = [
+            min(all_lons) - lon_margin,  # west
+            max(all_lons) + lon_margin,  # east
+            min(all_lats) - lat_margin,  # south
+            max(all_lats) + lat_margin,  # north
+        ]
+
+    # Ensure region is valid
+    region = [float(r) for r in region]
+
+    # Create figure
+    fig = pygmt.Figure()
+
+    # Set projection (Mercator)
+    projection = "M10c"
+
+    # Plot basemap with topography
+    fig.basemap(
+        region=region,
+        projection=projection,
+        frame=["af", f'WSne+t"Earthquake Location Map"'],
+    )
+
+    # Add topography
+    try:
+        fig.grdimage(
+            "@earth_relief_05m",
+            region=region,
+            projection=projection,
+            cmap="geo",
+            shading=True,
+        )
+    except Exception:
+        # If topography fails, just use coast
+        pass
+
+    # Add coastlines
+    fig.coast(
+        region=region,
+        projection=projection,
+        shorelines="1/0.5p,black",
+        borders="1/0.5p,gray",
+        land="lightgray",
+        water="lightblue",
+    )
+
+    # Plot stations
+    if sta_lons and sta_lats:
+        fig.plot(
+            x=sta_lons,
+            y=sta_lats,
+            style="t0.3c",
+            fill="blue",
+            pen="black",
+            label="Stations",
+        )
+
+        # Add station labels
+        for lon, lat, name in zip(sta_lons, sta_lats, sta_names):
+            fig.text(
+                x=lon,
+                y=lat,
+                text=name,
+                font="8p,Helvetica,blue",
+                offset="0.2c/0.2c",
+            )
+
+    # Plot earthquake epicenter
+    fig.plot(
+        x=evt_lon,
+        y=evt_lat,
+        style="a0.5c",  # Star symbol
+        fill="red",
+        pen="black",
+        label="Epicenter",
+    )
+
+    # Add legend
+    fig.legend(position="JBR+jBR+o0.2c", box=True)
+
+    # Add depth annotation
+    depth_text = f"Depth: {evt_depth:.1f} km"
+    fig.text(
+        x=region[0] + 0.5,
+        y=region[2] + 0.5,
+        text=depth_text,
+        font="10p,Helvetica,black",
+        justify="BL",
+    )
+
+    # Add coordinates annotation
+    coord_text = f"Location: {evt_lat:.2f}N, {evt_lon:.2f}E"
+    fig.text(
+        x=region[0] + 0.5,
+        y=region[2] + 1.5,
+        text=coord_text,
+        font="10p,Helvetica,black",
+        justify="BL",
+    )
+
+    # Save figure
+    fig.savefig(output_path, dpi=150)
+    print(f"Location map saved to: {output_path}")
+
+    return output_path
+
+
+def plot_location_cross_section(
+    hypocenter: Dict[str, Any],
+    stations: List[Dict[str, Any]],
+    output_path: str,
+    azimuth: float = 0.0,
+    width_km: float = 200.0,
+) -> str:
+    """
+    Plot a cross-section showing earthquake depth.
+
+    Args:
+        hypocenter: Dictionary with hypocenter location
+        stations: List of station dictionaries
+        output_path: Path to save the output figure
+        azimuth: Azimuth of cross-section line (degrees)
+        width_km: Width of cross-section swath
+
+    Returns:
+        Path to the saved figure
+    """
+    try:
+        import pygmt
+    except ImportError:
+        print("PyGMT not available. Skipping cross-section generation.")
+        return None
+
+    # Get hypocenter coordinates
+    evt_lat = float(hypocenter.get("latitude", 0))
+    evt_lon = float(hypocenter.get("longitude", 0))
+    evt_depth = float(hypocenter.get("depth_km", 0))
+
+    # Get station coordinates
+    sta_lats = [float(s.get("latitude", 0)) for s in stations]
+    sta_lons = [float(s.get("longitude", 0)) for s in stations]
+    sta_names = [s.get("station", s.get("name", "UNK")) for s in stations]
+
+    # Calculate distances from epicenter
+    from math import radians, sin, cos, sqrt, atan2
+
+    def haversine(lat1, lon1, lat2, lon2):
+        """Calculate distance in km between two points."""
+        R = 6371  # Earth radius in km
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1-a))
+        return R * c
+
+    # Calculate distances and project onto cross-section line
+    distances = []
+    for slat, slon in zip(sta_lats, sta_lons):
+        dist = haversine(evt_lat, evt_lon, slat, slon)
+        # Simple projection onto azimuth
+        # For now, just use distance
+        distances.append(dist)
+
+    # Create figure
+    fig = pygmt.Figure()
+
+    # Determine plot range
+    max_dist = max(distances) if distances else 100
+    max_depth = max(evt_depth * 1.5, 100)
+
+    region = [0, max_dist * 1.2, max_depth, 0]  # Depth increases downward
+
+    # Plot basemap
+    fig.basemap(
+        region=region,
+        projection="X15c/8c",
+        frame=[
+            "xaf+u km",
+            "yaf+u km",
+            f'WSne+t"Cross Section (Azimuth: {azimuth:.0f}°)"',
+        ],
+    )
+
+    # Plot stations on surface
+    fig.plot(
+        x=distances,
+        y=[0] * len(distances),
+        style="t0.3c",
+        fill="blue",
+        pen="black",
+    )
+
+    # Add station labels
+    for dist, name in zip(distances, sta_names):
+        fig.text(
+            x=dist,
+            y=5,
+            text=name,
+            font="8p,Helvetica,blue",
+            justify="CB",
+        )
+
+    # Plot hypocenter
+    fig.plot(
+        x=0,
+        y=evt_depth,
+        style="a0.5c",
+        fill="red",
+        pen="black",
+    )
+
+    # Add hypocenter annotation
+    fig.text(
+        x=5,
+        y=evt_depth,
+        text=f"({evt_lat:.2f}, {evt_lon:.2f})",
+        font="10p,Helvetica,red",
+        justify="ML",
+    )
+
+    # Save figure
+    fig.savefig(output_path, dpi=150)
+    print(f"Cross-section saved to: {output_path}")
+
+    return output_path

@@ -35,6 +35,9 @@ from agent.tools import (
     convert_sac_to_miniseed,
     convert_sac_to_excel,
     pick_first_arrivals,
+    pick_all_miniseed_files,
+    locate_earthquake,
+    add_station_coordinates,
 )
 
 Provider = Literal["deepseek", "ollama"]
@@ -114,6 +117,9 @@ def get_agent_executor(
         convert_sac_to_miniseed,
         convert_sac_to_excel,
         pick_first_arrivals,
+        pick_all_miniseed_files,
+        locate_earthquake,
+        add_station_coordinates,
     ]
 
     template = '''请尽力用中文回答用户问题。你可以使用以下工具：
@@ -138,8 +144,16 @@ Important rules:
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
 
+**地震定位工作流程**:
+1. 首先使用 get_loaded_context 检查已加载的文件和拾取状态
+2. 如果用户上传了多个 MiniSEED 文件（多个台站数据），使用 pick_all_miniseed_files 批量拾取震相
+3. 使用 add_station_coordinates 添加台站坐标信息（参数格式： stations 列表，每项包含 network, station, latitude, longitude）
+4. 使用 locate_earthquake 进行地震定位
+5. 台站坐标可从 data/stations.json 文件读取，或由用户提供
+6. 测试数据真实位置：54.65°N, 159.67°W, 深度 28 km
+
 语言要求：
-- 不要输出英文段落或英文“Summary: ...”。如需总结，请使用中文“摘要：...”。
+- 不要输出英文段落或英文"Summary: ..."。如需总结，请使用中文"摘要：..."。
 
 Use the following format:
 

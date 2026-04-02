@@ -4,7 +4,8 @@ from langchain.tools import tool
 from utils.segy_handler import SegyHandler
 from utils.miniseed_handler import MiniSEEDHandler
 from utils.hdf5_handler import HDF5Handler
-from utils.phase_picker import pick_phases, summarize_pick_results, load_traces, plot_waveform_with_picks, TraceRecord
+from utils.phase_picker import pick_phases, summarize_pick_results, load_traces, plot_waveform_with_picks
+from utils.phase_picker import TraceRecord, PickResult
 from utils.sac_handler import SACHandler
 import json
 from typing import Union
@@ -16,6 +17,7 @@ import h5py
 # In a multi-user web app, this should be handled via session state or context
 CURRENT_SEGY_PATH = None
 CURRENT_MINISEED_PATH = None
+CURRENT_MINISEED_PATHS = []  # Support multiple MiniSEED files for multi-station location
 CURRENT_HDF5_PATH = None
 CURRENT_SAC_PATH = None
 
@@ -30,8 +32,28 @@ def set_current_segy_path(path):
 
 # 设置当前 MiniSEED 文件路径的辅助函数
 def set_current_miniseed_path(path):
-    global CURRENT_MINISEED_PATH
+    global CURRENT_MINISEED_PATH, CURRENT_MINISEED_PATHS
     CURRENT_MINISEED_PATH = path
+    # Also add to list if not already present
+    if path and path not in CURRENT_MINISEED_PATHS:
+        CURRENT_MINISEED_PATHS.append(path)
+
+
+def add_miniseed_path(path):
+    """Add a MiniSEED file path to the list of loaded files."""
+    global CURRENT_MINISEED_PATHS, CURRENT_MINISEED_PATH
+    if path and path not in CURRENT_MINISEED_PATHS:
+        CURRENT_MINISEED_PATHS.append(path)
+        # Set as current if it's the first one
+        if not CURRENT_MINISEED_PATH:
+            CURRENT_MINISEED_PATH = path
+
+
+def clear_miniseed_paths():
+    """Clear all stored MiniSEED paths."""
+    global CURRENT_MINISEED_PATHS, CURRENT_MINISEED_PATH
+    CURRENT_MINISEED_PATHS = []
+    CURRENT_MINISEED_PATH = None
 
 # 设置当前 HDF5 文件路径的辅助函数
 def set_current_hdf5_path(path):
@@ -640,7 +662,7 @@ def get_loaded_context():
     current_type = None
     if CURRENT_SEGY_PATH:
         current_type = "segy"
-    elif CURRENT_MINISEED_PATH:
+    elif CURRENT_MINISEED_PATHS:
         current_type = "miniseed"
     elif CURRENT_HDF5_PATH:
         current_type = "hdf5"
@@ -651,10 +673,15 @@ def get_loaded_context():
             "current_type": current_type,
             "segy_path": CURRENT_SEGY_PATH,
             "miniseed_path": CURRENT_MINISEED_PATH,
+            "miniseed_paths": CURRENT_MINISEED_PATHS,
+            "num_miniseed_files": len(CURRENT_MINISEED_PATHS),
             "hdf5_path": CURRENT_HDF5_PATH,
             "sac_path": CURRENT_SAC_PATH,
+            "has_picks": CURRENT_PICKS is not None and len(CURRENT_PICKS) > 0,
+            "num_stations_with_coords": len(CURRENT_STATIONS) if CURRENT_STATIONS else 0,
         },
         indent=2,
+        ensure_ascii=False,
     )
 
 # 泛化的结构读取工具：根据已加载文件类型自动选择
@@ -1326,6 +1353,11 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
             methods=methods,
             method_params=method_params
         )
+
+        # Store picks for later use by locate_earthquake
+        global CURRENT_PICKS
+        CURRENT_PICKS = picks
+
         summary = summarize_pick_results(picks)
         
         # 2. Load traces for plotting
@@ -1409,3 +1441,483 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
         return "\n".join(lines)
     except Exception as e:
         return f"Error picking phases: {str(e)}"
+
+
+@tool
+def pick_all_miniseed_files(params: Union[str, dict, None] = None):
+    """
+    Pick first arrivals (phases) on ALL loaded MiniSEED files.
+
+    Use this tool when you have uploaded multiple MiniSEED files (one per station)
+    and want to pick phases on all of them for earthquake location.
+
+    This tool will:
+    1. Pick P and S phases on each loaded MiniSEED file
+    2. Store all picks for later use by locate_earthquake
+    3. Generate a combined plot showing picks from all stations
+
+    Args:
+        params: Dictionary with optional parameters:
+            - methods: Comma-separated list of methods (default: uses deep learning + conventional)
+            - method_params: JSON string or dict of params for methods
+    """
+    """
+    对所有已加载的 MiniSEED 文件进行初至拾取。
+
+    当你上传了多个 MiniSEED 文件（每个台站一个）并想对所有文件进行震相拾取以进行地震定位时，使用此工具。
+
+    此工具将：
+    1. 对每个已加载的 MiniSEED 文件拾取 P 波和 S 波
+    2. 存储所有拾取结果供 locate_earthquake 使用
+    3. 生成显示所有台站拾取结果的综合图
+
+    参数：
+        params: 可选参数字典：
+            - methods: 逗号分隔的方法列表（默认：使用深度学习 + 传统方法）
+            - method_params: 方法的参数（JSON 字符串或字典）
+    """
+    global CURRENT_PICKS, CURRENT_MINISEED_PATHS
+
+    parsed = _parse_param_dict(params)
+
+    if not CURRENT_MINISEED_PATHS:
+        return json.dumps({
+            "error": "No MiniSEED files loaded.",
+            "hint": "请先上传 MiniSEED 文件。"
+        }, ensure_ascii=False, indent=2)
+
+    # Parse methods
+    methods_str = parsed.get("methods")
+    methods = [m.strip() for m in methods_str.split(",")] if methods_str else None
+
+    # Parse method_params
+    method_params_raw = parsed.get("method_params")
+    method_params = None
+    if method_params_raw:
+        if isinstance(method_params_raw, dict):
+            method_params = method_params_raw
+        elif isinstance(method_params_raw, str):
+            try:
+                method_params = json.loads(method_params_raw)
+            except json.JSONDecodeError:
+                pass
+
+    all_picks = []
+    all_traces = []
+    file_summaries = []
+
+    try:
+        for filepath in CURRENT_MINISEED_PATHS:
+            try:
+                # Pick phases on this file
+                file_picks = pick_phases(
+                    source=filepath,
+                    file_type="miniseed",
+                    methods=methods,
+                    method_params=method_params
+                )
+
+                # Load traces for plotting
+                file_traces = load_traces(
+                    source=filepath,
+                    file_type="miniseed"
+                )
+
+                all_picks.extend(file_picks)
+                all_traces.extend(file_traces)
+
+                # Get summary for this file
+                filename = os.path.basename(filepath)
+                file_summaries.append({
+                    "file": filename,
+                    "traces": len(file_traces),
+                    "picks": len(file_picks)
+                })
+
+            except Exception as e:
+                file_summaries.append({
+                    "file": os.path.basename(filepath),
+                    "error": str(e)
+                })
+
+        # Store all picks for location
+        CURRENT_PICKS = all_picks
+
+        # Generate combined plot
+        plot_path = None
+        if all_traces and all_picks:
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, "all_stations_picks.png")
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_waveform_with_picks(all_traces, all_picks, plot_path)
+
+        # Build output
+        lines = []
+        if plot_path:
+            lines.append(f"![所有台站拾取结果图]({plot_path})")
+            lines.append("")
+
+        lines.append(f"**初至拾取完成**")
+        lines.append(f"- 处理文件数: {len(CURRENT_MINISEED_PATHS)}")
+        lines.append(f"- 总拾取数: {len(all_picks)}")
+        lines.append(f"- 总轨迹数: {len(all_traces)}")
+        lines.append("")
+
+        # Show per-file summary
+        lines.append("### 各文件拾取结果")
+        for fs in file_summaries:
+            if "error" in fs:
+                lines.append(f"- **{fs['file']}**: 错误 - {fs['error']}")
+            else:
+                lines.append(f"- **{fs['file']}**: {fs['picks']} 个拾取, {fs['traces']} 条轨迹")
+
+        lines.append("")
+        lines.append("拾取结果已保存，可使用 `locate_earthquake` 工具进行定位。")
+        lines.append("如需添加台站坐标，请使用 `add_station_coordinates` 工具。")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"批量拾取失败: {str(e)}"
+
+
+# ==================== Earthquake Location Tools ====================
+
+# Store picks for location
+CURRENT_PICKS = None
+CURRENT_STATIONS = None
+
+
+def set_current_picks(picks):
+    """Store current picks for location."""
+    global CURRENT_PICKS
+    CURRENT_PICKS = picks
+
+
+def set_current_stations(stations):
+    """Store current station metadata for location."""
+    global CURRENT_STATIONS
+    CURRENT_STATIONS = stations
+
+
+@tool
+def locate_earthquake(params: Union[str, dict, None] = None):
+    """
+    Locate earthquake hypocenter using phase picks from multiple stations.
+
+    This tool requires:
+    1. Phase picks with arrival times (from pick_first_arrivals)
+    2. Station coordinates (latitude, longitude)
+
+    The location algorithm uses:
+    - Grid search for initial estimate
+    - Geiger's method (least squares) for refinement
+    - IASP91 velocity model for travel time calculation
+
+    Args:
+        params: Dictionary with optional parameters:
+            - method: "auto", "grid_search", or "geiger" (default: "auto")
+            - grid_center: [lat, lon] center of search grid
+            - grid_size_deg: Search grid half-width in degrees (default: 2.0)
+            - depth_range_km: [min, max] depth range in km (default: [0, 50])
+            - stations: List of station metadata with lat/lon coordinates
+
+    Returns:
+        JSON with hypocenter location (lat, lon, depth, origin_time) and statistics.
+    """
+    """
+    使用多台站的震相拾取结果定位震源。
+
+    此工具需要：
+    1. 震相到时（来自 pick_first_arrivals）
+    2. 台站坐标（纬度、经度）
+
+    定位算法使用：
+    - 网格搜索获取初始估计
+    - 盖格法（最小二乘）进行精修
+    - IASP91 速度模型计算走时
+
+    参数：
+        params: 可选参数字典：
+            - method: "auto"、"grid_search" 或 "geiger"（默认："auto"）
+            - grid_center: [纬度, 经度] 搜索网格中心
+            - grid_size_deg: 搜索网格半宽度（度）（默认：2.0）
+            - depth_range_km: [最小, 最大] 深度范围（公里）（默认：[0, 50]）
+            - stations: 包含经纬度坐标的台站元数据列表
+
+    返回：
+        包含震源位置（纬度、经度、深度、发震时刻）和统计信息的 JSON。
+    """
+    from utils.locator import (
+        EarthquakeLocator,
+        PhasePick,
+        Station,
+        picks_from_pick_results,
+        locate_earthquake as do_locate,
+        OBSPY_AVAILABLE
+    )
+
+    parsed = _parse_param_dict(params)
+
+    # Check if we have stored picks
+    if CURRENT_PICKS is None or len(CURRENT_PICKS) == 0:
+        return json.dumps({
+            "error": "No picks available. Please run pick_first_arrivals first.",
+            "hint": "使用 pick_first_arrivals 工具进行震相拾取后再定位。"
+        }, ensure_ascii=False, indent=2)
+
+    # Get station metadata
+    stations_dict = {}
+    stations_input = parsed.get("stations", CURRENT_STATIONS)
+
+    if isinstance(stations_input, dict):
+        # It's a dict with station_id as keys
+        for sta_id, sta_info in stations_input.items():
+            if isinstance(sta_info, dict):
+                net = sta_info.get("network", "XX")
+                name = sta_info.get("station", sta_info.get("name", "UNK"))
+                lat = sta_info.get("latitude", sta_info.get("lat"))
+                lon = sta_info.get("longitude", sta_info.get("lon"))
+                elev = sta_info.get("elevation", sta_info.get("elev", 0))
+
+                if lat is not None and lon is not None:
+                    stations_dict[sta_id] = Station(
+                        network=net,
+                        station=name,
+                        latitude=float(lat),
+                        longitude=float(lon),
+                        elevation=float(elev) if elev else 0.0,
+                        metadata=sta_info
+                    )
+    elif isinstance(stations_input, list):
+        # It's a list of station dicts
+        for sta in stations_input:
+            if isinstance(sta, dict):
+                net = sta.get("network", "XX")
+                name = sta.get("station", sta.get("name", "UNK"))
+                lat = sta.get("latitude", sta.get("lat"))
+                lon = sta.get("longitude", sta.get("lon"))
+                elev = sta.get("elevation", sta.get("elev", 0))
+
+                if lat is not None and lon is not None:
+                    sta_id = f"{net}.{name}"
+                    stations_dict[sta_id] = Station(
+                        network=net,
+                        station=name,
+                        latitude=float(lat),
+                        longitude=float(lon),
+                        elevation=float(elev) if elev else 0.0,
+                        metadata=sta
+                    )
+
+    # Convert picks to PhasePick objects
+    phase_picks = picks_from_pick_results(CURRENT_PICKS, stations_dict)
+
+    # Check for valid picks with station coordinates
+    valid_picks = [
+        p for p in phase_picks
+        if p.station.latitude != 0 or p.station.longitude != 0
+    ]
+
+    if len(valid_picks) < 3:
+        # Need station coordinates
+        missing_stations = list(set(
+            f"{p.station.network}.{p.station.station}"
+            for p in phase_picks
+            if p.station.latitude == 0 and p.station.longitude == 0
+        ))
+
+        return json.dumps({
+            "error": f"Need station coordinates for location. Only {len(valid_picks)}/{len(phase_picks)} picks have valid coordinates.",
+            "missing_stations": missing_stations,
+            "hint": "请提供台站坐标信息。在参数中添加 stations 列表，包含每个台站的 network, station, latitude, longitude。",
+            "example": {
+                "stations": [
+                    {"network": "IU", "station": "ANMO", "latitude": 34.9459, "longitude": -106.4572},
+                    {"network": "IU", "station": "BJI", "latitude": 40.0409, "longitude": 116.1754}
+                ]
+            }
+        }, ensure_ascii=False, indent=2)
+
+    # Get location parameters
+    method = parsed.get("method", "auto")
+    grid_center = parsed.get("grid_center")
+    grid_size = parsed.get("grid_size_deg", 2.0)
+    depth_range = parsed.get("depth_range_km", [0.0, 50.0])
+
+    # Prepare kwargs
+    kwargs = {}
+    if grid_center:
+        kwargs["grid_center"] = tuple(grid_center)
+    if grid_size:
+        kwargs["grid_size_deg"] = float(grid_size)
+    if depth_range:
+        kwargs["grid_depth_range"] = tuple(depth_range)
+
+    # Perform location
+    try:
+        result = do_locate(valid_picks, method=method, **kwargs)
+
+        if "error" in result:
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        # Format output
+        output = {
+            "success": True,
+            "hypocenter": {
+                "latitude": round(result["latitude"], 4),
+                "longitude": round(result["longitude"], 4),
+                "depth_km": round(result["depth_km"], 2),
+                "origin_time": result.get("origin_time_iso", result["origin_time"]),
+            },
+            "quality": {
+                "rms_residual_s": round(result["rms_residual"], 3),
+                "azimuthal_gap_deg": round(result["azimuthal_gap"], 1),
+                "num_picks": result["num_picks"],
+                "num_stations": result["num_stations"],
+                "method": result["method"],
+            },
+            "picks_used": result.get("picks", []),
+        }
+
+        # Add quality assessment
+        gap = result["azimuthal_gap"]
+        rms = result["rms_residual"]
+
+        if gap > 180:
+            output["quality"]["warning"] = "Azimuthal gap > 180°, location may have large uncertainty."
+        elif gap > 270:
+            output["quality"]["warning"] = "Azimuthal gap > 270°, location unreliable."
+
+        if rms > 1.0:
+            output["quality"]["warning"] = f"RMS residual is high ({rms:.2f}s), check pick quality."
+
+        # Generate location map using PyGMT
+        try:
+            from utils.locator import plot_location_map
+
+            # Get station list for plotting
+            station_list = list(stations_dict.values()) if stations_dict else []
+            if not station_list:
+                # Create station list from valid picks
+                station_list = [
+                    {
+                        "latitude": p.station.latitude,
+                        "longitude": p.station.longitude,
+                        "station": p.station.station,
+                        "network": p.station.network,
+                    }
+                    for p in valid_picks[:20]  # Limit for plotting
+                ]
+
+            # Generate map
+            map_path = os.path.join(DEFAULT_CONVERT_DIR, "earthquake_location_map.png")
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+
+            plot_result = plot_location_map(
+                hypocenter=output["hypocenter"],
+                stations=station_list,
+                output_path=map_path,
+            )
+
+            if plot_result and os.path.exists(map_path):
+                output["location_map"] = map_path
+        except Exception as plot_error:
+            print(f"Failed to generate location map: {plot_error}")
+
+        return json.dumps(output, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": f"Location failed: {str(e)}",
+            "valid_picks": len(valid_picks),
+            "total_picks": len(phase_picks)
+        }, ensure_ascii=False, indent=2)
+
+
+@tool
+def add_station_coordinates(params: Union[str, dict, None] = None):
+    """
+    Add station coordinates for earthquake location.
+
+    Use this tool to provide station coordinates when they are not
+    included in the waveform file metadata.
+
+    Args:
+        params: Dictionary with:
+            - stations: List of station info, each with:
+                - network: Network code (e.g., "IU")
+                - station: Station code (e.g., "ANMO")
+                - latitude: Station latitude in degrees
+                - longitude: Station longitude in degrees
+                - elevation: Station elevation in meters (optional)
+
+    Example:
+        {"stations": [
+            {"network": "IU", "station": "ANMO", "latitude": 34.9459, "longitude": -106.4572},
+            {"network": "IU", "station": "BJI", "latitude": 40.0409, "longitude": 116.1754}
+        ]}
+    """
+    """
+    添加台站坐标用于地震定位。
+
+    当波形文件元数据中不包含台站坐标时，使用此工具提供。
+
+    参数：
+        params: 包含以下内容的字典：
+            - stations: 台站信息列表，每个台站包含：
+                - network: 台网代码（如 "IU"）
+                - station: 台站代码（如 "ANMO"）
+                - latitude: 台站纬度（度）
+                - longitude: 台站经度（度）
+                - elevation: 台站高程（米，可选）
+
+    示例：
+        {"stations": [
+            {"network": "IU", "station": "ANMO", "latitude": 34.9459, "longitude": -106.4572},
+            {"network": "IU", "station": "BJI", "latitude": 40.0409, "longitude": 116.1754}
+        ]}
+    """
+    global CURRENT_STATIONS
+
+    from utils.locator import Station
+
+    parsed = _parse_param_dict(params)
+    stations_input = parsed.get("stations", [])
+
+    if not stations_input:
+        return json.dumps({
+            "error": "No stations provided.",
+            "usage": "Provide a list of stations with network, station, latitude, longitude."
+        }, ensure_ascii=False, indent=2)
+
+    if CURRENT_STATIONS is None:
+        CURRENT_STATIONS = {}
+
+    added = []
+    for sta in stations_input:
+        if isinstance(sta, dict):
+            net = sta.get("network", "XX")
+            name = sta.get("station", sta.get("name", "UNK"))
+            lat = sta.get("latitude", sta.get("lat"))
+            lon = sta.get("longitude", sta.get("lon"))
+            elev = sta.get("elevation", sta.get("elev", 0))
+
+            if lat is None or lon is None:
+                continue
+
+            sta_id = f"{net}.{name}"
+            CURRENT_STATIONS[sta_id] = {
+                "network": net,
+                "station": name,
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "elevation": float(elev) if elev else 0.0
+            }
+            added.append(sta_id)
+
+    return json.dumps({
+        "success": True,
+        "stations_added": added,
+        "total_stations": len(CURRENT_STATIONS),
+        "message": f"Added {len(added)} stations. Total: {len(CURRENT_STATIONS)} stations stored."
+    }, ensure_ascii=False, indent=2)
