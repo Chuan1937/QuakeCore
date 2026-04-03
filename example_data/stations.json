@@ -1,76 +1,108 @@
 {
   "event": {
-    "name": "2020-10-19 M7.6 South of Alaska",
-    "time": "2020-10-19T20:54:39.000000Z",
-    "latitude": 54.65,
-    "longitude": -159.67,
-    "depth_km": 28.0,
-    "magnitude": 7.6
+    "name": "2022-09-05 Luding M6.8, Sichuan, China",
+    "time": "2022-09-05T12:52:18.000000Z",
+    "latitude": 29.67,
+    "longitude": 102.28,
+    "depth_km": 10.0,
+    "magnitude": 6.8
   },
   "stations": [
     {
-      "network": "IU",
-      "station": "ANMO",
-      "latitude": 34.9459,
-      "longitude": -106.4572,
-      "elevation": 1820,
-      "description": "Albuquerque, New Mexico, USA"
+      "network": "IC",
+      "station": "KMI",
+      "latitude": 25.12,
+      "longitude": 102.74,
+      "elevation": 1940,
+      "description": "Kunming, Yunnan"
     },
     {
-      "network": "IU",
-      "station": "COLA",
-      "latitude": 64.8734,
-      "longitude": -147.8613,
-      "elevation": 157,
-      "description": "College Outpost, Alaska, USA"
+      "network": "IC",
+      "station": "XAN",
+      "latitude": 34.03,
+      "longitude": 108.92,
+      "elevation": 670,
+      "description": "Xi'an, Shaanxi"
     },
     {
-      "network": "IU",
-      "station": "HRV",
-      "latitude": 42.5064,
-      "longitude": -71.5557,
-      "elevation": 282,
-      "description": "Harvard, Massachusetts, USA"
+      "network": "IC",
+      "station": "SSE",
+      "latitude": 31.1,
+      "longitude": 121.19,
+      "elevation": 15,
+      "description": "Sheshan, Shanghai"
     },
     {
-      "network": "IU",
-      "station": "MAJO",
-      "latitude": 36.5459,
-      "longitude": 138.2056,
-      "elevation": 406,
-      "description": "Matsushiro, Japan"
+      "network": "IC",
+      "station": "BJT",
+      "latitude": 40.02,
+      "longitude": 116.18,
+      "elevation": 45,
+      "description": "Beijing"
+    },
+    {
+      "network": "IC",
+      "station": "WMQ",
+      "latitude": 43.82,
+      "longitude": 87.6,
+      "elevation": 920,
+      "description": "Urumqi, Xinjiang"
     },
     {
       "network": "IU",
       "station": "TATO",
-      "latitude": 24.9754,
-      "longitude": 121.4878,
+      "latitude": 24.98,
+      "longitude": 121.49,
       "elevation": 93,
       "description": "Taipei, Taiwan"
     },
     {
-      "network": "II",
-      "station": "KDAK",
-      "latitude": 57.7819,
-      "longitude": -152.5844,
-      "elevation": 114,
-      "description": "Kodiak Island, Alaska, USA"
+      "network": "IU",
+      "station": "MAJO",
+      "latitude": 36.54,
+      "longitude": 138.21,
+      "elevation": 406,
+      "description": "Matsushiro, Japan"
     },
     {
-      "network": "II",
-      "station": "ALE",
-      "latitude": 82.5033,
-      "longitude": -62.3458,
-      "elevation": 60,
-      "description": "Alert, Nunavut, Canada"
+      "network": "IC",
+      "station": "MDJ",
+      "latitude": 44.62,
+      "longitude": 129.59,
+      "elevation": 280,
+      "description": "Mudanjiang, NE China"
+    },
+    {
+      "network": "IC",
+      "station": "HIA",
+      "latitude": 49.27,
+      "longitude": 119.74,
+      "elevation": 610,
+      "description": "Hailar, Inner Mongolia"
+    },
+    {
+      "network": "IC",
+      "station": "QIZ",
+      "latitude": 19.03,
+      "longitude": 109.84,
+      "elevation": 230,
+      "description": "Qiongzhong, Hainan"
     },
     {
       "network": "IU",
-      "station": "XMAS",
-      "latitude": 2.0448,
-      "longitude": -157.4418,
-      "elevation": 5,
-      "description": "Christmas Island, Kiribati"
+      "station": "INCN",
+      "latitude": 37.48,
+      "longitude": 126.72,
+      "elevation": 80,
+      "description": "Incheon, Korea"
+    },
+    {
+      "network": "II",
+      "station": "AAK",
+      "latitude": 42.63,
+      "longitude": 74.49,
+      "elevation": 1670,
+      "description": "Almaty, Kazakhstan"
     }
   ]
 }

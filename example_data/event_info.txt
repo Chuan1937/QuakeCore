@@ -1,0 +1,14 @@
+# QuakeCore China Test Event
+# 2022-09-05 Luding M6.8, Sichuan, China
+event_time = 2022-09-05T12:52:18
+event_latitude = 29.67
+event_longitude = 102.28
+event_depth_km = 10.0
+event_magnitude = 6.8
+# IC.KMI Kunming, Yunnan dist=4.57 deg
+# IC.XAN Xi'an, Shaanxi dist=7.13 deg
+# IC.SSE Sheshan, Shanghai dist=16.36 deg
+# IC.BJT Beijing dist=15.37 deg
+# IC.WMQ Urumqi, Xinjiang dist=18.34 deg
+# IU.TATO Taipei, Taiwan dist=17.67 deg
+# IU.MAJO Matsushiro, Japan dist=30.68 deg

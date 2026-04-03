@@ -38,6 +38,7 @@ from agent.tools import (
     pick_all_miniseed_files,
     locate_earthquake,
     add_station_coordinates,
+    plot_location_map,
 )
 
 Provider = Literal["deepseek", "ollama"]
@@ -120,6 +121,7 @@ def get_agent_executor(
         pick_all_miniseed_files,
         locate_earthquake,
         add_station_coordinates,
+        plot_location_map,
     ]
 
     if lang == "en":
@@ -152,10 +154,13 @@ Important rules:
 **Earthquake Location Workflow**:
 1. First use get_loaded_context to check loaded files and pick status
 2. If the user uploaded multiple MiniSEED files (multi-station data), use pick_all_miniseed_files for batch phase picking
-3. Call add_station_coordinates with NO parameters (empty dict {}). It will auto-load from data/stations.json or example_data/stations.json
+3. Call add_station_coordinates with NO parameters (empty dict {{}}). It will auto-load from data/stations.json or example_data/stations.json
 4. Use locate_earthquake to locate the earthquake
-5. Station coordinates are auto-loaded from stations.json files. Only provide coordinates manually if auto-loading fails.
-6. Test data true location: 54.65°N, 159.67°W, depth 28 km
+5. Use plot_location_map to plot the earthquake location and station positions on a map using PyGMT
+6. Station coordinates are auto-loaded from stations.json files. Only provide coordinates manually if auto-loading fails.
+7. Test data true locations:
+   - Alaska event (data/): 54.65°N, 159.67°W, depth 28 km
+   - Luding event (example_data/): 29.67°N, 102.28°E, depth 10 km, M6.8
 
 Language requirement:
 - Always respond in English. Do not output Chinese paragraphs.
@@ -205,10 +210,13 @@ Important rules:
 **地震定位工作流程**:
 1. 首先使用 get_loaded_context 检查已加载的文件和拾取状态
 2. 如果用户上传了多个 MiniSEED 文件（多个台站数据），使用 pick_all_miniseed_files 批量拾取震相
-3. 调用 add_station_coordinates 时传空参数 {}，会自动从 data/stations.json 或 example_data/stations.json 加载台站坐标
+3. 调用 add_station_coordinates 时传空参数 {{}}，会自动从 data/stations.json 或 example_data/stations.json 加载台站坐标
 4. 使用 locate_earthquake 进行地震定位
-5. 台站坐标自动加载，仅在自动加载失败时才需手动提供
-6. 测试数据真实位置：54.65°N, 159.67°W, 深度 28 km
+5. 使用 plot_location_map 将定位结果和台站位置绘制在地图上（PyGMT）
+6. 台站坐标自动加载，仅在自动加载失败时才需手动提供
+7. 测试数据真实位置：
+   - 阿拉斯加事件 (data/)：54.65°N, 159.67°W，深度 28 km
+   - 泸定事件 (example_data/)：29.67°N, 102.28°E，深度 10 km，M6.8
 
 语言要求：
 - 不要输出英文段落或英文"Summary: ..."。如需总结，请使用中文"摘要：..."。

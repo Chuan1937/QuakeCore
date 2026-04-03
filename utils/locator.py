@@ -923,6 +923,9 @@ def plot_location_map(
     """
     Plot earthquake location and stations using PyGMT.
 
+    Automatically detects whether a global or regional map is needed
+    based on the spread of stations and event location.
+
     Args:
         hypocenter: Dictionary with hypocenter location (latitude, longitude, depth_km)
         stations: List of station dictionaries with latitude, longitude
@@ -949,20 +952,27 @@ def plot_location_map(
     sta_lons = [float(s.get("longitude", 0)) for s in stations]
     sta_names = [s.get("station", s.get("name", "UNK")) for s in stations]
 
+    # Determine if we need a global map (stations span > 180° longitude)
+    all_lats = [evt_lat] + sta_lats
+    all_lons = [evt_lon] + sta_lons
+
+    lon_range = max(all_lons) - min(all_lons)
+    lat_range = max(all_lats) - min(all_lats)
+    is_global = lon_range > 180 or lat_range > 90
+
     # Determine region if not provided
     if region is None:
-        all_lats = [evt_lat] + sta_lats
-        all_lons = [evt_lon] + sta_lons
-
-        lat_margin = max(5, (max(all_lats) - min(all_lats)) * 0.3)
-        lon_margin = max(5, (max(all_lons) - min(all_lons)) * 0.3)
-
-        region = [
-            min(all_lons) - lon_margin,  # west
-            max(all_lons) + lon_margin,  # east
-            min(all_lats) - lat_margin,  # south
-            max(all_lats) + lat_margin,  # north
-        ]
+        if is_global:
+            region = [-180, 180, -90, 90]
+        else:
+            lat_margin = max(5, lat_range * 0.3)
+            lon_margin = max(5, lon_range * 0.3)
+            region = [
+                min(all_lons) - lon_margin,
+                max(all_lons) + lon_margin,
+                max(-90, min(all_lats) - lat_margin),
+                min(90, max(all_lats) + lat_margin),
+            ]
 
     # Ensure region is valid
     region = [float(r) for r in region]
@@ -970,37 +980,57 @@ def plot_location_map(
     # Create figure
     fig = pygmt.Figure()
 
-    # Set projection (Mercator)
-    projection = "M10c"
+    # Choose projection based on map scale
+    if is_global or (region[1] - region[0]) > 180:
+        projection = "H18c"  # Mollweide for global maps
+        resolution = "30m"   # Lower resolution for global
+        frame_title = title or "Earthquake Location Map"
+        frame = ["af", f'WSne+t"{frame_title}"']
+    else:
+        projection = "M15c"  # Mercator for regional maps
+        resolution = "03m"   # High resolution for regional
+        frame_title = title or "Earthquake Location Map"
+        frame = ["af", f'WSne+t"{frame_title}"']
 
-    # Plot basemap with topography
+    # Plot basemap
     fig.basemap(
         region=region,
         projection=projection,
-        frame=["af", f'WSne+t"Earthquake Location Map"'],
+        frame=frame,
     )
 
-    # Add topography
+    # Add topography using load_earth_relief for high-quality rendering
     try:
+        grid = pygmt.datasets.load_earth_relief(resolution=resolution, region=region)
         fig.grdimage(
-            "@earth_relief_05m",
+            grid,
             region=region,
             projection=projection,
             cmap="geo",
             shading=True,
         )
     except Exception:
-        # If topography fails, just use coast
-        pass
+        # Fallback: try progressively lower resolutions
+        for fallback_res in ["05m", "10m"]:
+            try:
+                grid = pygmt.datasets.load_earth_relief(resolution=fallback_res, region=region)
+                fig.grdimage(
+                    grid,
+                    region=region,
+                    projection=projection,
+                    cmap="geo",
+                    shading=True,
+                )
+                break
+            except Exception:
+                continue
 
-    # Add coastlines
+    # Add coastlines (no fill to let topography show through)
     fig.coast(
         region=region,
         projection=projection,
         shorelines="1/0.5p,black",
         borders="1/0.5p,gray",
-        land="lightgray",
-        water="lightblue",
     )
 
     # Plot stations
@@ -1020,7 +1050,7 @@ def plot_location_map(
                 x=lon,
                 y=lat,
                 text=name,
-                font="8p,Helvetica,blue",
+                font="7p,Helvetica,blue",
                 offset="0.2c/0.2c",
             )
 
@@ -1028,7 +1058,7 @@ def plot_location_map(
     fig.plot(
         x=evt_lon,
         y=evt_lat,
-        style="a0.5c",  # Star symbol
+        style="a0.5c",
         fill="red",
         pen="black",
         label="Epicenter",
@@ -1037,24 +1067,20 @@ def plot_location_map(
     # Add legend
     fig.legend(position="JBR+jBR+o0.2c", box=True)
 
-    # Add depth annotation
-    depth_text = f"Depth: {evt_depth:.1f} km"
-    fig.text(
-        x=region[0] + 0.5,
-        y=region[2] + 0.5,
-        text=depth_text,
-        font="10p,Helvetica,black",
-        justify="BL",
+    # Add info text box
+    info_lines = (
+        f"Location: {abs(evt_lat):.2f}{chr(176)}{'N' if evt_lat >= 0 else 'S'}, "
+        f"{abs(evt_lon):.2f}{chr(176)}{'E' if evt_lon >= 0 else 'W'}  "
+        f"Depth: {evt_depth:.1f} km"
     )
-
-    # Add coordinates annotation
-    coord_text = f"Location: {evt_lat:.2f}N, {evt_lon:.2f}E"
     fig.text(
-        x=region[0] + 0.5,
-        y=region[2] + 1.5,
-        text=coord_text,
+        text=info_lines,
+        position="TL",
         font="10p,Helvetica,black",
-        justify="BL",
+        justify="TL",
+        offset="0.2c/0.2c",
+        fill="white@80",
+        pen="0.5p,gray",
     )
 
     # Save figure

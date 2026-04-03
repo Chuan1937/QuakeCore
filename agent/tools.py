@@ -1433,16 +1433,6 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
                 lines.append(f"| {phase} | {method_display} | {m['sample_index']} | {score} | {m['absolute_time']} |")
             lines.append("")
 
-            # Sort methods by score descending
-            sorted_methods = sorted(item['methods'], key=lambda x: x['normalized_score'] or 0, reverse=True)
-            for m in sorted_methods:
-                score = f"{m['normalized_score']:.4f}" if m['normalized_score'] is not None else "N/A"
-                phase = m.get('phase_type', 'P')
-                method_key = m['method']
-                method_display = METHOD_TRANSLATIONS.get(method_key, method_key)
-                lines.append(f"| {phase} | {method_display} | {m['sample_index']} | {score} | {m['absolute_time']} |")
-            lines.append("")
-            
         return "\n".join(lines)
     except Exception as e:
         return f"Error picking phases: {str(e)}"
@@ -1588,6 +1578,7 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
 # Store picks for location
 CURRENT_PICKS = None
 CURRENT_STATIONS = None
+CURRENT_LOCATION = None  # Store last location result for re-plotting
 
 
 def set_current_picks(picks):
@@ -1794,12 +1785,42 @@ def locate_earthquake(params: Union[str, dict, None] = None):
         if rms > 1.0:
             output["quality"]["warning"] = f"RMS residual is high ({rms:.2f}s), check pick quality."
 
+        # Store location result for re-plotting
+        global CURRENT_LOCATION
+        station_list_for_store = []
+        if stations_dict:
+            for sta in stations_dict.values():
+                if hasattr(sta, "latitude"):
+                    station_list_for_store.append({
+                        "network": sta.network,
+                        "station": sta.station,
+                        "latitude": sta.latitude,
+                        "longitude": sta.longitude,
+                        "elevation": sta.elevation,
+                    })
+                elif isinstance(sta, dict):
+                    station_list_for_store.append(sta)
+        if not station_list_for_store:
+            station_list_for_store = [
+                {
+                    "latitude": p.station.latitude,
+                    "longitude": p.station.longitude,
+                    "station": p.station.station,
+                    "network": p.station.network,
+                }
+                for p in valid_picks[:20]
+            ]
+        CURRENT_LOCATION = {
+            "hypocenter": output["hypocenter"],
+            "stations": station_list_for_store,
+        }
+
         # Generate location map using PyGMT
         try:
             from utils.locator import plot_location_map
 
-            # Get station list for plotting
-            station_list = list(stations_dict.values()) if stations_dict else []
+            # Get station list for plotting (reuse stored dict list)
+            station_list = station_list_for_store
             if not station_list:
                 # Create station list from valid picks
                 station_list = [
@@ -1941,3 +1962,90 @@ def add_station_coordinates(params: Union[str, dict, None] = None):
         "total_stations": len(CURRENT_STATIONS),
         "message": f"Added {len(added)} stations. Total: {len(CURRENT_STATIONS)} stations stored."
     }, ensure_ascii=False, indent=2)
+
+
+@tool
+def plot_location_map(params: Union[str, dict, None] = None):
+    """
+    Plot earthquake location and station positions on a map using PyGMT.
+
+    Use this tool after locating an earthquake to visualize the result.
+    It reads the last location result and station coordinates automatically.
+
+    Args:
+        params: Dictionary with optional parameters:
+            - region: [west, east, south, north] custom map region in degrees
+            - title: Custom map title
+            - output: Custom output file path (default: data/convert/earthquake_location_map.png)
+
+    Returns:
+        JSON with the path to the saved map image.
+    """
+    """
+    使用 PyGMT 将地震定位结果和台站位置绘制在地图上。
+
+    在完成地震定位后使用此工具可视化结果。
+    自动读取上一次定位结果和台站坐标。
+
+    参数：
+        params: 可选参数字典：
+            - region: [西, 东, 南, 北] 自定义地图范围（度）
+            - title: 自定义地图标题
+            - output: 自定义输出文件路径（默认：data/convert/earthquake_location_map.png）
+
+    返回：
+        包含保存的地图图像路径的 JSON。
+    """
+    from utils.locator import plot_location_map as do_plot
+
+    parsed = _parse_param_dict(params)
+    region = parsed.get("region")
+    title = parsed.get("title")
+    output_path = parsed.get("output", os.path.join(DEFAULT_CONVERT_DIR, "earthquake_location_map.png"))
+
+    # Get data from stored location result
+    if CURRENT_LOCATION is None:
+        return json.dumps({
+            "error": "No location result available. Please run locate_earthquake first.",
+            "hint": "请先运行 locate_earthquake 完成定位。"
+        }, ensure_ascii=False, indent=2)
+
+    hypocenter = CURRENT_LOCATION["hypocenter"]
+    stations = CURRENT_LOCATION["stations"]
+
+    if not stations:
+        return json.dumps({
+            "error": "No station data available for plotting.",
+            "hint": "请先使用 add_station_coordinates 添加台站坐标。"
+        }, ensure_ascii=False, indent=2)
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    try:
+        result_path = do_plot(
+            hypocenter=hypocenter,
+            stations=stations,
+            output_path=output_path,
+            region=region,
+            title=title,
+        )
+
+        if result_path and os.path.exists(result_path):
+            return json.dumps({
+                "success": True,
+                "map_path": result_path,
+                "hypocenter": hypocenter,
+                "num_stations": len(stations),
+                "message": f"Location map saved to: {result_path}"
+            }, ensure_ascii=False, indent=2)
+        else:
+            return json.dumps({
+                "error": "Failed to generate map. PyGMT may not be available.",
+                "hint": "请确保 PyGMT 已正确安装。"
+            }, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "error": f"Map generation failed: {str(e)}",
+            "hint": "地图生成失败，请检查 PyGMT 安装。"
+        }, ensure_ascii=False, indent=2)

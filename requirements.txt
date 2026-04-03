@@ -8,6 +8,7 @@ langchain
 langchain-openai
 langchain-community
 pillow
+pygmt
 # Deep learning phase picking
 seisbench
 --extra-index-url https://download.pytorch.org/whl/cpu
