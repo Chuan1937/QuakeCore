@@ -8,9 +8,11 @@ from agent.tools import (
     set_current_miniseed_path,
     set_current_hdf5_path,
     set_current_sac_path,
+    set_current_lang,
 )
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.callbacks import StreamlitCallbackHandler
+from i18n import t
 
 # Page Config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -161,8 +163,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header with settings button
-header_col1, header_col2, header_col3 = st.columns([1, 8, 1])
+# Header with settings + language toggle
+if "lang" not in st.session_state:
+    st.session_state.lang = "en"
+lang = st.session_state.lang
+set_current_lang(lang)
+header_col1, header_col2, header_col3, header_col4 = st.columns([1, 6, 1, 1])
 with header_col1:
     logo_svg = render_logo_svg(40)
     if logo_svg:
@@ -181,38 +187,45 @@ with header_col2:
     """, unsafe_allow_html=True)
 
 with header_col3:
-    if st.button("⚙️", key="settings_btn", help="模型配置"):
+    if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang)):
+        st.session_state.lang = "en" if lang == "zh" else "zh"
+        st.session_state.agent = None  # Force re-init with new language
+        st.rerun()
+
+with header_col4:
+    if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang)):
         st.session_state.show_settings = True
 
 # Settings Dialog
 if st.session_state.get("show_settings"):
-    @st.dialog("模型配置", width="small")
+    _lang = st.session_state.lang
+    @st.dialog(t("settings_title", _lang), width="small")
     def settings_dialog():
-        st.markdown("### 选择推理引擎")
+        st.markdown(f"### {t('select_engine', _lang)}")
 
-        provider_options = {"DeepSeek API": "deepseek", "本地 Ollama": "ollama"}
-        provider_label = st.selectbox("推理引擎", list(provider_options.keys()), label_visibility="collapsed")
+        provider_options = {t("deepseek_option", _lang): "deepseek", t("ollama_option", _lang): "ollama"}
+        provider_label = st.selectbox(t("engine_label", _lang), list(provider_options.keys()), label_visibility="collapsed")
         provider = provider_options[provider_label]
 
         current_config = {}
         if provider == "ollama":
-            model_name = st.text_input("模型名称", value="qwen2.5:3b")
-            st.caption("确保本地已安装 Ollama 并运行对应模型")
+            model_name = st.text_input(t("model_name", _lang), value="qwen2.5:3b")
+            st.caption(t("ollama_hint", _lang))
             current_config = {"provider": "ollama", "model_name": model_name, "api_key": None, "base_url": None}
         else:
-            api_key = st.text_input("API Key", value=os.getenv("DEEPSEEK_API_KEY", ""), type="password")
-            model_name = st.text_input("模型", value="deepseek-chat")
+            api_key = st.text_input(t("api_key_label", _lang), value=os.getenv("DEEPSEEK_API_KEY", ""), type="password")
+            model_name = st.text_input(t("model_label", _lang), value="deepseek-chat")
             current_config = {"provider": "deepseek", "model_name": model_name, "api_key": api_key, "base_url": "https://api.deepseek.com"}
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("保存", use_container_width=True):
+            if st.button(t("save", _lang), use_container_width=True):
                 st.session_state.agent_config = current_config
                 st.session_state.agent = None  # Force re-initialize
                 st.session_state.show_settings = False
                 st.rerun()
         with col2:
-            if st.button("取消", use_container_width=True):
+            if st.button(t("cancel", _lang), use_container_width=True):
                 st.session_state.show_settings = False
                 st.rerun()
 
@@ -231,6 +244,8 @@ if "agent_error" not in st.session_state:
     st.session_state.agent_error = None
 if "show_settings" not in st.session_state:
     st.session_state.show_settings = False
+if "lang" not in st.session_state:
+    st.session_state.lang = "en"
 
 # Agent initialization
 def _get_fingerprint():
@@ -251,7 +266,7 @@ if config and not st.session_state.agent:
         st.session_state.agent_error = "请先配置 API Key"
     else:
         try:
-            st.session_state.agent = get_agent_executor(**config)
+            st.session_state.agent = get_agent_executor(**config, lang=st.session_state.lang)
             st.session_state.agent_error = None
         except Exception as e:
             st.session_state.agent_error = str(e)
@@ -261,18 +276,19 @@ agent_ready = st.session_state.agent is not None
 
 # Welcome screen
 if not st.session_state.messages:
-    st.markdown("""
+    _lang = st.session_state.lang
+    st.markdown(f"""
     <div style="text-align: center; padding: 2rem 0;">
         <div style="font-size: 2rem; font-weight: 700;
             background: linear-gradient(135deg, #4A6591 0%, #E64B35 100%);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-            震元引擎
+            {t("app_title", _lang)}
         </div>
         <p style="color: #94a3b8; font-size: 0.9rem; margin: 0.5rem 0;">
-            智能地震数据分析助手
+            {t("app_subtitle", _lang)}
         </p>
         <p style="color: #6b7280; font-size: 0.8rem;">
-            支持 SEGY / MiniSEED / HDF5 / SAC 格式 · 拖拽上传
+            {t("app_formats", _lang)}
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -304,12 +320,12 @@ for msg in st.session_state.messages:
 
         # Thinking process expander
         if steps := msg.get("steps"):
-            with st.expander("💭 思考过程"):
+            with st.expander(f"💭 {t('thinking_process', lang)}"):
                 st.markdown(f"<div style='font-size: 0.85rem; color: #9ca3af;'>{steps}</div>", unsafe_allow_html=True)
 
 # Chat input with file upload
 prompt = st.chat_input(
-    placeholder="输入问题或拖拽文件...",
+    placeholder=t("chat_placeholder", lang),
     accept_file="multiple",
     file_type=["segy", "sgy", "mseed", "miniseed", "h5", "hdf5", "sac", "png", "jpg", "jpeg", "gif"],
     disabled=not agent_ready,
@@ -348,9 +364,9 @@ if prompt and agent_ready:
     if files_info:
         file_names = ", ".join([f["name"] for f in files_info])
         if text:
-            content = f"[上传: {file_names}]\n\n{text}"
+            content = f"[{t('uploaded', lang)}: {file_names}]\n\n{text}"
         else:
-            content = f"[上传: {file_names}]\n\n请读取这个文件的基本信息。"
+            content = f"[{t('uploaded', lang)}: {file_names}]\n\n{t('read_file_default', lang)}"
 
 
     # Add user message
@@ -379,7 +395,7 @@ if prompt and agent_ready:
                 else:
                     chat_history.append(AIMessage(content=msg["content"]))
 
-            status = st.status("思考中...", expanded=True)
+            status = st.status(t("thinking", lang), expanded=True)
             callback = StreamlitCallbackHandler(status.container(), expand_new_thoughts=True)
 
             response = st.session_state.agent.invoke(
@@ -419,9 +435,9 @@ if prompt and agent_ready:
                 "steps": steps_text
             })
 
-            status.update(label="完成", state="complete")
+            status.update(label=t("done", lang), state="complete")
 
         except Exception as e:
-            error_msg = f"错误: {str(e)}"
+            error_msg = f"{t('error', lang)}: {str(e)}"
             placeholder.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})

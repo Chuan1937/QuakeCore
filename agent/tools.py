@@ -20,6 +20,12 @@ CURRENT_MINISEED_PATH = None
 CURRENT_MINISEED_PATHS = []  # Support multiple MiniSEED files for multi-station location
 CURRENT_HDF5_PATH = None
 CURRENT_SAC_PATH = None
+CURRENT_LANG = "en"  # Current UI language, set from app.py
+
+
+def set_current_lang(lang):
+    global CURRENT_LANG
+    CURRENT_LANG = lang
 
 
 DEFAULT_CONVERT_DIR = "data/convert"
@@ -1257,7 +1263,13 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
     """
     Pick first arrivals (phases) on the currently loaded file.
 
+    By default, uses deep learning methods (EQTransformer and PhaseNet) for picking.
+    Traditional methods are only used when explicitly requested via the `methods` parameter.
+
     Available Methods:
+    - eqtransformer: Deep learning P/S picker using EQTransformer (SeisBench). [DEFAULT]
+    - phasenet: Deep learning P/S picker using PhaseNet (SeisBench). [DEFAULT]
+    - gpd: Deep learning P/S picker using GPD (SeisBench).
     - sta_lta: Classic Short-Term/Long-Term Average ratio trigger.
     - aic: Akaike Information Criterion for precise onset refinement.
     - frequency_ratio: Detection based on spectral content changes.
@@ -1268,40 +1280,14 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
     - pai_k: PAI-K kurtosis-based picker.
     - pai_s: PAI-S skewness-based picker.
     - s_phase: Heuristic S-wave picker (STA/LTA max after P-wave delay).
-    - phasenet: Deep learning P/S picker using PhaseNet (SeisBench).
-    - eqtransformer: Deep learning P/S picker using EQTransformer (SeisBench).
-    - gpd: Deep learning P/S picker using GPD (SeisBench).
 
     Args:
       path (optional): File path override.
       file_type (optional): 'hdf5', 'sac', 'segy', 'miniseed'.
       dataset (optional): For HDF5, specific dataset name.
       methods (optional): Comma-separated list of methods (e.g. 'sta_lta,aic').
+          If not specified, defaults to 'eqtransformer,phasenet' (deep learning only).
       method_params (optional): JSON string or dict of params for methods.
-    """
-    """在当前加载的文件上拾取初至（震相）。
-
-    可用方法：
-    - sta_lta: 经典的短长时窗平均比值法 (STA/LTA)。
-    - aic: 赤池信息准则 (AIC)，用于精确到时优化。
-    - frequency_ratio: 基于频谱变化的检测方法。
-    - autocorr: 基于自相关的检测方法。
-    - feature_threshold: 简单的振幅/包络阈值法。
-    - ar_model: 自回归模型预测误差法。
-    - template_correlation: 模板匹配滤波法。
-    - pai_k: 基于峰度的 PAI-K 拾取。
-    - pai_s: 基于偏度的 PAI-S 拾取。
-    - s_phase: 启发式 S 波拾取（P 波后延迟寻找最大 STA/LTA）。
-    - phasenet: 深度学习 P/S 波拾取（PhaseNet，基于 SeisBench）。
-    - eqtransformer: 深度学习 P/S 波拾取（EQTransformer，基于 SeisBench）。
-    - gpd: 深度学习 P/S 波拾取（GPD，基于 SeisBench）。
-
-    参数：
-      path（可选）：文件路径覆盖。
-      file_type（可选）：'hdf5', 'sac', 'segy', 'miniseed'。
-      dataset（可选）：针对 HDF5 的特定数据集名称。
-      methods（可选）：逗号分隔的方法列表（例如 'sta_lta,aic,phasenet'）。
-      method_params（可选）：方法的参数（JSON 字符串或字典）。
     """
     parsed = _parse_param_dict(params)
     
@@ -1385,48 +1371,67 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
                 if current is None or (current.get("normalized_score") is None) or (score > current.get("normalized_score")):
                     best_by_trace[trace_index][phase] = m
         
-        # Format as a Markdown output (Chinese)
+        # Format as a Markdown output (language-aware)
+        _l = CURRENT_LANG
         lines = []
-        lines.append(f"![拾取结果图]({plot_path})")
+        lines.append(f"![{'拾取结果图' if _l == 'zh' else 'Picking Results'}]({plot_path})")
         lines.append("")
 
-        lines.append(f"初至拾取已完成，结果图表已保存至：`{plot_path}`")
+        lines.append(f"{'初至拾取已完成，结果图表已保存至' if _l == 'zh' else 'Phase picking completed, plot saved to'}：`{plot_path}`")
         for trace_index in sorted(best_by_trace.keys()):
             best_p = best_by_trace[trace_index].get("P")
             best_s = best_by_trace[trace_index].get("S")
             parts = []
             if best_p:
-                parts.append(
-                    f"最佳P波：方法 {best_p.get('method')}，样本点 {best_p.get('sample_index')}，时间 {best_p.get('absolute_time')}，评分 {best_p.get('normalized_score'):.4f}"
-                )
+                if _l == "zh":
+                    parts.append(f"最佳P波：方法 {best_p.get('method')}，样本点 {best_p.get('sample_index')}，时间 {best_p.get('absolute_time')}，评分 {best_p.get('normalized_score'):.4f}")
+                else:
+                    parts.append(f"Best P: {best_p.get('method')}, sample {best_p.get('sample_index')}, time {best_p.get('absolute_time')}, score {best_p.get('normalized_score'):.4f}")
             else:
-                parts.append("最佳P波：未检出")
+                parts.append("最佳P波：未检出" if _l == "zh" else "Best P: not detected")
             if best_s:
-                parts.append(
-                    f"最佳S波：方法 {best_s.get('method')}，样本点 {best_s.get('sample_index')}，时间 {best_s.get('absolute_time')}，评分 {best_s.get('normalized_score'):.4f}"
-                )
+                if _l == "zh":
+                    parts.append(f"最佳S波：方法 {best_s.get('method')}，样本点 {best_s.get('sample_index')}，时间 {best_s.get('absolute_time')}，评分 {best_s.get('normalized_score'):.4f}")
+                else:
+                    parts.append(f"Best S: {best_s.get('method')}, sample {best_s.get('sample_index')}, time {best_s.get('absolute_time')}, score {best_s.get('normalized_score'):.4f}")
             else:
-                parts.append("最佳S波：未检出")
-            lines.append(f"摘要（Trace {trace_index}）：" + "；".join(parts))
+                parts.append("最佳S波：未检出" if _l == "zh" else "Best S: not detected")
+            sep = "；" if _l == "zh" else "; "
+            lines.append(f"{'摘要' if _l == 'zh' else 'Summary'}（Trace {trace_index}）：{sep.join(parts)}")
         lines.append("")
-        
+
+        # Table headers
+        hdr_phase = "相位" if _l == "zh" else "Phase"
+        hdr_method = "方法" if _l == "zh" else "Method"
+        hdr_sample = "样本点" if _l == "zh" else "Sample"
+        hdr_score = "评分" if _l == "zh" else "Score"
+        hdr_time = "绝对时间" if _l == "zh" else "Absolute Time"
+
+        METHOD_DISPLAY = {
+            "zh": {
+                "sta_lta": "STA/LTA", "aic": "AIC",
+                "frequency_ratio": "频率比", "autocorr": "自相关",
+                "feature_threshold": "特征阈值", "ar_model": "AR 模型",
+                "template_correlation": "模板相关", "s_phase": "S 波拾取",
+                "pai_k": "PAI-K", "pai_s": "PAI-S",
+            },
+            "en": {},  # use original method names
+        }
+
         for item in summary:
             lines.append(f"### Trace {item['trace_index']}")
-            lines.append("| 相位 | 方法 | 样本点 | 评分 | 绝对时间 |")
+            lines.append(f"| {hdr_phase} | {hdr_method} | {hdr_sample} | {hdr_score} | {hdr_time} |")
             lines.append("| :--- | :--- | :--- | :--- | :--- |")
-            
-            METHOD_TRANSLATIONS = {
-                "sta_lta": "STA/LTA (sta_lta)",
-                "aic": "AIC (aic)",
-                "frequency_ratio": "频率比 (frequency_ratio)",
-                "autocorr": "自相关 (autocorr)",
-                "feature_threshold": "特征阈值 (feature_threshold)",
-                "ar_model": "AR 模型 (ar_model)",
-                "template_correlation": "模板相关 (template_correlation)",
-                "s_phase": "S 波拾取 (s_phase)",
-                "pai_k": "PAI-K (pai_k)",
-                "pai_s": "PAI-S (pai_s)"
-            }
+
+            # Sort methods by score descending
+            sorted_methods = sorted(item['methods'], key=lambda x: x['normalized_score'] or 0, reverse=True)
+            for m in sorted_methods:
+                score = f"{m['normalized_score']:.4f}" if m['normalized_score'] is not None else "N/A"
+                phase = m.get('phase_type', 'P')
+                method_key = m['method']
+                method_display = METHOD_DISPLAY[_l].get(method_key, method_key)
+                lines.append(f"| {phase} | {method_display} | {m['sample_index']} | {score} | {m['absolute_time']} |")
+            lines.append("")
 
             # Sort methods by score descending
             sorted_methods = sorted(item['methods'], key=lambda x: x['normalized_score'] or 0, reverse=True)
@@ -1451,6 +1456,9 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
     Use this tool when you have uploaded multiple MiniSEED files (one per station)
     and want to pick phases on all of them for earthquake location.
 
+    By default, uses deep learning methods (EQTransformer and PhaseNet) for picking.
+    Traditional methods are only used when explicitly requested via the `methods` parameter.
+
     This tool will:
     1. Pick P and S phases on each loaded MiniSEED file
     2. Store all picks for later use by locate_earthquake
@@ -1458,32 +1466,18 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
 
     Args:
         params: Dictionary with optional parameters:
-            - methods: Comma-separated list of methods (default: uses deep learning + conventional)
+            - methods: Comma-separated list of methods (default: 'eqtransformer,phasenet')
             - method_params: JSON string or dict of params for methods
-    """
-    """
-    对所有已加载的 MiniSEED 文件进行初至拾取。
-
-    当你上传了多个 MiniSEED 文件（每个台站一个）并想对所有文件进行震相拾取以进行地震定位时，使用此工具。
-
-    此工具将：
-    1. 对每个已加载的 MiniSEED 文件拾取 P 波和 S 波
-    2. 存储所有拾取结果供 locate_earthquake 使用
-    3. 生成显示所有台站拾取结果的综合图
-
-    参数：
-        params: 可选参数字典：
-            - methods: 逗号分隔的方法列表（默认：使用深度学习 + 传统方法）
-            - method_params: 方法的参数（JSON 字符串或字典）
     """
     global CURRENT_PICKS, CURRENT_MINISEED_PATHS
 
     parsed = _parse_param_dict(params)
 
     if not CURRENT_MINISEED_PATHS:
+        _l = CURRENT_LANG
         return json.dumps({
             "error": "No MiniSEED files loaded.",
-            "hint": "请先上传 MiniSEED 文件。"
+            "hint": "请先上传 MiniSEED 文件。" if _l == "zh" else "Please upload MiniSEED files first."
         }, ensure_ascii=False, indent=2)
 
     # Parse methods
@@ -1550,34 +1544,43 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_waveform_with_picks(all_traces, all_picks, plot_path)
 
-        # Build output
+        # Build output (language-aware)
+        _l = CURRENT_LANG
         lines = []
         if plot_path:
-            lines.append(f"![所有台站拾取结果图]({plot_path})")
+            lines.append(f"![{'所有台站拾取结果图' if _l == 'zh' else 'All Stations Picking Results'}]({plot_path})")
             lines.append("")
 
-        lines.append(f"**初至拾取完成**")
-        lines.append(f"- 处理文件数: {len(CURRENT_MINISEED_PATHS)}")
-        lines.append(f"- 总拾取数: {len(all_picks)}")
-        lines.append(f"- 总轨迹数: {len(all_traces)}")
+        lines.append(f"**{'初至拾取完成' if _l == 'zh' else 'Phase picking completed'}**")
+        lines.append(f"- {'处理文件数' if _l == 'zh' else 'Files processed'}: {len(CURRENT_MINISEED_PATHS)}")
+        lines.append(f"- {'总拾取数' if _l == 'zh' else 'Total picks'}: {len(all_picks)}")
+        lines.append(f"- {'总轨迹数' if _l == 'zh' else 'Total traces'}: {len(all_traces)}")
         lines.append("")
 
         # Show per-file summary
-        lines.append("### 各文件拾取结果")
+        lines.append(f"### {'各文件拾取结果' if _l == 'zh' else 'Per-file Results'}")
         for fs in file_summaries:
             if "error" in fs:
-                lines.append(f"- **{fs['file']}**: 错误 - {fs['error']}")
+                lines.append(f"- **{fs['file']}**: {'错误' if _l == 'zh' else 'error'} - {fs['error']}")
             else:
-                lines.append(f"- **{fs['file']}**: {fs['picks']} 个拾取, {fs['traces']} 条轨迹")
+                if _l == "zh":
+                    lines.append(f"- **{fs['file']}**: {fs['picks']} 个拾取, {fs['traces']} 条轨迹")
+                else:
+                    lines.append(f"- **{fs['file']}**: {fs['picks']} picks, {fs['traces']} traces")
 
         lines.append("")
-        lines.append("拾取结果已保存，可使用 `locate_earthquake` 工具进行定位。")
-        lines.append("如需添加台站坐标，请使用 `add_station_coordinates` 工具。")
+        if _l == "zh":
+            lines.append("拾取结果已保存，可使用 `locate_earthquake` 工具进行定位。")
+            lines.append("如需添加台站坐标，请使用 `add_station_coordinates` 工具。")
+        else:
+            lines.append("Picks saved. Use `locate_earthquake` for hypocenter determination.")
+            lines.append("Use `add_station_coordinates` to add station coordinates.")
 
         return "\n".join(lines)
 
     except Exception as e:
-        return f"批量拾取失败: {str(e)}"
+        _l = CURRENT_LANG
+        return f"{'批量拾取失败' if _l == 'zh' else 'Batch picking failed'}: {str(e)}"
 
 
 # ==================== Earthquake Location Tools ====================
@@ -1884,10 +1887,27 @@ def add_station_coordinates(params: Union[str, dict, None] = None):
     parsed = _parse_param_dict(params)
     stations_input = parsed.get("stations", [])
 
+    # Auto-load from stations.json if no stations provided
+    if not stations_input:
+        for candidate in [
+            os.path.join(os.getcwd(), "data", "stations.json"),
+            os.path.join(os.getcwd(), "example_data", "stations.json"),
+        ]:
+            if os.path.exists(candidate):
+                try:
+                    with open(candidate, "r") as f:
+                        sjson = json.load(f)
+                    stations_input = sjson.get("stations", [])
+                    if stations_input:
+                        break
+                except Exception:
+                    pass
+
     if not stations_input:
         return json.dumps({
             "error": "No stations provided.",
-            "usage": "Provide a list of stations with network, station, latitude, longitude."
+            "usage": "Provide a list of stations with network, station, latitude, longitude.",
+            "hint": "Or place a stations.json file in data/ or example_data/."
         }, ensure_ascii=False, indent=2)
 
     if CURRENT_STATIONS is None:

@@ -107,15 +107,19 @@ def _ensure_sampling_rate(provided: Optional[float]) -> float:
     return float(provided)
 
 
-def _standardize_signal(values: np.ndarray) -> np.ndarray:
-    data = np.asarray(values, dtype=np.float64).copy()
-    if data.size == 0:
+def _bandpass_filter(data: np.ndarray, sampling_rate: float,
+                     freqmin: float = 1.0, freqmax: float = 45.0) -> np.ndarray:
+    """Apply Butterworth bandpass filter using ObsPy."""
+    nyquist = sampling_rate / 2.0
+    # Clamp frequencies to valid range
+    freqmin = max(freqmin, 0.001)
+    freqmax = min(freqmax, nyquist * 0.9)
+    if freqmin >= freqmax:
         return data
-    data -= np.mean(data)
-    std = np.std(data)
-    if std > 0:
-        data /= std
-    return data
+    try:
+        return bandpass(data, freqmin, freqmax, df=sampling_rate, corners=4, zerophase=True)
+    except Exception:
+        return data
 
 
 _PREFERRED_HDF5_DATASETS = ("traces", "data", "dataset", "waveforms", "waveform", "values")
@@ -399,8 +403,41 @@ class PhasePickingEngine:
         if not traces:
             raise ValueError("No traces supplied for picking.")
         self.traces = list(traces)
-        self._processed_traces = [_standardize_signal(rec.data) for rec in self.traces]
+        self._processed_traces = [self._preprocess(rec) for rec in self.traces]
         self._seisbench_models = {}  # Cache for loaded models
+
+    @staticmethod
+    def _preprocess(rec: TraceRecord) -> np.ndarray:
+        """Full preprocessing pipeline: detrend, taper, bandpass, normalize."""
+        from scipy.signal import detrend
+
+        data = np.asarray(rec.data, dtype=np.float64).copy()
+        sr = rec.sampling_rate
+        if data.size == 0:
+            return data
+
+        # 1. Remove linear trend
+        data = detrend(data, type='linear')
+
+        # 2. Demean
+        data -= np.mean(data)
+
+        # 3. Taper edges (5% each side)
+        n = len(data)
+        taper_len = max(1, int(n * 0.05))
+        taper = np.ones(n)
+        taper[:taper_len] = np.linspace(0, 1, taper_len)
+        taper[-taper_len:] = np.linspace(1, 0, taper_len)
+        data *= taper
+
+        # 4. Bandpass filter (1-45 Hz for local/regional events)
+        data = _bandpass_filter(data, sr, freqmin=1.0, freqmax=min(45.0, sr * 0.45))
+
+        # 5. Normalize to unit standard deviation
+        std = np.std(data)
+        if std > 0:
+            data /= std
+        return data
 
     def _get_seisbench_model(self, model_name: str, pretrained: bool = True):
         """Load and cache a SeisBench model."""
@@ -436,16 +473,11 @@ class PhasePickingEngine:
         methods: Optional[Iterable[str]] = None,
         method_params: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[PickResult]:
-        # Default methods: deep learning + key conventional methods
+        # Default methods: deep learning only (EQTransformer + PhaseNet)
+        # Traditional methods (sta_lta, aic, etc.) are only used when explicitly requested
         DEFAULT_METHODS = [
-            # Deep learning methods (higher priority)
-            "phasenet",
             "eqtransformer",
-            # Conventional methods
-            "sta_lta",
-            "aic",
-            "pai_k",
-            "s_phase",
+            "phasenet",
         ]
 
         available = {
@@ -1512,18 +1544,28 @@ def plot_waveform_with_picks(
     # Filter to best picks for cleaner visualization
     plot_picks = get_best_picks_for_plotting(picks, max_per_phase=max_picks_per_phase)
 
-    def _method_to_color(method: str):
-        # Color scheme: deep learning = warm colors, conventional = cool colors
+    def _pick_to_color(method: str, phase: str):
+        """Assign bright, high-contrast colors per method+phase combination."""
+        # Deep learning methods: vivid, well-separated colors
+        # EQTransformer P/S: cyan / magenta;  PhaseNet P/S: lime / yellow
         colors = {
-            "phasenet": "#E64B35",        # Red
-            "eqtransformer": "#F39B7F",   # Orange
-            "gpd": "#8491B4B8",           # Blue-gray
-            "sta_lta": "#4DBBD5",         # Cyan
-            "aic": "#00A087",             # Green
-            "pai_k": "#3C5488",           # Dark blue
-            "s_phase": "#91D1C2",         # Light green
+            ("eqtransformer", "P"): "#00FFFF",   # Bright cyan
+            ("eqtransformer", "S"): "#FF00FF",   # Bright magenta
+            ("phasenet",      "P"): "#00FF00",   # Bright lime
+            ("phasenet",      "S"): "#FFE500",   # Bright yellow
+            ("gpd",           "P"): "#FF6F61",   # Coral
+            ("gpd",           "S"): "#8B5CF6",   # Purple
+            # Conventional methods: muted but still visible
+            ("sta_lta",       "P"): "#4DBBD5",   # Cyan
+            ("sta_lta",       "S"): "#3C5488",   # Dark blue
+            ("aic",           "P"): "#00A087",   # Teal
+            ("aic",           "S"): "#7E6148",   # Brown
+            ("pai_k",         "P"): "#E64B35",   # Red
+            ("pai_k",         "S"): "#F39B7F",   # Salmon
+            ("s_phase",       "S"): "#91D1C2",   # Light green
         }
-        return colors.get(method, "#999999")
+        return colors.get((method, (phase or "P").upper()),
+                          colors.get((method, "P"), "#999999"))
 
     # Group filtered picks by trace index
     picks_by_trace = {}
@@ -1560,7 +1602,7 @@ def plot_waveform_with_picks(
                 continue
 
             t_pick = p.sample_index / sr
-            color = _method_to_color(p.method)
+            color = _pick_to_color(p.method, p.phase_type)
             linestyle = '-.' if p.phase_type == "S" else '--'
 
             # Create legend label with score
@@ -1571,8 +1613,8 @@ def plot_waveform_with_picks(
                 x=t_pick,
                 color=color,
                 linestyle=linestyle,
-                alpha=0.9,
-                linewidth=1.5,
+                alpha=0.95,
+                linewidth=2.2,
                 label=legend_label
             )
 

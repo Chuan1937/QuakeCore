@@ -1,0 +1,76 @@
+{
+  "event": {
+    "name": "2020-10-19 M7.6 South of Alaska",
+    "time": "2020-10-19T20:54:39.000000Z",
+    "latitude": 54.65,
+    "longitude": -159.67,
+    "depth_km": 28.0,
+    "magnitude": 7.6
+  },
+  "stations": [
+    {
+      "network": "IU",
+      "station": "ANMO",
+      "latitude": 34.9459,
+      "longitude": -106.4572,
+      "elevation": 1820,
+      "description": "Albuquerque, New Mexico, USA"
+    },
+    {
+      "network": "IU",
+      "station": "COLA",
+      "latitude": 64.8734,
+      "longitude": -147.8613,
+      "elevation": 157,
+      "description": "College Outpost, Alaska, USA"
+    },
+    {
+      "network": "IU",
+      "station": "HRV",
+      "latitude": 42.5064,
+      "longitude": -71.5557,
+      "elevation": 282,
+      "description": "Harvard, Massachusetts, USA"
+    },
+    {
+      "network": "IU",
+      "station": "MAJO",
+      "latitude": 36.5459,
+      "longitude": 138.2056,
+      "elevation": 406,
+      "description": "Matsushiro, Japan"
+    },
+    {
+      "network": "IU",
+      "station": "TATO",
+      "latitude": 24.9754,
+      "longitude": 121.4878,
+      "elevation": 93,
+      "description": "Taipei, Taiwan"
+    },
+    {
+      "network": "II",
+      "station": "KDAK",
+      "latitude": 57.7819,
+      "longitude": -152.5844,
+      "elevation": 114,
+      "description": "Kodiak Island, Alaska, USA"
+    },
+    {
+      "network": "II",
+      "station": "ALE",
+      "latitude": 82.5033,
+      "longitude": -62.3458,
+      "elevation": 60,
+      "description": "Alert, Nunavut, Canada"
+    },
+    {
+      "network": "IU",
+      "station": "XMAS",
+      "latitude": 2.0448,
+      "longitude": -157.4418,
+      "elevation": 5,
+      "description": "Christmas Island, Kiribati"
+    }
+  ]
+}

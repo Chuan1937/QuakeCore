@@ -82,9 +82,9 @@ def get_agent_executor(
     model_name: str = "deepseek",
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    lang: str = "en",
 ):
     """Create a LangChain ReAct agent with configurable LLM backends."""
-    """创建一个具有可配置 LLM 后端的 LangChain ReAct 代理。"""
 
     llm = _build_llm(provider=provider, model_name=model_name, api_key=api_key, base_url=base_url)
 
@@ -122,7 +122,61 @@ def get_agent_executor(
         add_station_coordinates,
     ]
 
-    template = '''请尽力用中文回答用户问题。你可以使用以下工具：
+    if lang == "en":
+        template = '''You are QuakeCore, an intelligent seismic data analysis assistant. Answer the user's question in English. You have access to the following tools:
+
+{tools}
+
+Important rules:
+- Final Answer MUST be in English (file paths, table contents, and method names may remain as-is).
+- Do NOT invent parameters the user did not request.
+- For data export/conversion tools: if the user does NOT specify a range, do NOT set `count`.
+    (The tools default to exporting ALL traces when `count` is omitted or set to null.)
+- If the user asks for a range like "traces 100 to 200", clarify whether it is inclusive and whether indexing is 0-based.
+    If you must proceed without clarification, assume 0-based trace index and interpret as start_trace=100, count=100 (100..199).
+- Always choose an output path under data/convert/ unless the user explicitly requests another folder.
+- Output MUST follow the exact format below. Do not add extra text outside the fields.
+- For generic requests like "read this file" or "show structure", call get_file_structure.
+- Before choosing SEGY/MiniSEED specific tools, use get_loaded_context to determine the loaded file type.
+- For "read trace X", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
+- If the user asks to "plot" or "draw" the waveform while reading, set `plot=True` in the read tool arguments.
+- Plotting IS supported; never tell the user that the system cannot draw waveforms.
+- If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
+- CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
+- ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
+
+**Phase Picking Rules**:
+- By default, phase picking uses deep learning methods (EQTransformer and PhaseNet) only. Do NOT specify the `methods` parameter unless the user explicitly requests a specific method.
+- Only include traditional methods (e.g. sta_lta, aic, pai_k) in the `methods` parameter when the user explicitly asks for them (e.g. "use traditional method", "use STA/LTA", "用传统方法").
+
+**Earthquake Location Workflow**:
+1. First use get_loaded_context to check loaded files and pick status
+2. If the user uploaded multiple MiniSEED files (multi-station data), use pick_all_miniseed_files for batch phase picking
+3. Call add_station_coordinates with NO parameters (empty dict {}). It will auto-load from data/stations.json or example_data/stations.json
+4. Use locate_earthquake to locate the earthquake
+5. Station coordinates are auto-loaded from stations.json files. Only provide coordinates manually if auto-loading fails.
+6. Test data true location: 54.65°N, 159.67°W, depth 28 km
+
+Language requirement:
+- Always respond in English. Do not output Chinese paragraphs.
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought:{agent_scratchpad}'''
+    else:
+        template = '''请尽力用中文回答用户问题。你可以使用以下工具：
 
 {tools}
 
@@ -144,12 +198,16 @@ Important rules:
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
 
+**震相拾取规则**:
+- 默认使用深度学习方法（EQTransformer 和 PhaseNet）进行震相拾取，不需要指定 `methods` 参数。
+- 只有当用户明确要求使用传统方法时（例如"使用传统方法"、"用 STA/LTA"），才在 `methods` 参数中包含传统方法（如 sta_lta, aic, pai_k）。
+
 **地震定位工作流程**:
 1. 首先使用 get_loaded_context 检查已加载的文件和拾取状态
 2. 如果用户上传了多个 MiniSEED 文件（多个台站数据），使用 pick_all_miniseed_files 批量拾取震相
-3. 使用 add_station_coordinates 添加台站坐标信息（参数格式： stations 列表，每项包含 network, station, latitude, longitude）
+3. 调用 add_station_coordinates 时传空参数 {}，会自动从 data/stations.json 或 example_data/stations.json 加载台站坐标
 4. 使用 locate_earthquake 进行地震定位
-5. 台站坐标可从 data/stations.json 文件读取，或由用户提供
+5. 台站坐标自动加载，仅在自动加载失败时才需手动提供
 6. 测试数据真实位置：54.65°N, 159.67°W, 深度 28 km
 
 语言要求：

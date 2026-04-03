@@ -15,15 +15,20 @@
 
 ### 1. 环境准备
 
-确保你已经安装了 Python 3.8+。
+确保你已经安装了 Conda（推荐 [Miniforge](https://github.com/conda-forge/miniforge)）。
 
 ```bash
-# 克隆仓库 (如果适用)
+# 克隆仓库
 git clone git@github.com:Chuan1937/QuakeCore.git
+cd QuakeCore
 
-# 安装依赖
+# 创建环境并安装依赖（推荐，速度快）
+conda create -n quakecore python=3.10 -y
+conda activate quakecore
 pip install -r requirements.txt
 ```
+
+> 也可以用 `conda env create -f environment.yml`，但速度较慢。
 
 ### 2. 选择推理方式
 

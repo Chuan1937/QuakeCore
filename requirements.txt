@@ -10,4 +10,5 @@ langchain-community
 pillow
 # Deep learning phase picking
 seisbench
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch

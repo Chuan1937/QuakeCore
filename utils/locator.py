@@ -460,23 +460,19 @@ class EarthquakeLocator:
         # Pre-calculate station coordinates for faster lookup
         sta_coords = [(p.station.latitude, p.station.longitude, p.phase_type) for p in picks_used]
 
-        # Grid search - use simple model for speed
+        # Grid search - use TauP for accurate travel times at all distances
         best_residual = np.inf
         best_lat = center_lat
         best_lon = center_lon
         best_depth = 10.0
         best_origin_time = np.mean(arrival_times)
 
-        # Use simple travel time calculation for grid search (much faster)
-        def fast_travel_time(sta_lat, sta_lon, evt_lat, evt_lon, depth, phase):
-            dist_deg = calculate_epicentral_distance(sta_lat, sta_lon, evt_lat, evt_lon)
-            dist_km = dist_deg * 111.19
-            v_avg = 6.0 if phase.upper() == "P" else 3.5  # Simple average velocity
-            if depth <= 0:
-                return dist_km / v_avg
-            else:
-                slant_dist = np.sqrt(dist_km ** 2 + depth ** 2)
-                return slant_dist / v_avg
+        # Use TauP for accurate travel times (critical for teleseismic distances)
+        def grid_travel_time(sta_lat, sta_lon, evt_lat, evt_lon, depth, phase):
+            return self.tt_calculator.calculate_travel_time(
+                calculate_epicentral_distance(sta_lat, sta_lon, evt_lat, evt_lon),
+                depth, phase
+            )
 
         grid_count = 0
         for lat in grid_lats:
@@ -488,7 +484,7 @@ class EarthquakeLocator:
 
                     # Calculate travel times for all picks
                     travel_times = np.array([
-                        fast_travel_time(sta_lat, sta_lon, lat, lon, depth, phase)
+                        grid_travel_time(sta_lat, sta_lon, lat, lon, depth, phase)
                         for sta_lat, sta_lon, phase in sta_coords
                     ])
 
@@ -841,12 +837,57 @@ def locate_earthquake(
             "valid_picks": len(valid_picks),
         }
 
+    # Deduplicate picks per station per phase type
+    # Strategy:
+    #   1. Deep learning picks (phasenet, eqtransformer, gpd): use their own confidence
+    #   2. Traditional picks (aic, sta_lta, pai_k, ...): take the best (highest weight)
+    #   3. For each (station, phase): prefer deep learning over traditional
+    DL_METHODS = {"phasenet", "eqtransformer", "gpd"}
+
+    # Group by (station_id, phase_type)
+    groups: Dict[Tuple[str, str], List[PhasePick]] = {}
+    for p in valid_picks:
+        sta_id = f"{p.station.network}.{p.station.station}"
+        key = (sta_id, p.phase_type)
+        groups.setdefault(key, []).append(p)
+
+    best_picks: Dict[Tuple[str, str], PhasePick] = {}
+    for key, group in groups.items():
+        dl_picks = [p for p in group if p.metadata.get("method", "") in DL_METHODS]
+        trad_picks = [p for p in group if p.metadata.get("method", "") not in DL_METHODS]
+
+        # Best deep learning pick (highest weight)
+        best_dl = max(dl_picks, key=lambda p: p.weight) if dl_picks else None
+
+        # Best traditional pick (highest weight)
+        best_trad = max(trad_picks, key=lambda p: p.weight) if trad_picks else None
+
+        # Prefer deep learning if available
+        if best_dl is not None:
+            best_picks[key] = best_dl
+        elif best_trad is not None:
+            best_picks[key] = best_trad
+
+    deduped_picks = list(best_picks.values())
+    print(f"Deduplication: {len(valid_picks)} picks -> {len(deduped_picks)} (best per station per phase)")
+    for dp in deduped_picks:
+        pick_method = dp.metadata.get("method", "?")
+        print(f"  {dp.station.network}.{dp.station.station} {dp.phase_type}: "
+              f"method={pick_method}, weight={dp.weight:.4f}")
+
+    if len(deduped_picks) < 3:
+        return {
+            "error": f"Need at least 3 deduplicated picks. Got {len(deduped_picks)}.",
+            "total_picks": len(picks),
+            "valid_picks": len(valid_picks),
+        }
+
     # Create locator
     locator = EarthquakeLocator()
 
     # Locate
     try:
-        hypocenter = locator.locate(valid_picks, method=method, **kwargs)
+        hypocenter = locator.locate(deduped_picks, method=method, **kwargs)
         result = hypocenter.to_dict()
 
         # Add pick residuals
@@ -858,7 +899,7 @@ def locate_earthquake(
                 "residual": round(float(p.residual), 3) if p.residual is not None else None,
                 "weight": float(p.weight),
             }
-            for p in valid_picks
+            for p in deduped_picks
         ]
 
         return result
@@ -868,6 +909,7 @@ def locate_earthquake(
             "error": str(e),
             "total_picks": len(picks),
             "valid_picks": len(valid_picks),
+            "deduped_picks": len(deduped_picks),
         }
 
 
