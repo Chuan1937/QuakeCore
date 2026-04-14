@@ -96,7 +96,7 @@ After conversion is complete, the converted file will be saved by default in the
 
 ### First-Arrival Picking
 
-Similarly, you can drag a seismic data file into the input box and use natural language, such as `Please help me perform first-arrival picking on this file`, to start picking. Alternatively, you can directly use natural language during the previous step's process to perform first-arrival picking, such as `Please help me perform first-arrival picking on the previous file`.
+Similarly, you can drag a seismic data file ,sunch as `KS.BUS3..BH_Noto2024.mseed` into the input box and use natural language, such as `Please help me perform first-arrival picking on this file`, to start picking. Alternatively, you can directly use natural language during the previous step's process to perform first-arrival picking, such as `Please help me perform first-arrival picking on the previous file`.
 
 ![alt text](image-7.png)
 
