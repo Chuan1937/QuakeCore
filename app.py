@@ -1,5 +1,9 @@
-import streamlit as st
 import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['GMT_THREADS'] = '1'
+
+import streamlit as st
 import json
 import re
 from agent.core import get_agent_executor
@@ -12,7 +16,7 @@ from agent.tools import (
 )
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.callbacks import StreamlitCallbackHandler
-from i18n import t
+from deploy.i18n import t
 
 # Page Config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -415,6 +419,14 @@ if prompt and agent_ready:
             # Extract images from markdown
             img_pattern = re.compile(r'!\[.*?\]\((.*?)\)')
             response_images = [p.strip() for p in img_pattern.findall(answer)]
+            
+            # Also extract from intermediate steps if LLM omitted them
+            if response.get("intermediate_steps"):
+                for _, obs in response["intermediate_steps"]:
+                    if isinstance(obs, str):
+                        for p in img_pattern.findall(obs):
+                            if p.strip() not in response_images:
+                                response_images.append(p.strip())
 
             # Remove image markdown from text for cleaner display
             text_only = img_pattern.sub('', answer).strip()

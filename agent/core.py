@@ -7,7 +7,7 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from agent.tools import (
-    get_loaded_context,
+    get_loaded_context, load_local_data, download_seismic_data,
     get_file_structure,
     read_file_trace,
     get_hdf5_structure,
@@ -90,7 +90,7 @@ def get_agent_executor(
     llm = _build_llm(provider=provider, model_name=model_name, api_key=api_key, base_url=base_url)
 
     tools = [
-        get_loaded_context,
+        get_loaded_context, load_local_data, download_seismic_data,
         get_file_structure,
         read_file_trace,
         get_hdf5_keys,
@@ -146,14 +146,15 @@ Important rules:
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
+- When the user asks to download seismic data from a region (e.g., "download Alaska earthquake data", "下载阿拉斯加地震数据"), use download_seismic_data with latitude, longitude, and radius_km parameters. After downloading, automatically proceed with the earthquake location workflow (pick_all_miniseed_files -> add_station_coordinates -> locate_earthquake -> plot_location_map).
 
 **Phase Picking Rules**:
 - By default, phase picking uses deep learning methods (EQTransformer and PhaseNet) only. Do NOT specify the `methods` parameter unless the user explicitly requests a specific method.
 - Only include traditional methods (e.g. sta_lta, aic, pai_k) in the `methods` parameter when the user explicitly asks for them (e.g. "use traditional method", "use STA/LTA", "用传统方法").
 
 **Earthquake Location Workflow**:
-1. First use get_loaded_context to check loaded files and pick status
-2. If the user uploaded multiple MiniSEED files (multi-station data), use pick_all_miniseed_files for batch phase picking
+1. First use get_loaded_context to check loaded files and pick status. If the user provides a local directory path (e.g. "example_data"), use load_local_data to load the files first. When the user says "local data", "本地数据", or does not specify a path but wants earthquake location, default to loading "example_data/".
+2. If multiple MiniSEED files are loaded (multi-station data), use pick_all_miniseed_files for batch phase picking
 3. Call add_station_coordinates with NO parameters (empty dict {{}}). It will auto-load from data/stations.json or example_data/stations.json
 4. Use locate_earthquake to locate the earthquake
 5. Use plot_location_map to plot the earthquake location and station positions on a map using PyGMT
@@ -202,14 +203,15 @@ Important rules:
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
+- 当用户要求下载某个区域的地震数据（如"下载阿拉斯加地震数据"、"下载波形数据"），使用 download_seismic_data 工具，提供 latitude、longitude、radius_km 参数。下载完成后自动执行定位流程（pick_all_miniseed_files -> add_station_coordinates -> locate_earthquake -> plot_location_map）。
 
 **震相拾取规则**:
 - 默认使用深度学习方法（EQTransformer 和 PhaseNet）进行震相拾取，不需要指定 `methods` 参数。
 - 只有当用户明确要求使用传统方法时（例如"使用传统方法"、"用 STA/LTA"），才在 `methods` 参数中包含传统方法（如 sta_lta, aic, pai_k）。
 
 **地震定位工作流程**:
-1. 首先使用 get_loaded_context 检查已加载的文件和拾取状态
-2. 如果用户上传了多个 MiniSEED 文件（多个台站数据），使用 pick_all_miniseed_files 批量拾取震相
+1. 首先使用 get_loaded_context 检查已加载的文件和拾取状态。如果用户提供了本地目录（如 "example_data"），先使用 load_local_data 加载数据。当用户说"本地数据"、"使用本地数据定位"或未指定路径但要求地震定位时，默认加载 "example_data/" 目录。
+2. 如果加载了多个 MiniSEED 文件（多个台站数据），使用 pick_all_miniseed_files 批量拾取震相
 3. 调用 add_station_coordinates 时传空参数 {{}}，会自动从 data/stations.json 或 example_data/stations.json 加载台站坐标
 4. 使用 locate_earthquake 进行地震定位
 5. 使用 plot_location_map 将定位结果和台站位置绘制在地图上（PyGMT）
@@ -246,4 +248,5 @@ Thought:{agent_scratchpad}'''
         verbose=True,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
+        max_iterations=30,
     )

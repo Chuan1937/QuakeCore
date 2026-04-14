@@ -913,6 +913,53 @@ def locate_earthquake(
         }
 
 
+
+def plot_location_map_matplotlib(hypocenter, stations, output_path, title=None):
+    """Fallback plotting method using matplotlib instead of PyGMT"""
+    import matplotlib.pyplot as plt
+    import os
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    evt_lat = float(hypocenter.get("latitude", 0))
+    evt_lon = float(hypocenter.get("longitude", 0))
+    
+    sta_lats = [float(s.get("latitude", 0)) for s in stations]
+    sta_lons = [float(s.get("longitude", 0)) for s in stations]
+    sta_names = [s.get("station", s.get("name", "UNK")) for s in stations]
+    
+    ax.scatter(sta_lons, sta_lats, c='blue', marker='^', s=100, label='Stations', zorder=5)
+    for lon, lat, name in zip(sta_lons, sta_lats, sta_names):
+        ax.annotate(name, (lon, lat), xytext=(5, 5), textcoords='offset points', fontsize=9)
+        
+    ax.scatter([evt_lon], [evt_lat], c='red', marker='*', s=200, label='Event Location', zorder=10)
+    ax.annotate("Epicenter", (evt_lon, evt_lat), xytext=(10, -10), textcoords='offset points', color='red', weight='bold')
+    
+    # Calculate margins for axes limits
+    all_lats = [evt_lat] + sta_lats
+    all_lons = [evt_lon] + sta_lons
+    lat_margin = 1
+    lon_margin = 1
+    
+    ax.set_xlim(min(all_lons) - lon_margin, max(all_lons) + lon_margin)
+    ax.set_ylim(min(all_lats) - lat_margin, max(all_lats) + lat_margin)
+    
+    ax.set_xlabel('Longitude (°)')
+    ax.set_ylabel('Latitude (°)')
+    if title:
+        ax.set_title(title)
+    else:
+        ax.set_title('Earthquake Location Map (Matplotlib Fallback)')
+        
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend(loc='lower right')
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+    return output_path
+
 def plot_location_map(
     hypocenter: Dict[str, Any],
     stations: List[Dict[str, Any]],
@@ -938,9 +985,10 @@ def plot_location_map(
     """
     try:
         import pygmt
-    except ImportError:
-        print("PyGMT not available. Skipping map generation.")
-        return None
+    except Exception as e:
+        print(f"PyGMT not available or error ({e}). Using matplotlib fallback.")
+        return plot_location_map_matplotlib(hypocenter, stations, output_path, title)
+
 
     # Get hypocenter coordinates
     evt_lat = float(hypocenter.get("latitude", 0))
@@ -965,8 +1013,8 @@ def plot_location_map(
         if is_global:
             region = [-180, 180, -90, 90]
         else:
-            lat_margin = max(5, lat_range * 0.3)
-            lon_margin = max(5, lon_range * 0.3)
+            lat_margin = 1
+            lon_margin = 1
             region = [
                 min(all_lons) - lon_margin,
                 max(all_lons) + lon_margin,
@@ -988,7 +1036,7 @@ def plot_location_map(
         frame = ["af", f'WSne+t"{frame_title}"']
     else:
         projection = "M15c"  # Mercator for regional maps
-        resolution = "03m"   # High resolution for regional
+        resolution = "01m"   # Higher resolution for regional maps
         frame_title = title or "Earthquake Location Map"
         frame = ["af", f'WSne+t"{frame_title}"']
 
@@ -1038,8 +1086,8 @@ def plot_location_map(
         fig.plot(
             x=sta_lons,
             y=sta_lats,
-            style="t0.3c",
-            fill="blue",
+            style="t0.6c",
+            fill="cyan",
             pen="black",
             label="Stations",
         )
@@ -1050,22 +1098,33 @@ def plot_location_map(
                 x=lon,
                 y=lat,
                 text=name,
-                font="7p,Helvetica,blue",
-                offset="0.2c/0.2c",
+                font="8p,Helvetica,cyan",
+                offset="0.5c/0.5c",
             )
 
     # Plot earthquake epicenter
     fig.plot(
         x=evt_lon,
         y=evt_lat,
-        style="a0.5c",
+        style="a1.0c",
         fill="red",
         pen="black",
         label="Epicenter",
     )
 
-    # Add legend
-    fig.legend(position="JBR+jBR+o0.2c", box=True)
+    # Add legend with custom spacing
+    import tempfile
+    legend_spec = (
+        f"G 0.4c\n"
+        f"S 0.3c t 0.3c cyan 1p,black 0.6c Stations\n"
+        f"G 0.4c\n"
+        f"S 0.3c a 0.5c red 1p,black 0.6c Epicenter\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
+        tmp.write(legend_spec)
+        tmp_path = tmp.name
+    fig.legend(spec=tmp_path, position="JTR+jTR+o0.3c/0.3c", box="+gwhite+p1p,gray+s")
+    os.unlink(tmp_path)
 
     # Add info text box
     info_lines = (
@@ -1084,7 +1143,7 @@ def plot_location_map(
     )
 
     # Save figure
-    fig.savefig(output_path, dpi=150)
+    fig.savefig(output_path, dpi=300)
     print(f"Location map saved to: {output_path}")
 
     return output_path

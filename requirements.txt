@@ -7,6 +7,7 @@ matplotlib
 langchain
 langchain-openai
 langchain-community
+langchain-ollama
 pillow
 pygmt
 # Deep learning phase picking

@@ -309,12 +309,12 @@ def get_segy_structure(params: Union[str, dict, None] = None):
     plot_markdown = None
     if plot:
         try:
-            trace_data = handler.get_trace_data(trace_index=0)
-            if "error" not in trace_data:
+            record_data = handler.get_trace_record_data(trace_index=0)
+            if "error" not in record_data:
                 tr = TraceRecord(
-                    data=trace_data["data"],
-                    sampling_rate=trace_data["sampling_rate"],
-                    start_time=trace_data.get("start_time"),
+                    data=record_data["data"],
+                    sampling_rate=record_data["sampling_rate"],
+                    start_time=record_data.get("start_time"),
                     metadata={"trace_index": 0, "type": "segy"}
                 )
                 output_filename = "segy_structure_plot.png"
@@ -591,12 +591,12 @@ def get_miniseed_structure(params: Union[str, dict, None] = None):
     plot_markdown = None
     if plot:
         try:
-            trace_data = handler.get_trace_data(trace_index=0)
-            if "error" not in trace_data:
+            record_data = handler.get_trace_record_data(trace_index=0)
+            if "error" not in record_data:
                 tr = TraceRecord(
-                    data=trace_data["data"],
-                    sampling_rate=trace_data["sampling_rate"],
-                    start_time=trace_data["start_time"],
+                    data=record_data["data"],
+                    sampling_rate=record_data["sampling_rate"],
+                    start_time=record_data.get("start_time"),
                     metadata={"trace_index": 0, "type": "miniseed"}
                 )
                 output_filename = "miniseed_structure_plot.png"
@@ -1913,12 +1913,26 @@ def add_station_coordinates(params: Union[str, dict, None] = None):
         for candidate in [
             os.path.join(os.getcwd(), "data", "stations.json"),
             os.path.join(os.getcwd(), "example_data", "stations.json"),
+            os.path.join(os.getcwd(), "data", "fdsn", "stations.json"),
         ]:
             if os.path.exists(candidate):
                 try:
                     with open(candidate, "r") as f:
                         sjson = json.load(f)
+                    # Format 1: {"stations": [...]}
                     stations_input = sjson.get("stations", [])
+                    # Format 2: flat dict keyed by filename, e.g. {"CI.ADO..BHZ.mseed": {"latitude": ..., ...}}
+                    if not stations_input and isinstance(sjson, dict):
+                        for key, val in sjson.items():
+                            if isinstance(val, dict) and "latitude" in val:
+                                # Parse "CI.ADO..BHZ.mseed" -> network=CI, station=ADO
+                                parts = key.replace(".mseed", "").replace(".miniseed", "").split(".")
+                                net = parts[0] if len(parts) >= 1 else "XX"
+                                name = parts[1] if len(parts) >= 2 else "UNK"
+                                entry = dict(val)
+                                entry.setdefault("network", net)
+                                entry.setdefault("station", name)
+                                stations_input.append(entry)
                     if stations_input:
                         break
                 except Exception:
@@ -2031,13 +2045,7 @@ def plot_location_map(params: Union[str, dict, None] = None):
         )
 
         if result_path and os.path.exists(result_path):
-            return json.dumps({
-                "success": True,
-                "map_path": result_path,
-                "hypocenter": hypocenter,
-                "num_stations": len(stations),
-                "message": f"Location map saved to: {result_path}"
-            }, ensure_ascii=False, indent=2)
+            return f"![Earthquake Location Map]({result_path})\nLocation map successfully generated and saved to {result_path}."
         else:
             return json.dumps({
                 "error": "Failed to generate map. PyGMT may not be available.",
@@ -2049,3 +2057,349 @@ def plot_location_map(params: Union[str, dict, None] = None):
             "error": f"Map generation failed: {str(e)}",
             "hint": "地图生成失败，请检查 PyGMT 安装。"
         }, ensure_ascii=False, indent=2)
+from typing import Union
+from langchain.tools import tool
+import os
+
+@tool
+def load_local_data(params: Union[str, dict, None] = None):
+    """
+    Load a local directory or file into the current workspace.
+    
+    This tool should be used when the user provides a local file path or directory path
+    (e.g., '/path/to/data' or 'example_data/') to perform analysis on local files.
+    It automatically scans the directory for supported seismic data formats (.mseed, .miniseed, .segy, .sgy, .h5, .hdf5, .sac)
+    and loads them into the current session.
+
+    Args:
+        params: Dictionary with optional parameters:
+            - path: The local directory or file path to load
+            
+    Returns:
+        String describing the files that were successfully loaded.
+    """
+    """
+    加载本地目录或文件到当前工作空间。
+    
+    当用户提供本地文件路径或目录路径（如'/path/to/data'或'example_data/'）时，应使用此工具。
+    它会自动扫描目录中支持的地震数据格式（.mseed, .miniseed, .segy, .sgy, .h5, .hdf5, .sac）并加载到当前会话中。
+    
+    参数：
+        params: 包含可选参数的字典：
+            - path: 要加载的本地目录或文件路径
+            
+    返回：
+        描述成功加载的文件的字符串。
+    """
+    from agent.tools import _parse_param_dict, _resolve_file_path, add_miniseed_path, set_current_miniseed_path, set_current_segy_path, set_current_hdf5_path, set_current_sac_path
+    params_dict = _parse_param_dict(params) if params else {}
+    path = params_dict.get("path")
+    if not path:
+        # If user didn't specify path but provided one as string directly
+        if isinstance(params, str):
+            path = params.strip()
+        else:
+            return "Error: Please provide a valid path parameter."
+        
+    resolved_path = _resolve_file_path(path)
+    if not resolved_path or not os.path.exists(resolved_path):
+        return f"Error: Path '{path}' not found."
+        
+    loaded_files = {'miniseed': [], 'segy': [], 'hdf5': [], 'sac': []}
+    
+    if os.path.isfile(resolved_path):
+        files_to_check = [resolved_path]
+    else:
+        files_to_check = [os.path.join(resolved_path, f) for f in os.listdir(resolved_path) if os.path.isfile(os.path.join(resolved_path, f))]
+        
+    for f_path in files_to_check:
+        ext = f_path.lower()
+        if ext.endswith('.mseed') or ext.endswith('.miniseed'):
+            add_miniseed_path(f_path)
+            loaded_files['miniseed'].append(os.path.basename(f_path))
+        elif ext.endswith('.segy') or ext.endswith('.sgy'):
+            set_current_segy_path(f_path)
+            loaded_files['segy'].append(os.path.basename(f_path))
+        elif ext.endswith('.h5') or ext.endswith('.hdf5'):
+            set_current_hdf5_path(f_path)
+            loaded_files['hdf5'].append(os.path.basename(f_path))
+        elif ext.endswith('.sac'):
+            set_current_sac_path(f_path)
+            loaded_files['sac'].append(os.path.basename(f_path))
+            
+    summary = []
+    if loaded_files['miniseed']:
+        summary.append(f"Loaded {len(loaded_files['miniseed'])} MiniSEED files: {', '.join(loaded_files['miniseed'])}")
+    if loaded_files['segy']:
+        summary.append(f"Loaded {len(loaded_files['segy'])} SEGY files: {', '.join(loaded_files['segy'])}")
+    if loaded_files['hdf5']:
+        summary.append(f"Loaded {len(loaded_files['hdf5'])} HDF5 files: {', '.join(loaded_files['hdf5'])}")
+    if loaded_files['sac']:
+        summary.append(f"Loaded {len(loaded_files['sac'])} SAC files: {', '.join(loaded_files['sac'])}")
+        
+    if not summary:
+        return f"No supported seismic data files (.mseed, .miniseed, .segy, .sgy, .h5, .hdf5, .sac) found in '{path}'."
+
+    return "\n".join(summary)
+
+
+@tool
+def download_seismic_data(params: Union[str, dict, None] = None):
+    """
+    Download seismic waveform data and event information from FDSN web services (e.g., IRIS).
+
+    This tool can:
+    1. Search for recent earthquakes in a region
+    2. Download waveform data (MiniSEED) from nearby stations
+    3. Automatically save station coordinates to stations.json
+
+    Args:
+        params: Dictionary with parameters:
+            - latitude: Center latitude in degrees
+            - longitude: Center longitude in degrees
+            - radius_km: Search radius in kilometers (default: 200)
+            - starttime: Start time in ISO format (default: 30 days ago)
+            - endtime: End time in ISO format (default: now)
+            - minmagnitude: Minimum earthquake magnitude (default: 4.0)
+            - network: FDSN network code filter (e.g., "IU", "AK")
+            - channel: Channel code filter (e.g., "BH?", "HH?")
+            - output_dir: Directory to save downloaded data (default: data/fdsn/)
+            - max_stations: Maximum number of stations to download (default: 10)
+
+    Example:
+        {"latitude": 61.2, "longitude": -150.0, "radius_km": 500, "minmagnitude": 5.0}
+        {"latitude": 29.6, "longitude": 102.1, "radius_km": 300}
+    """
+    """
+    从 FDSN 网络服务（如 IRIS）下载地震波形数据和事件信息。
+
+    此工具可以：
+    1. 搜索某个区域最近的地震
+    2. 从附近的台站下载波形数据（MiniSEED）
+    3. 自动将台站坐标保存到 stations.json
+
+    参数：
+        params: 包含参数的字典：
+            - latitude: 中心纬度（度）
+            - longitude: 中心经度（度）
+            - radius_km: 搜索半径（公里），默认 200
+            - starttime: 起始时间，ISO 格式（默认：30 天前）
+            - endtime: 结束时间，ISO 格式（默认：现在）
+            - minmagnitude: 最小震级（默认：4.0）
+            - network: FDSN 台网代码（如 "IU"、"AK"）
+            - channel: 通道代码（如 "BH?"、"HH?"）
+            - output_dir: 保存下载数据的目录（默认：data/fdsn/）
+            - max_stations: 最大下载台站数（默认：10）
+
+    示例：
+        {"latitude": 61.2, "longitude": -150.0, "radius_km": 500, "minmagnitude": 5.0}
+    """
+    from obspy.clients.fdsn import Client as FDSNClient
+    from obspy import UTCDateTime
+    from obspy.geodetics import locations2degrees
+    import glob
+
+    parsed = _parse_param_dict(params)
+    _l = CURRENT_LANG
+
+    # Parameters
+    lat = _coerce_float(parsed.get("latitude"), allow_none=True, field_name="latitude")
+    lon = _coerce_float(parsed.get("longitude"), allow_none=True, field_name="longitude")
+    radius_km = _coerce_float(parsed.get("radius_km"), default=200.0, field_name="radius_km")
+    minmagnitude = _coerce_float(parsed.get("minmagnitude"), default=4.0, field_name="minmagnitude")
+    max_stations = _coerce_int(parsed.get("max_stations"), default=10, field_name="max_stations")
+    network = parsed.get("network", None)
+    channel = parsed.get("channel", "BH?")
+    output_dir = parsed.get("output_dir", "data/fdsn/")
+
+    # Time range
+    endtime = parsed.get("endtime")
+    starttime = parsed.get("starttime")
+    if endtime:
+        endtime = UTCDateTime(endtime)
+    else:
+        endtime = UTCDateTime.now()
+    if starttime:
+        starttime = UTCDateTime(starttime)
+    else:
+        starttime = endtime - 30 * 86400  # 30 days ago
+
+    if lat is None or lon is None:
+        return json.dumps({
+            "error": "latitude and longitude are required.",
+            "hint": "请提供 latitude 和 longitude 参数。" if _l == "zh" else "Please provide latitude and longitude.",
+            "example": {"latitude": 61.2, "longitude": -150.0, "radius_km": 500}
+        }, ensure_ascii=False, indent=2)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    try:
+        client = FDSNClient("IRIS")
+    except Exception as e:
+        return json.dumps({
+            "error": f"Cannot connect to IRIS FDSN service: {e}",
+            "hint": "无法连接 IRIS FDSN 服务，请检查网络。"
+        }, ensure_ascii=False, indent=2)
+
+    lines = []
+
+    # Step 1: Search for events
+    lines.append(f"### {'地震事件搜索' if _l == 'zh' else 'Event Search'}")
+    lines.append(f"- {'搜索范围' if _l == 'zh' else 'Region'}: ({lat}, {lon}), {'半径' if _l == 'zh' else 'radius'} {radius_km} km")
+    lines.append(f"- {'时间范围' if _l == 'zh' else 'Time range'}: {starttime} ~ {endtime}")
+    lines.append(f"- {'最小震级' if _l == 'zh' else 'Min magnitude'}: {minmagnitude}")
+    lines.append("")
+
+    try:
+        catalog = client.get_events(
+            starttime=starttime,
+            endtime=endtime,
+            latitude=lat,
+            longitude=lon,
+            maxradius=radius_km / 111.0,  # Convert km to degrees (approximate)
+            minmagnitude=minmagnitude,
+            orderby="magnitude",
+        )
+    except Exception as e:
+        return json.dumps({
+            "error": f"Event search failed: {e}",
+            "hint": f"地震事件搜索失败: {e}"
+        }, ensure_ascii=False, indent=2)
+
+    if len(catalog) == 0:
+        lines.append(f"{'未找到符合条件的地震事件' if _l == 'zh' else 'No events found matching criteria'}.")
+        lines.append(f"{'尝试减小最小震级或扩大搜索范围' if _l == 'zh' else 'Try reducing minmagnitude or increasing radius_km'}.")
+        return "\n".join(lines)
+
+    lines.append(f"{'找到' if _l == 'zh' else 'Found'} {len(catalog)} {'个事件' if _l == 'zh' else 'events'}.")
+    lines.append("")
+
+    # Show top events
+    for i, event in enumerate(catalog[:5]):
+        origin = event.preferred_origin() or event.origins[0]
+        mag = event.preferred_magnitude() or event.magnitudes[0] if event.magnitudes else None
+        mag_val = mag.mag if mag else "?"
+        mag_type = mag.magnitude_type if mag else ""
+        t = origin.time
+        lines.append(f"{i+1}. {t} | {abs(origin.latitude):.2f}{'N' if origin.latitude >= 0 else 'S'}, "
+                     f"{abs(origin.longitude):.2f}{'E' if origin.longitude >= 0 else 'W'} | "
+                     f"{'深度' if _l == 'zh' else 'depth'} {origin.depth/1000:.1f} km | "
+                     f"M{mag_type} {mag_val}")
+    if len(catalog) > 5:
+        lines.append(f"... ({'还有' if _l == 'zh' else 'and'} {len(catalog)-5} {'个' if _l == 'zh' else 'more'})")
+    lines.append("")
+
+    # Step 2: Use the largest event for waveform download
+    event = catalog[0]
+    origin = event.preferred_origin() or event.origins[0]
+    evt_lat = origin.latitude
+    evt_lon = origin.longitude
+    evt_time = origin.time
+
+    lines.append(f"### {'下载波形数据' if _l == 'zh' else 'Downloading Waveform Data'}")
+    lines.append(f"{'目标事件' if _l == 'zh' else 'Target event'}: {evt_time}, ({evt_lat:.2f}, {evt_lon:.2f})")
+    lines.append("")
+
+    # Search for stations
+    station_kwargs = {
+        "starttime": evt_time - 3600,
+        "endtime": evt_time + 7200,
+        "latitude": evt_lat,
+        "longitude": evt_lon,
+        "maxradius": radius_km / 111.0,
+    }
+    if network:
+        station_kwargs["network"] = network
+    if channel:
+        station_kwargs["channel"] = channel
+
+    try:
+        inventory = client.get_stations(**station_kwargs, level="station")
+    except Exception as e:
+        lines.append(f"{'台站搜索失败' if _l == 'zh' else 'Station search failed'}: {e}")
+        return "\n".join(lines)
+
+    # Collect stations with distance info
+    stations_info = []
+    for net in inventory:
+        for sta in net:
+            dist_deg = locations2degrees(evt_lat, evt_lon, sta.latitude, sta.longitude)
+            dist_km = dist_deg * 111.195
+            if dist_km <= radius_km:
+                stations_info.append({
+                    "network": net.code,
+                    "station": sta.code,
+                    "latitude": sta.latitude,
+                    "longitude": sta.longitude,
+                    "elevation": sta.elevation if sta.elevation else 0,
+                    "distance_km": dist_km,
+                })
+
+    stations_info.sort(key=lambda x: x["distance_km"])
+    stations_info = stations_info[:max_stations]
+
+    if not stations_info:
+        lines.append(f"{'未找到符合条件的台站' if _l == 'zh' else 'No stations found matching criteria'}.")
+        return "\n".join(lines)
+
+    lines.append(f"{'找到' if _l == 'zh' else 'Found'} {len(stations_info)} {'个台站' if _l == 'zh' else 'stations'}:")
+    for s in stations_info:
+        lines.append(f"- {s['network']}.{s['station']} ({s['latitude']:.2f}, {s['longitude']:.2f}), {'距离' if _l == 'zh' else 'dist'} {s['distance_km']:.0f} km")
+    lines.append("")
+
+    # Step 3: Download waveform data
+    downloaded_files = []
+    failed_stations = []
+
+    for s in stations_info:
+        sta_code = f"{s['network']}.{s['station']}"
+        filename = f"{s['network']}.{s['station']}..{channel.replace('?', 'Z')}.mseed"
+        filepath = os.path.join(output_dir, filename)
+
+        try:
+            waveform_kwargs = {
+                "network": s["network"],
+                "station": s["station"],
+                "location": "*",
+                "channel": channel,
+                "starttime": evt_time - 60,
+                "endtime": evt_time + 1800,
+            }
+            st = client.get_waveforms(**waveform_kwargs)
+            st.write(filepath, format="MSEED")
+            downloaded_files.append(filepath)
+            add_miniseed_path(filepath)
+        except Exception as e:
+            failed_stations.append(f"{sta_code}: {e}")
+
+    # Step 4: Save stations.json
+    if downloaded_files:
+        stations_json_path = os.path.join(output_dir, "stations.json")
+        stations_dict = {}
+        for s in stations_info:
+            if s["network"] in [ds.split("/")[-1].split(".")[0] for ds in downloaded_files if s["station"] in ds]:
+                for f in downloaded_files:
+                    fname = os.path.basename(f)
+                    if s["network"] in fname and s["station"] in fname:
+                        stations_dict[fname] = {
+                            "latitude": s["latitude"],
+                            "longitude": s["longitude"],
+                            "elevation": s["elevation"],
+                        }
+                        break
+
+        with open(stations_json_path, "w") as f:
+            json.dump(stations_dict, f, indent=2)
+
+        lines.append(f"### {'下载结果' if _l == 'zh' else 'Download Results'}")
+        lines.append(f"- {'成功下载' if _l == 'zh' else 'Downloaded'}: {len(downloaded_files)} {'个文件' if _l == 'zh' else 'files'}")
+        if failed_stations:
+            lines.append(f"- {'失败' if _l == 'zh' else 'Failed'}: {len(failed_stations)} {'个台站' if _l == 'zh' else 'stations'}")
+            for fs in failed_stations[:5]:
+                lines.append(f"  - {fs}")
+        lines.append(f"- {'台站坐标已保存至' if _l == 'zh' else 'Station coordinates saved to'}: `{stations_json_path}`")
+        lines.append(f"- {'数据保存目录' if _l == 'zh' else 'Data saved to'}: `{output_dir}`")
+        lines.append("")
+        lines.append(f"{'下一步可以使用 pick_all_miniseed_files 进行震相拾取，然后定位' if _l == 'zh' else 'Next: use pick_all_miniseed_files for phase picking, then locate_earthquake'}.")
+
+    return "\n".join(lines)

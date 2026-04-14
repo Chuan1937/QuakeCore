@@ -73,9 +73,16 @@ Currently, QuakeCore supports both Chinese and English. You can switch the langu
 
 Features already implemented in QuakeCore include:
 
+- download the seismic data using fsdn API.
 - Conversion and plotting of different seismic data formats, including sac, mseed, csv, and hdf5
 - Seismic direct wave first-arrival picking, including deep learning methods and traditional methods
 - Earthquake location
+
+### Data Download
+
+You can use natural language to request data download, such as `Please download the seismic data for the Alaska region within a 500km radius from the current time`. QuakeCore will automatically fetch the relevant seismic data based on your request and save it in the local `data/fsdn` folder.
+
+
 
 ### Format Conversion
 
@@ -95,7 +102,7 @@ Similarly, you can drag a seismic data file into the input box and use natural l
 
 ### Earthquake Location
 
-For earthquake location, you need to upload multiple seismic data files, with each file representing data from one station. You can drag multiple files into the input box and use natural language, such as `Please help me locate the earthquake using these files`, to perform the earthquake location.
+For earthquake location, you need to upload multiple seismic data files, with each file representing data from one station. You can drag multiple files into the input box and use natural language, such as `Please help me locate the earthquake using example_data  files`, to perform the earthquake location.
 
 ![alt text](image-8.png)
 
