@@ -331,7 +331,7 @@ for msg in st.session_state.messages:
 prompt = st.chat_input(
     placeholder=t("chat_placeholder", lang),
     accept_file="multiple",
-    file_type=["segy", "sgy", "mseed", "miniseed", "h5", "hdf5", "sac", "png", "jpg", "jpeg", "gif"],
+    file_type=["segy", "sgy", "mseed", "miniseed", "h5", "hdf5", "sac", "png", "jpg", "jpeg", "gif", "json"],
     disabled=not agent_ready,
 )
 
