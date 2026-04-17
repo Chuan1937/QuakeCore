@@ -1,5 +1,0 @@
-Ridgecrest Earthquake 2019
-Time: 2019-07-06 03:19:53 UTC
-Lat: 35.766
-Lon: -117.605
-Mag: 7.1
