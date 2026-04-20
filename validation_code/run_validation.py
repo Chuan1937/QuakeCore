@@ -52,7 +52,7 @@ print(f"  [INFO] PyTorch device: {DEVICE}")
 
 # =================== Paths ===================
 WAVEFORMS_DIR = os.path.join(PROJECT_ROOT, "Validation", "Waveforms")
-CATALOG_CSV = os.path.join(PROJECT_ROOT, "Validation", "selected_events_mw75_plus.csv")
+CATALOG_CSV = os.path.join(PROJECT_ROOT, "Validation", "selected_events_mw40_75_part2.csv")
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 NLLOC_BIN = os.path.join(PROJECT_ROOT, "Validation", "NLLOC", "src", "bin")
 TAUP_DIR = os.path.join(os.path.dirname(__file__), "taup")
@@ -567,8 +567,8 @@ def locate_grid_search(picks, stations, cat_lat, cat_lon, cat_depth):
         obs_rel_refined, sta_coords, tt_tables, lat_f, lon_f, dep_f)
 
     # Compute OT and RMS at best location
-    theo_at_best, obs_at_best = [], []
-    for sta, phase, obs_tt in obs_rel_refined:
+    theo_at_best, obs_abs_best = [], []
+    for sta, phase, obs_rel_time in obs_rel_refined:
         if sta not in sta_coords or phase not in tt_tables:
             continue
         s_lat, s_lon = sta_coords[sta]
@@ -577,12 +577,15 @@ def locate_grid_search(picks, stations, cat_lat, cat_lon, cat_depth):
         if np.isinf(tt):
             continue
         theo_at_best.append(tt)
-        obs_at_best.append(obs_tt)
+        obs_abs_best.append(obs_rel_time + t0)
 
     if theo_at_best:
-        res_final = np.array(obs_at_best) - np.array(theo_at_best)
-        best_ot = t0 + np.median(res_final)
-        rms = np.sqrt(np.mean(res_final ** 2))
+        # delta = absolute obs time - theoretical travel time ≈ OT
+        deltas = np.array(obs_abs_best) - np.array(theo_at_best)
+        best_ot = np.median(deltas)
+        # True residual = obs - (OT + TT)
+        true_residuals = deltas - best_ot
+        rms = np.sqrt(np.mean(true_residuals ** 2))
     else:
         rms, best_ot = -1, None
 
