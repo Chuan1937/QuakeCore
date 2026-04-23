@@ -39,6 +39,9 @@ def set_current_lang(lang):
 
 
 DEFAULT_CONVERT_DIR = "data/convert"
+DEFAULT_STRUCTURE_DIR = "data/structure"
+DEFAULT_PICKS_DIR = "data/picks"
+DEFAULT_LOCATION_DIR = "data/location"
 
 
 # 设置当前 SEGY 文件路径的辅助函数
@@ -264,22 +267,24 @@ def _resolve_source_path(path: str | None, source_type: str | None):
     return None, None
 
 
-def _resolve_output_path(output_path: str | None, *, default_filename: str) -> str:
+def _resolve_output_path(output_path: str | None, *, default_filename: str, base_dir: str | None = None) -> str:
     """Resolve output file path.
 
     Rules:
-    - If output_path is empty -> data/convert/{default_filename}
-    - If output_path is filename only -> data/convert/{output_path}
+    - If output_path is empty -> {base_dir}/{default_filename}
+    - If output_path is filename only -> {base_dir}/{output_path}
     - If output_path contains a directory (relative/absolute) -> keep as is
     Also ensures the parent directory exists.
     """
+    if base_dir is None:
+        base_dir = DEFAULT_CONVERT_DIR
 
     if not output_path or not str(output_path).strip():
-        final_path = os.path.join(DEFAULT_CONVERT_DIR, default_filename)
+        final_path = os.path.join(base_dir, default_filename)
     else:
         output_path = str(output_path).strip()
         if os.path.dirname(output_path) == "":
-            final_path = os.path.join(DEFAULT_CONVERT_DIR, output_path)
+            final_path = os.path.join(base_dir, output_path)
         else:
             final_path = output_path
 
@@ -328,7 +333,8 @@ def get_segy_structure(params: Union[str, dict, None] = None):
                     metadata={"trace_index": 0, "type": "segy"}
                 )
                 output_filename = "segy_structure_plot.png"
-                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+                output_path = os.path.join(DEFAULT_STRUCTURE_DIR, output_filename)
+                os.makedirs(DEFAULT_STRUCTURE_DIR, exist_ok=True)
                 plot_path = plot_waveform_with_picks([tr], [], output_path)
                 info["plot_path"] = plot_path
                 if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
@@ -457,8 +463,8 @@ def read_trace_sample(trace_index: Union[int, str] = 0, plot: bool = False):
                     metadata={"trace_index": trace_index, "type": "segy"}
                 )
                 output_filename = f"trace_plot_segy_{trace_index}.png"
-                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
-                os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+                output_path = os.path.join(DEFAULT_STRUCTURE_DIR, output_filename)
+                os.makedirs(DEFAULT_STRUCTURE_DIR, exist_ok=True)
                 
                 plot_path = plot_waveform_with_picks([tr], [], output_path)
                 summary["plot_path"] = plot_path
@@ -674,8 +680,8 @@ def get_miniseed_structure(params: Union[str, dict, None] = None):
                     metadata={"trace_index": 0, "type": "miniseed"}
                 )
                 output_filename = "miniseed_structure_plot.png"
-                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
-                os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+                output_path = os.path.join(DEFAULT_STRUCTURE_DIR, output_filename)
+                os.makedirs(DEFAULT_STRUCTURE_DIR, exist_ok=True)
                 plot_path = plot_waveform_with_picks([tr], [], output_path)
                 info["plot_path"] = plot_path
                 if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
@@ -721,8 +727,8 @@ def read_miniseed_trace(params: Union[str, dict, None] = None):
                 metadata={"trace_index": trace_index, "type": "miniseed"}
             )
             output_filename = f"trace_plot_miniseed_{trace_index}.png"
-            output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
-            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            output_path = os.path.join(DEFAULT_STRUCTURE_DIR, output_filename)
+            os.makedirs(DEFAULT_STRUCTURE_DIR, exist_ok=True)
             
             plot_path = plot_waveform_with_picks([tr], [], output_path)
             result["plot_path"] = plot_path
@@ -929,8 +935,8 @@ def read_hdf5_trace(params: Union[str, dict, None] = None):
                 metadata={"trace_index": trace_index, "type": "hdf5"}
             )
             output_filename = f"trace_plot_hdf5_{trace_index}.png"
-            output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
-            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            output_path = os.path.join(DEFAULT_STRUCTURE_DIR, output_filename)
+            os.makedirs(DEFAULT_STRUCTURE_DIR, exist_ok=True)
 
             plot_path = plot_waveform_with_picks([tr], [], output_path)
             result["plot_path"] = plot_path
@@ -1144,9 +1150,19 @@ def convert_miniseed_to_numpy(params: Union[str, dict, None] = None):
 
     # Plot first trace after conversion
     try:
-        data = np.load(output_path) if output_path.endswith(".npy") else None
-        if data is not None and data.size:
-            first_trace = data[0] if data.ndim > 1 else data
+        if output_path.endswith(".npz"):
+            npz = np.load(output_path)
+            # Get first array from npz
+            keys = list(npz.keys())
+            if keys:
+                first_trace = npz[keys[0]]
+        elif output_path.endswith(".npy"):
+            data = np.load(output_path)
+            if data is not None and data.size:
+                first_trace = data[0] if data.ndim > 1 else data
+        else:
+            first_trace = None
+        if first_trace is not None and first_trace.size:
             tr = TraceRecord(
                 data=first_trace,
                 sampling_rate=float(result.get("sampling_rate", 100.0)),
@@ -1286,7 +1302,8 @@ def get_sac_structure(params: Union[str, dict, None] = None):
                     metadata={"trace_index": 0, "type": "sac"}
                 )
                 output_filename = "sac_structure_plot.png"
-                output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+                output_path = os.path.join(DEFAULT_STRUCTURE_DIR, output_filename)
+                os.makedirs(DEFAULT_STRUCTURE_DIR, exist_ok=True)
                 plot_path = plot_waveform_with_picks([tr], [], output_path)
                 info["plot_path"] = plot_path
                 if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
@@ -1332,8 +1349,8 @@ def read_sac_trace(params: Union[str, dict, None] = None):
                 metadata={"trace_index": trace_index, "type": "sac"}
             )
             output_filename = f"trace_plot_sac_{trace_index}.png"
-            output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
-            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            output_path = os.path.join(DEFAULT_STRUCTURE_DIR, output_filename)
+            os.makedirs(DEFAULT_STRUCTURE_DIR, exist_ok=True)
 
             plot_path = plot_waveform_with_picks([tr], [], output_path)
             result["plot_path"] = plot_path
@@ -1608,7 +1625,8 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
         )
         
         # 3. Generate plot
-        plot_path = _resolve_output_path(None, default_filename="picks_plot.png")
+        plot_path = _resolve_output_path(None, default_filename="picks_plot.png", base_dir=DEFAULT_PICKS_DIR)
+        os.makedirs(os.path.dirname(plot_path), exist_ok=True)
         plot_waveform_with_picks(traces, picks, plot_path)
 
         # 4. Build a brief Chinese summary (best P / best S per trace)
@@ -1784,8 +1802,8 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
         # Generate combined plot
         plot_path = None
         if all_traces and all_picks:
-            plot_path = os.path.join(DEFAULT_CONVERT_DIR, "all_stations_picks.png")
-            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_path = os.path.join(DEFAULT_PICKS_DIR, "all_stations_picks.png")
+            os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
             plot_waveform_with_picks(all_traces, all_picks, plot_path)
 
         # Build output (language-aware)
@@ -2384,8 +2402,8 @@ def locate_earthquake(params: Union[str, dict, None] = None):
                 ]
 
             # Generate map
-            map_path = os.path.join(DEFAULT_CONVERT_DIR, "earthquake_location_map.png")
-            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            map_path = os.path.join(DEFAULT_LOCATION_DIR, "earthquake_location_map.png")
+            os.makedirs(DEFAULT_LOCATION_DIR, exist_ok=True)
 
             plot_result = plot_location_map(
                 hypocenter=output["hypocenter"],
@@ -2540,7 +2558,7 @@ def plot_location_map(params: Union[str, dict, None] = None):
         params: Dictionary with optional parameters:
             - region: [west, east, south, north] custom map region in degrees
             - title: Custom map title
-            - output: Custom output file path (default: data/convert/earthquake_location_map.png)
+            - output: Custom output file path (default: data/location/earthquake_location_map.png)
 
     Returns:
         JSON with the path to the saved map image.
@@ -2565,7 +2583,7 @@ def plot_location_map(params: Union[str, dict, None] = None):
     parsed = _parse_param_dict(params)
     region = parsed.get("region")
     title = parsed.get("title")
-    output_path = parsed.get("output", os.path.join(DEFAULT_CONVERT_DIR, "earthquake_location_map.png"))
+    output_path = parsed.get("output", os.path.join(DEFAULT_LOCATION_DIR, "earthquake_location_map.png"))
 
     # Get data from stored location result
     if CURRENT_LOCATION is None:
