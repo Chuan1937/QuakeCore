@@ -517,7 +517,8 @@ def convert_segy_to_numpy(params: Union[str, dict, None] = None):
                 start_time=None,
                 metadata={"trace_index": 0, "type": "segy"}
             )
-            plot_filename = "segy_numpy_plot.png"
+            base_name = os.path.splitext(os.path.basename(CURRENT_SEGY_PATH))[0]
+            plot_filename = f"{base_name}_numpy_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -571,7 +572,8 @@ def convert_segy_to_excel(params: Union[str, dict, None] = None):
                         start_time=None,
                         metadata={"trace_index": 0, "type": "segy"}
                     )
-                    plot_filename = "segy_excel_plot.png"
+                    base_name = os.path.splitext(os.path.basename(CURRENT_SEGY_PATH))[0]
+                    plot_filename = f"{base_name}_excel_plot.png"
                     plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
                     os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
                     plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -629,7 +631,8 @@ def convert_segy_to_hdf5(params: Union[str, dict, None] = None):
                     start_time=record_data.get("start_time"),
                     metadata={"trace_index": 0, "type": "hdf5"}
                 )
-                plot_filename = "segy_hdf5_plot.png"
+                base_name = os.path.splitext(os.path.basename(CURRENT_SEGY_PATH))[0]
+                plot_filename = f"{base_name}_hdf5_plot.png"
                 plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
                 os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
                 plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -967,7 +970,8 @@ def convert_hdf5_to_numpy(params: Union[str, dict, None] = None):
                 start_time=None,
                 metadata={"trace_index": 0, "type": "hdf5"}
             )
-            plot_filename = "hdf5_numpy_plot.png"
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            plot_filename = f"{base_name}_numpy_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -1149,7 +1153,8 @@ def convert_miniseed_to_numpy(params: Union[str, dict, None] = None):
                 start_time=None,
                 metadata={"trace_index": 0, "type": "miniseed"}
             )
-            plot_filename = "miniseed_numpy_plot.png"
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            plot_filename = f"{base_name}_numpy_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -1192,7 +1197,8 @@ def convert_miniseed_to_hdf5(params: Union[str, dict, None] = None):
                 start_time=record_data.get("start_time"),
                 metadata={"trace_index": 0, "type": "hdf5"}
             )
-            plot_filename = "miniseed_hdf5_plot.png"
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            plot_filename = f"{base_name}_hdf5_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -1237,7 +1243,8 @@ def convert_miniseed_to_sac(params: Union[str, dict, None] = None):
                     start_time=sac_data.get("start_time"),
                     metadata={"trace_index": 0, "type": "sac"}
                 )
-                plot_filename = "miniseed_sac_plot.png"
+                base_name = os.path.splitext(os.path.basename(path))[0]
+                plot_filename = f"{base_name}_sac_plot.png"
                 plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
                 os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
                 plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -1366,7 +1373,8 @@ def convert_sac_to_numpy(params: Union[str, dict, None] = None):
                 start_time=None,
                 metadata={"trace_index": 0, "type": "sac"}
             )
-            plot_filename = "sac_numpy_plot.png"
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            plot_filename = f"{base_name}_numpy_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -1409,7 +1417,8 @@ def convert_sac_to_hdf5(params: Union[str, dict, None] = None):
                 start_time=record_data.get("start_time"),
                 metadata={"trace_index": 0, "type": "hdf5"}
             )
-            plot_filename = "sac_hdf5_plot.png"
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            plot_filename = f"{base_name}_hdf5_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -1449,7 +1458,8 @@ def convert_sac_to_miniseed(params: Union[str, dict, None] = None):
                 start_time=ms_data.get("start_time"),
                 metadata={"trace_index": 0, "type": "miniseed"}
             )
-            plot_filename = "sac_miniseed_plot.png"
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            plot_filename = f"{base_name}_miniseed_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)
@@ -1489,7 +1499,8 @@ def convert_sac_to_excel(params: Union[str, dict, None] = None):
                 start_time=sac_data.get("start_time"),
                 metadata={"trace_index": 0, "type": "sac"}
             )
-            plot_filename = "sac_excel_plot.png"
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            plot_filename = f"{base_name}_excel_plot.png"
             plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
             os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
             plot_result = plot_waveform_with_picks([tr], [], plot_path)

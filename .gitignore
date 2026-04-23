@@ -1,20 +1,11 @@
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-
-# Test & Data
-Test/
-/seismic/
 data/
-
-# IDE
 .idea/
 .vscode/
 *.swp
-
-# OS
 .DS_Store
 Thumbs.db
 /NonLinLoc
