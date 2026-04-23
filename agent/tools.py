@@ -508,6 +508,24 @@ def convert_segy_to_numpy(params: Union[str, dict, None] = None):
         summary["preview_first_trace_first_10"] = first_trace[:10].tolist()
         summary["dtype"] = str(data.dtype)
 
+        # Plot first trace after conversion
+        try:
+            sr = summary.get("sample_rate", 100.0) * 1000  # convert ms to Hz
+            tr = TraceRecord(
+                data=first_trace,
+                sampling_rate=float(sr),
+                start_time=None,
+                metadata={"trace_index": 0, "type": "segy"}
+            )
+            plot_filename = "segy_numpy_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                summary["plot_path"] = plot_result
+        except Exception as e:
+            summary["plot_error"] = str(e)
+
     return json.dumps(summary, indent=2)
 
 # tool to convert SEGY to Excel
@@ -537,7 +555,30 @@ def convert_segy_to_excel(params: Union[str, dict, None] = None):
     handler = SegyHandler(CURRENT_SEGY_PATH)
     result = handler.to_excel(output_path=output_path, start_trace=start_trace, count=count)
 
-    if isinstance(result, dict):
+    if isinstance(result, dict) and "error" not in result:
+        result["saved_to"] = output_path
+        # Plot first trace after conversion
+        try:
+            segy_result = handler.to_numpy(start_trace=start_trace, count=min(count or 1, 1), output_path=None)
+            if "error" not in segy_result and "array" in segy_result:
+                data = segy_result["array"]
+                if data is not None and data.size:
+                    first_trace = data[0] if data.ndim > 1 else data
+                    sr = segy_result.get("sample_rate", 100.0) * 1000
+                    tr = TraceRecord(
+                        data=first_trace,
+                        sampling_rate=float(sr),
+                        start_time=None,
+                        metadata={"trace_index": 0, "type": "segy"}
+                    )
+                    plot_filename = "segy_excel_plot.png"
+                    plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+                    os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+                    plot_result = plot_waveform_with_picks([tr], [], plot_path)
+                    if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                        result["plot_path"] = plot_result
+        except Exception as e:
+            result["plot_error"] = str(e)
         return json.dumps(result, indent=2)
     return result
 
@@ -575,7 +616,27 @@ def convert_segy_to_hdf5(params: Union[str, dict, None] = None):
         compression=compression,
     )
 
-    if isinstance(result, dict):
+    if isinstance(result, dict) and "error" not in result:
+        result["saved_to"] = output_path
+        # Plot first trace after conversion
+        try:
+            handler_h5 = HDF5Handler(output_path)
+            record_data = handler_h5.get_trace_record_data(trace_index=0, dataset="traces")
+            if "error" not in record_data:
+                tr = TraceRecord(
+                    data=record_data["data"],
+                    sampling_rate=record_data["sampling_rate"],
+                    start_time=record_data.get("start_time"),
+                    metadata={"trace_index": 0, "type": "hdf5"}
+                )
+                plot_filename = "segy_hdf5_plot.png"
+                plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+                os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+                plot_result = plot_waveform_with_picks([tr], [], plot_path)
+                if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                    result["plot_path"] = plot_result
+        except Exception as e:
+            result["plot_error"] = str(e)
         return json.dumps(result, indent=2)
     return result
 
@@ -611,6 +672,7 @@ def get_miniseed_structure(params: Union[str, dict, None] = None):
                 )
                 output_filename = "miniseed_structure_plot.png"
                 output_path = os.path.join(DEFAULT_CONVERT_DIR, output_filename)
+                os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
                 plot_path = plot_waveform_with_picks([tr], [], output_path)
                 info["plot_path"] = plot_path
                 if isinstance(plot_path, str) and plot_path.lower().endswith(".png"):
@@ -893,6 +955,27 @@ def convert_hdf5_to_numpy(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     result["saved_to"] = result.get("output_path", output_path)
+
+    # Plot first trace after conversion
+    try:
+        data = np.load(output_path) if output_path.endswith(".npy") else None
+        if data is not None and data.size:
+            first_trace = data[0] if data.ndim > 1 else data
+            tr = TraceRecord(
+                data=first_trace,
+                sampling_rate=float(result.get("sampling_rate", 100.0)),
+                start_time=None,
+                metadata={"trace_index": 0, "type": "hdf5"}
+            )
+            plot_filename = "hdf5_numpy_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 # 工具：HDF5 转 Excel
@@ -1054,6 +1137,27 @@ def convert_miniseed_to_numpy(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     result["saved_to"] = output_path
+
+    # Plot first trace after conversion
+    try:
+        data = np.load(output_path) if output_path.endswith(".npy") else None
+        if data is not None and data.size:
+            first_trace = data[0] if data.ndim > 1 else data
+            tr = TraceRecord(
+                data=first_trace,
+                sampling_rate=float(result.get("sampling_rate", 100.0)),
+                start_time=None,
+                metadata={"trace_index": 0, "type": "miniseed"}
+            )
+            plot_filename = "miniseed_numpy_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 # 将 MiniSEED 写入 HDF5
@@ -1076,6 +1180,27 @@ def convert_miniseed_to_hdf5(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     result["saved_to"] = output_path
+
+    # Plot first trace after conversion
+    try:
+        handler_h5 = HDF5Handler(output_path)
+        record_data = handler_h5.get_trace_record_data(trace_index=0, dataset="traces")
+        if "error" not in record_data:
+            tr = TraceRecord(
+                data=record_data["data"],
+                sampling_rate=record_data["sampling_rate"],
+                start_time=record_data.get("start_time"),
+                metadata={"trace_index": 0, "type": "hdf5"}
+            )
+            plot_filename = "miniseed_hdf5_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 # 将 MiniSEED 导出为 SAC（每轨迹一个文件）
@@ -1097,6 +1222,30 @@ def convert_miniseed_to_sac(params: Union[str, dict, None] = None):
     result = handler.to_sac(output_dir=output_dir)
     if "error" in result:
         return json.dumps(result, indent=2)
+
+    # Plot first SAC file after conversion
+    try:
+        sac_files = [f for f in os.listdir(output_dir) if f.endswith(".sac")]
+        if sac_files:
+            first_sac = os.path.join(output_dir, sorted(sac_files)[0])
+            handler_sac = SACHandler(first_sac)
+            sac_data = handler_sac.get_trace_data(trace_index=0)
+            if "error" not in sac_data:
+                tr = TraceRecord(
+                    data=sac_data["data"],
+                    sampling_rate=sac_data["sampling_rate"],
+                    start_time=sac_data.get("start_time"),
+                    metadata={"trace_index": 0, "type": "sac"}
+                )
+                plot_filename = "miniseed_sac_plot.png"
+                plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+                os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+                plot_result = plot_waveform_with_picks([tr], [], plot_path)
+                if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                    result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 # 读取 SAC 结构信息
@@ -1205,6 +1354,27 @@ def convert_sac_to_numpy(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     result["saved_to"] = result.get("output_path", output_path)
+
+    # Plot first trace after conversion
+    try:
+        data = np.load(output_path) if output_path.endswith(".npy") else None
+        if data is not None and data.size:
+            first_trace = data[0] if data.ndim > 1 else data
+            tr = TraceRecord(
+                data=first_trace,
+                sampling_rate=float(result.get("sampling_rate", 100.0)),
+                start_time=None,
+                metadata={"trace_index": 0, "type": "sac"}
+            )
+            plot_filename = "sac_numpy_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 # 将 SAC 转换为 HDF5
@@ -1227,6 +1397,27 @@ def convert_sac_to_hdf5(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     result["saved_to"] = result.get("output_path", output_path)
+
+    # Plot first trace after conversion
+    try:
+        handler_h5 = HDF5Handler(output_path)
+        record_data = handler_h5.get_trace_record_data(trace_index=0, dataset="traces")
+        if "error" not in record_data:
+            tr = TraceRecord(
+                data=record_data["data"],
+                sampling_rate=record_data["sampling_rate"],
+                start_time=record_data.get("start_time"),
+                metadata={"trace_index": 0, "type": "hdf5"}
+            )
+            plot_filename = "sac_hdf5_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 # 将 SAC 转换为 MiniSEED
@@ -1246,6 +1437,27 @@ def convert_sac_to_miniseed(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     result["saved_to"] = result.get("output_path", output_path)
+
+    # Plot first trace after conversion
+    try:
+        handler_ms = MiniSEEDHandler(output_path)
+        ms_data = handler_ms.get_trace_record_data(trace_index=0)
+        if "error" not in ms_data:
+            tr = TraceRecord(
+                data=ms_data["data"],
+                sampling_rate=ms_data["sampling_rate"],
+                start_time=ms_data.get("start_time"),
+                metadata={"trace_index": 0, "type": "miniseed"}
+            )
+            plot_filename = "sac_miniseed_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 # 将 SAC 转换为 Excel
@@ -1265,6 +1477,27 @@ def convert_sac_to_excel(params: Union[str, dict, None] = None):
     if "error" in result:
         return json.dumps(result, indent=2)
     result["saved_to"] = result.get("output_path", output_path)
+
+    # Plot first trace after conversion
+    try:
+        handler_sac = SACHandler(path)
+        sac_data = handler_sac.get_trace_data(trace_index=0)
+        if "error" not in sac_data:
+            tr = TraceRecord(
+                data=sac_data["data"],
+                sampling_rate=sac_data["sampling_rate"],
+                start_time=sac_data.get("start_time"),
+                metadata={"trace_index": 0, "type": "sac"}
+            )
+            plot_filename = "sac_excel_plot.png"
+            plot_path = os.path.join(DEFAULT_CONVERT_DIR, plot_filename)
+            os.makedirs(DEFAULT_CONVERT_DIR, exist_ok=True)
+            plot_result = plot_waveform_with_picks([tr], [], plot_path)
+            if isinstance(plot_result, str) and plot_result.lower().endswith(".png"):
+                result["plot_path"] = plot_result
+    except Exception as e:
+        result["plot_error"] = str(e)
+
     return json.dumps(result, indent=2)
 
 
