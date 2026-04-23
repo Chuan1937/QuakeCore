@@ -1,3 +1,4 @@
+import csv
 from dataclasses import asdict
 
 from langchain.tools import tool
@@ -42,6 +43,25 @@ DEFAULT_CONVERT_DIR = "data/convert"
 DEFAULT_STRUCTURE_DIR = "data/structure"
 DEFAULT_PICKS_DIR = "data/picks"
 DEFAULT_LOCATION_DIR = "data/location"
+
+# Plot font configuration
+PLOT_FONT_FAMILY = "Times New Roman"
+PLOT_FONT_FALLBACK = ["DejaVu Sans", "Arial", "Helvetica", "sans-serif"]
+
+def configure_plot_fonts():
+    """Configure matplotlib to use Times New Roman with fallbacks."""
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib as mpl
+        # Try Times New Roman first, fall back to others
+        font_list = [PLOT_FONT_FAMILY] + PLOT_FONT_FALLBACK
+        mpl.rcParams['font.family'] = font_list
+        mpl.rcParams['axes.unicode_minus'] = False
+    except Exception:
+        pass
+
+# Apply font configuration on module load
+configure_plot_fonts()
 
 
 # 设置当前 SEGY 文件路径的辅助函数
@@ -1624,10 +1644,32 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
             dataset=dataset
         )
         
-        # 3. Generate plot
-        plot_path = _resolve_output_path(None, default_filename="picks_plot.png", base_dir=DEFAULT_PICKS_DIR)
-        os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+        # 3. Generate plot with filename-based naming
+        station_name = os.path.splitext(os.path.basename(path))[0]
+        plot_filename = f"{station_name}_picks.png"
+        plot_path = os.path.join(DEFAULT_PICKS_DIR, plot_filename)
+        os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
+        configure_plot_fonts()
         plot_waveform_with_picks(traces, picks, plot_path)
+
+        # 3.5. Save picks to CSV
+        csv_path = None
+        if picks:
+            csv_path = os.path.join(DEFAULT_PICKS_DIR, f"{station_name}_picks.csv")
+            os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['station', 'trace_index', 'phase_type', 'method', 'sample_index', 'absolute_time', 'normalized_score'])
+                for pick in picks:
+                    writer.writerow([
+                        station_name,
+                        pick.trace_index,
+                        pick.phase_type or 'P',
+                        pick.method,
+                        pick.sample_index,
+                        pick.absolute_time or '',
+                        pick.normalized_score if pick.normalized_score is not None else ''
+                    ])
 
         # 4. Build a brief Chinese summary (best P / best S per trace)
         best_by_trace: dict[int, dict[str, dict]] = {}
@@ -1649,7 +1691,9 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
         lines.append(f"![{'拾取结果图' if _l == 'zh' else 'Picking Results'}]({plot_path})")
         lines.append("")
 
-        lines.append(f"{'初至拾取已完成，结果图表已保存至' if _l == 'zh' else 'Phase picking completed, plot saved to'}：`{plot_path}`")
+        lines.append(f"{'初至拾取已完成，图表已保存至' if _l == 'zh' else 'Phase picking completed, plot saved to'}：`{plot_path}`")
+        if csv_path:
+            lines.append(f"{'拾取结果CSV已保存至' if _l == 'zh' else 'Picks CSV saved to'}：`{csv_path}`")
         for trace_index in sorted(best_by_trace.keys()):
             best_p = best_by_trace[trace_index].get("P")
             best_s = best_by_trace[trace_index].get("S")
@@ -1761,6 +1805,8 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
     all_picks = []
     all_traces = []
     file_summaries = []
+    individual_plot_paths = []
+    picks_by_station = []  # List of (station_name, picks) tuples for CSV
 
     try:
         for filepath in CURRENT_MINISEED_PATHS:
@@ -1782,13 +1828,27 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
                 all_picks.extend(file_picks)
                 all_traces.extend(file_traces)
 
-                # Get summary for this file
+                # Get station name from filename
                 filename = os.path.basename(filepath)
+                station_name = os.path.splitext(filename)[0]
+
+                # Store picks with station name for CSV
+                picks_by_station.append((station_name, file_picks))
+
                 file_summaries.append({
                     "file": filename,
+                    "station": station_name,
                     "traces": len(file_traces),
                     "picks": len(file_picks)
                 })
+
+                # Generate individual station plot
+                if file_traces and file_picks:
+                    individual_plot_path = os.path.join(DEFAULT_PICKS_DIR, f"{station_name}_picks.png")
+                    os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
+                    configure_plot_fonts()
+                    plot_waveform_with_picks(file_traces, file_picks, individual_plot_path)
+                    individual_plot_paths.append((station_name, individual_plot_path))
 
             except Exception as e:
                 file_summaries.append({
@@ -1799,24 +1859,42 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
         # Store all picks for location
         CURRENT_PICKS = all_picks
 
-        # Generate combined plot
-        plot_path = None
-        if all_traces and all_picks:
-            plot_path = os.path.join(DEFAULT_PICKS_DIR, "all_stations_picks.png")
+        # Save all picks to CSV
+        csv_path = None
+        if picks_by_station:
+            csv_path = os.path.join(DEFAULT_PICKS_DIR, "all_picks.csv")
             os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
-            plot_waveform_with_picks(all_traces, all_picks, plot_path)
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['station', 'trace_index', 'phase_type', 'method', 'sample_index', 'absolute_time', 'normalized_score'])
+                for station_name, station_picks in picks_by_station:
+                    for pick in station_picks:
+                        writer.writerow([
+                            station_name,
+                            pick.trace_index,
+                            pick.phase_type or 'P',
+                            pick.method,
+                            pick.sample_index,
+                            pick.absolute_time or '',
+                            pick.normalized_score if pick.normalized_score is not None else ''
+                        ])
 
         # Build output (language-aware)
         _l = CURRENT_LANG
         lines = []
-        if plot_path:
-            lines.append(f"![{'所有台站拾取结果图' if _l == 'zh' else 'All Stations Picking Results'}]({plot_path})")
+
+        # Add individual station plots
+        for station_name, ipath in individual_plot_paths:
+            lines.append(f"![{'台站' if _l == 'zh' else 'Station'} {station_name}]({ipath})")
+        if individual_plot_paths:
             lines.append("")
 
         lines.append(f"**{'初至拾取完成' if _l == 'zh' else 'Phase picking completed'}**")
         lines.append(f"- {'处理文件数' if _l == 'zh' else 'Files processed'}: {len(CURRENT_MINISEED_PATHS)}")
         lines.append(f"- {'总拾取数' if _l == 'zh' else 'Total picks'}: {len(all_picks)}")
         lines.append(f"- {'总轨迹数' if _l == 'zh' else 'Total traces'}: {len(all_traces)}")
+        if csv_path:
+            lines.append(f"- {'拾取结果CSV' if _l == 'zh' else 'Picks CSV'}: `{csv_path}`")
         lines.append("")
 
         # Show per-file summary
