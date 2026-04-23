@@ -16,7 +16,7 @@ git clone https://github.com/Chuan1937/QuakeCore.git
 cd QuakeCore
 
 # Create and activate a conda environment
-conda create -n quakecore python=3.10 -y
+conda create -n quakecore python=3.12 -y
 conda activate quakecore
 
 # Install dependencies
