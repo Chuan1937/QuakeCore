@@ -35,8 +35,8 @@ We recommend using Conda to manage your Python environment.
 When you have the code downloaded, extracted and get into the directory, create and activate a new virtual environment:
 
 ```bash
-# Create a new conda environment named 'quakecore' (Python 3.10 recommended)
-conda create -n quakecore python=3.10 -y
+# Create a new conda environment named 'quakecore' (Python 3.12 recommended)
+conda create -n quakecore python=3.12 -y
 
 # Activate the environment
 conda activate quakecore
