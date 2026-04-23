@@ -52,6 +52,7 @@ def _build_llm(
     model_name: str,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    streaming: bool = False,
 ):
     if provider == "deepseek":
         key = api_key or os.getenv("DEEPSEEK_API_KEY")
@@ -63,6 +64,7 @@ def _build_llm(
             base_url=base_url or "https://api.deepseek.com",
             model=model_name,
             temperature=0,
+            streaming=streaming,
         )
 
     # # Default to Ollama LLM
@@ -76,6 +78,7 @@ def _build_llm(
         base_url="https://api.deepseek.com",
         model=model_name,
         temperature=0,
+        streaming=streaming,
     )
 
 
@@ -87,10 +90,11 @@ def get_agent_executor(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     lang: str = "en",
+    streaming: bool = False,
 ):
     """Create a LangChain ReAct agent with configurable LLM backends."""
 
-    llm = _build_llm(provider=provider, model_name=model_name, api_key=api_key, base_url=base_url)
+    llm = _build_llm(provider=provider, model_name=model_name, api_key=api_key, base_url=base_url, streaming=streaming)
 
     tools = [
         get_loaded_context, load_local_data, download_seismic_data,
@@ -252,6 +256,7 @@ Question: {input}
 Thought:{agent_scratchpad}'''
 
     prompt = PromptTemplate.from_template(template)
+    prompt = prompt.partial(tool_names=", ".join([t.name for t in tools]))
     agent = create_react_agent(llm, tools, prompt)
 
     return AgentExecutor(
