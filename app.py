@@ -36,48 +36,194 @@ def render_logo_svg(width=40):
 st.set_page_config(
     page_title="QuakeCore Engine",
     page_icon=LOGO_PNG if os.path.exists(LOGO_PNG) else "🌊",
-    layout="centered",
-    initial_sidebar_state="collapsed",
+    layout="wide",
 )
 
-# Modern Dark Theme CSS
+# ChatGPT Light Theme CSS
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
 
-    /* Hide sidebar completely */
-    section[data-testid="stSidebar"] {display: none !important;}
+    /* Sidebar styling - ChatGPT style */
+    section[data-testid="stSidebar"] {
+        background: var(--bg-secondary) !important;
+        border-right: 1px solid var(--border-color) !important;
+        width: 280px !important;
+    }
+
+    [data-testid="stSidebarNav"] {
+        padding: 0.5rem !important;
+    }
+
+    /* Sidebar content */
+    .sidebar-content {
+        padding: 1rem !important;
+    }
+
+    /* Sidebar buttons - minimal style */
+    [data-testid="stSidebar"] [data-testid="stButton"] > button {
+        background: transparent !important;
+        border: none !important;
+        padding: 0.25rem 0.5rem !important;
+        font-size: 0.85rem !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
+        background: var(--bg-tertiary) !important;
+    }
+
+    /* Delete button - completely frameless */
+    [data-testid="stSidebar"] button[key^="del_conv"] {
+        background: transparent !important;
+        border: 0px !important;
+        outline: none !important;
+        box-shadow: none !important;
+        padding: 0px !important;
+        margin: 0px !important;
+        color: var(--text-secondary) !important;
+        font-size: 0.9rem !important;
+        font-weight: normal !important;
+        border-radius: 0px !important;
+        min-width: 0px !important;
+    }
+
+    [data-testid="stSidebar"] button[key^="del_conv"]:hover {
+        color: #ff4444 !important;
+        background: transparent !important;
+        border: 0px !important;
+    }
+
+    .qc-sidebar-brand {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 0 0 0.25rem 0;
+        line-height: 1.2;
+    }
+
+    /* New chat button */
+    .new-chat-btn {
+        width: 100% !important;
+        background: var(--bg-secondary) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 8px !important;
+        padding: 0.75rem 1rem !important;
+        color: var(--text-primary) !important;
+        font-weight: 500 !important;
+        text-align: left !important;
+        cursor: pointer !important;
+        transition: all 0.15s ease !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
+    }
+
+    .new-chat-btn:hover {
+        background: var(--bg-tertiary) !important;
+    }
+
+    /* Chat history list */
+    .chat-history {
+        margin-top: 1rem !important;
+    }
+
+    .chat-history-item {
+        padding: 0.6rem 0.75rem !important;
+        border-radius: 8px !important;
+        color: var(--text-primary) !important;
+        cursor: pointer !important;
+        transition: background 0.15s ease !important;
+        margin-bottom: 0.25rem !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        font-size: 0.9rem !important;
+    }
+
+    .chat-history-item:hover {
+        background: var(--bg-tertiary) !important;
+    }
+
+    .chat-history-item.active {
+        background: var(--bg-tertiary) !important;
+        font-weight: 500 !important;
+    }
+
+    .chat-history-item span {
+        display: block !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    /* Delete chat button */
+    .delete-chat-btn {
+        opacity: 0.5 !important;
+        transition: opacity 0.15s !important;
+        float: right !important;
+        padding: 0.2rem !important;
+        background: transparent !important;
+        border: none !important;
+        cursor: pointer !important;
+    }
+
+    .delete-chat-btn:hover {
+        opacity: 1 !important;
+    }
+
+    /* Sidebar footer */
+    .sidebar-footer {
+        position: absolute !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        padding: 1rem !important;
+        border-top: 1px solid var(--border-color) !important;
+        background: var(--bg-secondary) !important;
+    }
+
+    /* ChatGPT Light Theme */
+    :root {
+        --bg-primary: #ffffff;
+        --bg-secondary: #f7f7f8;
+        --bg-tertiary: #ececf1;
+        --border-color: #e5e5e5;
+        --text-primary: #1a1a1a;
+        --text-secondary: #6e6e6e;
+        --text-muted: #9a9a9a;
+        --accent: #10a37f;
+        --accent-hover: #0d8a6a;
+        --assistant-bubble: #ffffff;
+        --user-bubble: #10a37f;
+    }
 
     .stApp {
-        background: #0f0f1a;
+        background: var(--bg-primary);
+        color: var(--text-primary);
     }
 
     .main .block-container {
         max-width: 800px;
-        padding: 1.5rem 1.5rem 6rem;
+        padding: 1rem 1rem 6.5rem;
+        margin: 0 auto;
     }
 
-    /* Chat messages container */
-    [data-testid="stChatMessage"] {
-        padding: 0.25rem 0 !important;
-    }
-
-    /* User message - align right */
+    /* User message - right side */
     [data-testid="stChatMessageUser"] {
         display: flex !important;
-        justify-content: flex-end !important;
+        flex-direction: row-reverse !important;
+        justify-content: flex-start !important;
+        gap: 0.5rem !important;
     }
 
-    /* User message bubble */
     [data-testid="stChatMessageUser"] [data-testid="stChatMessageContent"] {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-        border-radius: 18px 18px 4px 18px !important;
-        padding: 10px 14px !important;
+        background: var(--user-bubble) !important;
+        border-radius: 18px 4px 18px 18px !important;
+        padding: 0.7rem 1rem !important;
         color: white !important;
-        display: inline-block !important;
-        max-width: 70% !important;
+        max-width: 80% !important;
+        border: none !important;
     }
 
     [data-testid="stChatMessageUser"] [data-testid="stChatMessageContent"] p,
@@ -86,119 +232,651 @@ st.markdown("""
         color: white !important;
     }
 
-    /* Assistant message - align left */
+    /* Assistant message - left side */
     [data-testid="stChatMessageAssistant"] {
         display: flex !important;
+        flex-direction: row !important;
         justify-content: flex-start !important;
+        gap: 0.5rem !important;
     }
 
-    /* Assistant message bubble */
     [data-testid="stChatMessageAssistant"] [data-testid="stChatMessageContent"] {
-        background: #1e1e32 !important;
-        border: 1px solid #2a2a4a !important;
-        border-radius: 18px !important;
-        padding: 10px 14px !important;
-        display: inline-block !important;
-        max-width: 85% !important;
+        background: var(--assistant-bubble) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 4px 18px 18px 4px !important;
+        padding: 0.7rem 1rem !important;
+        max-width: 80% !important;
+        color: var(--text-primary) !important;
     }
 
-    /* Chat input */
+    /* Chat input - clean design */
+    .stChatInput {
+        background: #ffffff !important;
+    }
+
     .stChatInput > div {
-        background: #1a1a2e !important;
-        border: 1px solid #2a2a4a !important;
+        background: #ffffff !important;
+        border: 1px solid var(--border-color) !important;
         border-radius: 24px !important;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        transition: all 0.2s ease !important;
+    }
+
+    .stChatInput > div:focus-within {
+        border-color: var(--accent) !important;
+        box-shadow: 0 2px 16px rgba(16, 163, 127, 0.15) !important;
     }
 
     .stChatInput textarea {
-        color: #e2e8f0 !important;
+        color: #1a1a1a !important;
+        background: transparent !important;
     }
 
     .stChatInput textarea::placeholder {
-        color: #6b7280 !important;
+        color: #9a9a9a !important;
+        opacity: 1 !important;
     }
 
-    /* Buttons */
-    .stButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-        border: none !important;
-        border-radius: 20px !important;
+    /* Ensure chat input text is always dark */
+    [data-testid="stChatInput"] textarea {
+        color: #1a1a1a !important;
+        background: transparent !important;
+    }
+
+    /* Chat input inner container - white background */
+    [data-testid="stChatInput"] > div,
+    [data-testid="stChatInput"] > div > div,
+    [data-testid="stChatInput"] .stTextArea {
+        background: #ffffff !important;
+        color: #1a1a1a !important;
+    }
+
+    /* Target all possible nested elements */
+    .stChatInput div,
+    .stChatInput section,
+    .stChatInput label {
+        background: #ffffff !important;
+        color: #1a1a1a !important;
+    }
+
+    /* Streamlit theme override for chat input */
+    section[data-testid="stChatInput"] {
+        background-color: #ffffff !important;
+    }
+
+    section[data-testid="stChatInput"] > div {
+        background-color: #ffffff !important;
+    }
+
+    /* Chat input send button icon - make it green like ChatGPT */
+    [data-testid="stChatInput"] button {
+        background: #10a37f !important;
         color: white !important;
-        padding: 0.5rem 1rem !important;
+        border: none !important;
+        border-radius: 50% !important;
+    }
+
+    [data-testid="stChatInput"] button:hover {
+        background: #0d8a6a !important;
+    }
+
+    [data-testid="stChatInput"] button svg {
+        fill: white !important;
+        color: white !important;
+    }
+
+    /* Text area within chat input */
+    [data-testid="stChatInput"] textarea,
+    [data-testid="stChatInput"] .stTextArea textarea {
+        background: transparent !important;
+        color: #1a1a1a !important;
+        caret-color: #1a1a1a !important;
+    }
+
+    /* Buttons - minimal style */
+    .stButton > button {
+        background: transparent !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 8px !important;
+        color: var(--text-secondary) !important;
+        padding: 0.45rem 0.85rem !important;
         font-weight: 500 !important;
+        transition: all 0.15s ease !important;
     }
 
     .stButton > button:hover {
-        opacity: 0.9;
+        background: var(--bg-secondary) !important;
+        color: var(--text-primary) !important;
+        border-color: #d0d0d0 !important;
     }
 
-    /* Status widget */
+    /* Status widget - thinking animation */
     div[data-testid="stStatusWidget"] {
-        background: rgba(102, 126, 234, 0.1) !important;
-        border: 1px solid rgba(102, 126, 234, 0.3) !important;
-        border-radius: 12px !important;
+        background: #ffffff !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 16px !important;
+        padding: 1rem 1.25rem !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    div[data-testid="stStatusWidget"] p {
+        color: var(--text-secondary) !important;
+        font-size: 0.9rem !important;
+    }
+
+    /* Thinking dots animation */
+    .thinking-dots {
+        display: inline-flex;
+        gap: 4px;
+        padding: 0.5rem 0;
+    }
+
+    .thinking-dots span {
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        border-radius: 50%;
+        animation: thinking 1.4s ease-in-out infinite;
+    }
+
+    .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes thinking {
+        0%, 60%, 100% {
+            transform: translateY(0);
+            opacity: 0.4;
+        }
+        30% {
+            transform: translateY(-6px);
+            opacity: 1;
+        }
+    }
+
+    /* Fade in animation for responses */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    [data-testid="stChatMessageContent"] {
+        animation: fadeInUp 0.3s ease-out;
     }
 
     /* Images in chat */
     .stImage img {
         border-radius: 12px;
         margin-top: 0.5rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
 
-    /* Expander */
+    /* Captions */
+    [data-testid="stCaption"] {
+        color: var(--text-muted) !important;
+    }
+
+    /* Expander - clean style */
     .streamlit-expanderHeader {
-        background: #1a1a2e !important;
-        border: 1px solid #2a2a4a !important;
-        border-radius: 10px !important;
+        background: var(--bg-secondary) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 12px !important;
         font-size: 0.85rem !important;
+        color: var(--text-secondary) !important;
+        transition: all 0.15s ease !important;
     }
 
-    /* Dialog */
-    .stDialog {
-        background: #1a1a2e !important;
-        border: 1px solid #2a2a4a !important;
-        border-radius: 16px !important;
+    .streamlit-expanderHeader:hover {
+        background: var(--bg-tertiary) !important;
     }
 
-    /* Scrollbar */
-    ::-webkit-scrollbar {width: 6px;}
+    .streamlit-expanderContent {
+        background: #ffffff !important;
+        border: 1px solid var(--border-color) !important;
+        border-top: none !important;
+        border-radius: 0 0 12px 12px !important;
+    }
+
+    /* Dialog - clean style */
+    [data-testid="stDialog"] {
+        background: #ffffff !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 20px !important;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12) !important;
+    }
+
+    [data-testid="stMarkdownContainer"] a {
+        color: var(--accent) !important;
+    }
+
+    [data-testid="stMarkdownContainer"] code {
+        background: var(--bg-secondary);
+        color: var(--text-primary) !important;
+        border-radius: 4px;
+        padding: 0.1rem 0.4rem;
+        font-size: 0.88em;
+    }
+
+    [data-testid="stMarkdownContainer"] pre {
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        background: var(--bg-secondary);
+    }
+
+    [data-testid="stMarkdownContainer"] pre code {
+        background: transparent !important;
+    }
+
+    [data-testid="stChatMessageAvatarUser"] img,
+    [data-testid="stChatMessageAvatarAssistant"] img {
+        border-radius: 50% !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    /* Scrollbar - minimal */
+    ::-webkit-scrollbar {width: 8px;}
     ::-webkit-scrollbar-track {background: transparent;}
-    ::-webkit-scrollbar-thumb {background: #3b3b5c; border-radius: 3px;}
+    ::-webkit-scrollbar-thumb {background: #d1d1d1; border-radius: 4px;}
+    ::-webkit-scrollbar-thumb:hover {background: #b0b0b0;}
+
+    /* Selectbox/dropdown - clean style */
+    .stSelectbox > div > div {
+        background: #ffffff !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 10px !important;
+        color: var(--text-primary) !important;
+    }
+
+    .stSelectbox [data-baseweb="select"] {
+        background: #ffffff !important;
+    }
+
+    .stSelectbox [data-baseweb="popover"] {
+        background: #ffffff !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.1) !important;
+    }
+
+    .stSelectbox [data-baseweb="option"] {
+        background: #ffffff !important;
+        color: var(--text-primary) !important;
+    }
+
+    .stSelectbox [data-baseweb="option"]:hover {
+        background: var(--bg-secondary) !important;
+    }
+
+    /* Text input - clean style */
+    .stTextInput > div > div {
+        background: #ffffff !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 10px !important;
+    }
+
+    .stTextInput input {
+        color: var(--text-primary) !important;
+        background: transparent !important;
+    }
+
+    /* Header styling */
+    h1, h2, h3, h4, h5, h6 {
+        color: var(--text-primary) !important;
+    }
+
+    /* Home hero */
+    .qc-home-hero-text {
+        padding-top: 0.1rem;
+        text-align: center;
+    }
+
+    .qc-home-title {
+        font-size: 2rem;
+        font-weight: 650;
+        color: #1a1a1a;
+        line-height: 1.2;
+        margin: 0 0 0.45rem 0;
+    }
+
+    .qc-home-subtitle {
+        color: #6e6e6e;
+        font-size: 1rem;
+        margin: 0 0 0.4rem 0;
+        line-height: 1.5;
+    }
+
+    .qc-home-formats {
+        color: #9a9a9a;
+        font-size: 0.86rem;
+        margin: 0;
+        line-height: 1.45;
+    }
+
+    .qc-home-actions-spacer {
+        height: 0.45rem;
+    }
+
+    @media (max-width: 900px) {
+        .qc-home-title {
+            font-size: 1.6rem;
+        }
+    }
+
+    /* Info/success/warning/error boxes */
+    .stAlert {
+        border-radius: 12px !important;
+    }
+
+    /* File upload area */
+    [data-testid="stFileUploadDropzone"] {
+        background: var(--bg-secondary) !important;
+        border: 2px dashed var(--border-color) !important;
+        border-radius: 16px !important;
+        transition: all 0.2s ease !important;
+    }
+
+    [data-testid="stFileUploadDropzone"]:hover {
+        border-color: var(--accent) !important;
+        background: rgba(16, 163, 127, 0.03) !important;
+    }
+
+    /* Spinner animation */
+    [data-testid="stSpinner"] {
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+
+    /* Loading shimmer effect */
+    @keyframes shimmer {
+        0% { background-position: -200% 0; }
+        100% { background-position: 200% 0; }
+    }
+
+    .loading-shimmer {
+        background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-tertiary) 50%, var(--bg-secondary) 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: 8px;
+    }
+
+    /* Blur effect for processing */
+    .processing-blur {
+        filter: blur(2px);
+        transition: filter 0.3s ease;
+    }
+
+    /* Main content area - ensure white background */
+    section[data-testid="stMainBlockContainer"] {
+        background: #ffffff !important;
+    }
+
+    /* Bottom chat area background */
+    .stApp > div:first-child {
+        background: #ffffff !important;
+    }
+
+    /* Dialog / Modal styling */
+    [data-testid="stDialog"] {
+        background: #ffffff !important;
+        border: 1px solid #e5e5e5 !important;
+        border-radius: 20px !important;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12) !important;
+    }
+
+    [data-testid="stDialog"] h1,
+    [data-testid="stDialog"] h2,
+    [data-testid="stDialog"] h3,
+    [data-testid="stDialog"] h4,
+    [data-testid="stDialog"] p,
+    [data-testid="stDialog"] span,
+    [data-testid="stDialog"] label {
+        color: #1a1a1a !important;
+    }
+
+    [data-testid="stDialog"] [data-testid="stMarkdownContainer"] {
+        color: #1a1a1a !important;
+    }
+
+    /* App body background */
+    .stApp {
+        background-color: #ffffff !important;
+    }
+
+    /* Main content background */
+    .main {
+        background: #ffffff !important;
+    }
+
+    /* Streamlit form and input backgrounds */
+    .stForm,
+    .stForm > div {
+        background: #ffffff !important;
+    }
+
+    /* Multi-select and dropdown styling */
+    [data-baseweb="popover"] {
+        background: #ffffff !important;
+    }
+
+    /* Date input and number input */
+    .stNumberInput > div > div,
+    .stDateInput > div > div {
+        background: #ffffff !important;
+        border-color: #e5e5e5 !important;
+    }
+
+    /* Slider styling */
+    .stSlider > div > div > div {
+        background: #e5e5e5 !important;
+    }
+
+    /* Checkbox styling */
+    .stCheckbox > label > div {
+        background: #ffffff !important;
+    }
+
+    /* Radio button styling */
+    .stRadio > div {
+        background: #ffffff !important;
+    }
+
+    /* Progress bar */
+    .stProgress > div > div {
+        background: #e5e5e5 !important;
+    }
+
+    /* Metric styling */
+    .stMetric {
+        background: #ffffff !important;
+    }
+
+    /* Table styling */
+    .stTable {
+        background: #ffffff !important;
+    }
+
+    /* JSON styling */
+    .stJson {
+        background: #ffffff !important;
+    }
+
+    /* Code block styling */
+    .stCodeBlock {
+        background: #f7f7f8 !important;
+        border: 1px solid #e5e5e5 !important;
+        border-radius: 10px !important;
+    }
+
+    /* Divider */
+    hr {
+        border-color: #e5e5e5 !important;
+    }
+
+    /* Tooltip */
+    .stTooltipIcon {
+        color: #6e6e6e !important;
+    }
+
+    /* Download button */
+    .stDownloadButton {
+        background: #ffffff !important;
+    }
+
+    /* Color picker */
+    .stColorPicker > div > div {
+        background: #ffffff !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Header with settings + language toggle
+# ==================== Session State ====================
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "conversations" not in st.session_state:
+    st.session_state.conversations = {}
+if "current_conversation_id" not in st.session_state:
+    st.session_state.current_conversation_id = None
+if "agent" not in st.session_state:
+    st.session_state.agent = None
+if "agent_config" not in st.session_state:
+    st.session_state.agent_config = {"provider": "deepseek", "model_name": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY", ""), "base_url": "https://api.deepseek.com"}
+if "agent_code_fingerprint" not in st.session_state:
+    st.session_state.agent_code_fingerprint = None
+if "agent_error" not in st.session_state:
+    st.session_state.agent_error = None
+if "show_settings" not in st.session_state:
+    st.session_state.show_settings = False
 if "lang" not in st.session_state:
     st.session_state.lang = "en"
 lang = st.session_state.lang
 set_current_lang(lang)
-header_col1, header_col2, header_col3, header_col4 = st.columns([1, 6, 1, 1])
-with header_col1:
-    logo_svg = render_logo_svg(40)
-    if logo_svg:
-        st.markdown(logo_svg, unsafe_allow_html=True)
-    elif os.path.exists(LOGO_PNG):
-        st.image(LOGO_PNG, width=40)
 
-with header_col2:
-    st.markdown("""
-    <h1 style="margin: 0; font-size: 1.5rem; font-weight: 600;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        text-align: center;">
-        QuakeCore Engine
-    </h1>
-    """, unsafe_allow_html=True)
+# ==================== Layout ====================
+# Sidebar content - chat history
+with st.sidebar:
+    st.markdown('<div class="qc-sidebar-brand">QuakeCore</div>', unsafe_allow_html=True)
 
-with header_col3:
-    if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang)):
-        st.session_state.lang = "en" if lang == "zh" else "zh"
-        st.session_state.agent = None  # Force re-init with new language
+    st.divider()
+
+    # New Chat button
+    if st.button("➕ 新对话", key="new_chat_btn", use_container_width=True):
+        if st.session_state.current_conversation_id and st.session_state.messages:
+            st.session_state.conversations[st.session_state.current_conversation_id]["messages"] = st.session_state.messages
+        import uuid
+        new_id = str(uuid.uuid4())[:8]
+        st.session_state.conversations[new_id] = {"title": "新对话", "messages": []}
+        st.session_state.current_conversation_id = new_id
+        st.session_state.messages = []
         st.rerun()
 
-with header_col4:
-    if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang)):
-        st.session_state.show_settings = True
+    st.divider()
+
+    # Chat history
+    st.markdown("**历史对话**")
+    if st.session_state.conversations:
+        conv_list = list(reversed(list(st.session_state.conversations.items())))
+        for i, (conv_id, conv_data) in enumerate(conv_list, 1):
+            is_active = st.session_state.current_conversation_id == conv_id
+            label = f"**{i}. {conv_data['title']}**" if is_active else f"{i}. {conv_data['title']}"
+            row_cols = st.columns([6.5, 1], gap="small")
+            with row_cols[0]:
+                if st.button(label, key=f"conv_{conv_id}", use_container_width=True):
+                    if st.session_state.current_conversation_id and st.session_state.messages:
+                        st.session_state.conversations[st.session_state.current_conversation_id]["messages"] = st.session_state.messages
+                    st.session_state.current_conversation_id = conv_id
+                    st.session_state.messages = conv_data["messages"]
+                    st.rerun()
+            with row_cols[1]:
+                if st.button("✕", key=f"del_conv_{conv_id}", help="删除对话", type="tertiary", use_container_width=True):
+                    st.session_state.conversations.pop(conv_id, None)
+
+                    if st.session_state.current_conversation_id == conv_id:
+                        if st.session_state.conversations:
+                            next_id = list(st.session_state.conversations.keys())[-1]
+                            st.session_state.current_conversation_id = next_id
+                            st.session_state.messages = st.session_state.conversations[next_id]["messages"]
+                        else:
+                            st.session_state.current_conversation_id = None
+                            st.session_state.messages = []
+                    st.rerun()
+    else:
+        st.caption("暂无历史对话")
+
+    st.divider()
+
+    # Model info
+    config = st.session_state.get("agent_config", {})
+    model_name = config.get("model_name", "未配置")
+    st.caption(f"模型: {model_name}")
+
+# ==================== Load current conversation ====================
+if st.session_state.current_conversation_id:
+    conv = st.session_state.conversations.get(st.session_state.current_conversation_id)
+    if conv and conv["messages"]:
+        st.session_state.messages = conv["messages"]
+
+# ==================== Main content header ====================
+is_homepage = not st.session_state.messages
+if is_homepage:
+    hero_cols = st.columns([0.8, 5.6, 1.6], gap="medium")
+    with hero_cols[0]:
+        logo_svg = render_logo_svg(52)
+        if logo_svg:
+            st.markdown(logo_svg, unsafe_allow_html=True)
+        elif os.path.exists(LOGO_PNG):
+            st.image(LOGO_PNG, width=52)
+
+    with hero_cols[1]:
+        _lang = st.session_state.lang
+        st.markdown(
+            f"""
+            <div class="qc-home-hero-text">
+                <div class="qc-home-title">{t("app_title", _lang)}</div>
+                <p class="qc-home-subtitle">{t("app_subtitle", _lang)}</p>
+                <p class="qc-home-formats">{t("app_formats", _lang)}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with hero_cols[2]:
+        st.markdown('<div class="qc-home-actions-spacer"></div>', unsafe_allow_html=True)
+        action_cols = st.columns(2, gap="small")
+        with action_cols[0]:
+            if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang), use_container_width=True):
+                st.session_state.lang = "en" if lang == "zh" else "zh"
+                st.session_state.agent = None
+                st.rerun()
+        with action_cols[1]:
+            if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang), use_container_width=True):
+                st.session_state.show_settings = True
+else:
+    cols = st.columns([0.5, 3, 0.7])
+    with cols[0]:
+        logo_svg = render_logo_svg(40)
+        if logo_svg:
+            st.markdown(logo_svg, unsafe_allow_html=True)
+        elif os.path.exists(LOGO_PNG):
+            st.image(LOGO_PNG, width=40)
+    with cols[2]:
+        action_cols = st.columns(2, gap="small")
+        with action_cols[0]:
+            if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang), use_container_width=True):
+                st.session_state.lang = "en" if lang == "zh" else "zh"
+                st.session_state.agent = None
+                st.rerun()
+        with action_cols[1]:
+            if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang), use_container_width=True):
+                st.session_state.show_settings = True
 
 # Settings Dialog
 if st.session_state.get("show_settings"):
@@ -235,22 +913,6 @@ if st.session_state.get("show_settings"):
 
     settings_dialog()
 
-# Session State
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "agent" not in st.session_state:
-    st.session_state.agent = None
-if "agent_config" not in st.session_state:
-    st.session_state.agent_config = {"provider": "deepseek", "model_name": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY", ""), "base_url": "https://api.deepseek.com"}
-if "agent_code_fingerprint" not in st.session_state:
-    st.session_state.agent_code_fingerprint = None
-if "agent_error" not in st.session_state:
-    st.session_state.agent_error = None
-if "show_settings" not in st.session_state:
-    st.session_state.show_settings = False
-if "lang" not in st.session_state:
-    st.session_state.lang = "en"
-
 # Agent initialization
 def _get_fingerprint():
     try:
@@ -280,22 +942,7 @@ agent_ready = st.session_state.agent is not None
 
 # Welcome screen
 if not st.session_state.messages:
-    _lang = st.session_state.lang
-    st.markdown(f"""
-    <div style="text-align: center; padding: 2rem 0;">
-        <div style="font-size: 2rem; font-weight: 700;
-            background: linear-gradient(135deg, #4A6591 0%, #E64B35 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-            {t("app_title", _lang)}
-        </div>
-        <p style="color: #94a3b8; font-size: 0.9rem; margin: 0.5rem 0;">
-            {t("app_subtitle", _lang)}
-        </p>
-        <p style="color: #6b7280; font-size: 0.8rem;">
-            {t("app_formats", _lang)}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("<div style='height: 0.35rem;'></div>", unsafe_allow_html=True)
 
 # Display chat history
 for msg in st.session_state.messages:
@@ -325,7 +972,7 @@ for msg in st.session_state.messages:
         # Thinking process expander
         if steps := msg.get("steps"):
             with st.expander(f"💭 {t('thinking_process', lang)}"):
-                st.markdown(f"<div style='font-size: 0.85rem; color: #9ca3af;'>{steps}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-size: 0.85rem; color: #b0b0b0;'>{steps}</div>", unsafe_allow_html=True)
 
 # Chat input with file upload
 prompt = st.chat_input(
@@ -379,6 +1026,18 @@ if prompt and agent_ready:
         "content": content,
         "files": files_info if files_info else None
     })
+
+    # Update conversation title if it's a new conversation
+    if st.session_state.current_conversation_id:
+        conv = st.session_state.conversations.get(st.session_state.current_conversation_id)
+        if conv and conv["title"] == "新对话":
+            # Use first 30 chars of user message as title
+            title = content[:30].replace("\n", " ").strip()
+            if len(content) > 30:
+                title += "..."
+            st.session_state.conversations[st.session_state.current_conversation_id]["title"] = title
+        # Sync messages to conversation storage
+        st.session_state.conversations[st.session_state.current_conversation_id]["messages"] = st.session_state.messages
 
     # Display user message immediately
     user_avatar = USER_AVATAR if os.path.exists(USER_AVATAR) else "👤"
@@ -446,6 +1105,10 @@ if prompt and agent_ready:
                 "images": response_images,
                 "steps": steps_text
             })
+
+            # Sync to conversation storage
+            if st.session_state.current_conversation_id:
+                st.session_state.conversations[st.session_state.current_conversation_id]["messages"] = st.session_state.messages
 
             status.update(label=t("done", lang), state="complete")
 
