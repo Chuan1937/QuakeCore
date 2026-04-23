@@ -36,7 +36,10 @@ from agent.tools import (
     convert_sac_to_excel,
     pick_first_arrivals,
     pick_all_miniseed_files,
+    prepare_nearseismic_taup_cache,
     locate_earthquake,
+    locate_uploaded_data_nearseismic,
+    locate_place_data_nearseismic,
     add_station_coordinates,
     plot_location_map,
 )
@@ -119,7 +122,10 @@ def get_agent_executor(
         convert_sac_to_excel,
         pick_first_arrivals,
         pick_all_miniseed_files,
+        prepare_nearseismic_taup_cache,
         locate_earthquake,
+        locate_uploaded_data_nearseismic,
+        locate_place_data_nearseismic,
         add_station_coordinates,
         plot_location_map,
     ]
@@ -146,7 +152,7 @@ Important rules:
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
-- When the user asks to download seismic data from a region (e.g., "download Alaska earthquake data", "下载阿拉斯加地震数据"), use download_seismic_data with latitude, longitude, and radius_km parameters. After downloading, automatically proceed with the earthquake location workflow (pick_all_miniseed_files -> add_station_coordinates -> locate_earthquake -> plot_location_map).
+- When the user asks to download and locate seismic data from a region (e.g., "download Alaska earthquake data", "下载阿拉斯加地震数据"), prefer locate_place_data_nearseismic with latitude and longitude.
 
 **Phase Picking Rules**:
 - By default, phase picking uses deep learning methods (EQTransformer and PhaseNet) only. Do NOT specify the `methods` parameter unless the user explicitly requests a specific method.
@@ -155,11 +161,14 @@ Important rules:
 **Earthquake Location Workflow**:
 1. First use get_loaded_context to check loaded files and pick status. If the user provides a local directory path (e.g. "example_data"), use load_local_data to load the files first. When the user says "local data", "本地数据", or does not specify a path but wants earthquake location, default to loading "example_data/".
 2. If multiple MiniSEED files are loaded (multi-station data), use pick_all_miniseed_files for batch phase picking
-3. Call add_station_coordinates with NO parameters (empty dict {{}}). It will auto-load from data/stations.json or example_data/stations.json
-4. Use locate_earthquake to locate the earthquake
-5. Use plot_location_map to plot the earthquake location and station positions on a map using PyGMT
-6. Station coordinates are auto-loaded from stations.json files. Only provide coordinates manually if auto-loading fails.
-7. Test data true locations:
+3. Run prepare_nearseismic_taup_cache before near-seismic location so TauP files are reused or auto-built.
+4. Call add_station_coordinates with NO parameters (empty dict {{}}). It will auto-load from data/stations.json or example_data/stations.json
+5. For uploaded/local user data, prefer locate_uploaded_data_nearseismic (fallback to locate_earthquake if needed)
+6. For place-based requests ("locate data around X"), prefer locate_place_data_nearseismic with latitude/longitude
+7. If user explicitly asks for classic locator, use locate_earthquake
+8. Use plot_location_map to plot the earthquake location and station positions on a map using PyGMT
+9. Station coordinates are auto-loaded from stations.json files. Only provide coordinates manually if auto-loading fails.
+10. Test data true locations:
    - Alaska event (data/): 54.65°N, 159.67°W, depth 28 km
    - Luding event (example_data/): 29.67°N, 102.28°E, depth 10 km, M6.8
 
@@ -203,7 +212,7 @@ Important rules:
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
-- 当用户要求下载某个区域的地震数据（如"下载阿拉斯加地震数据"、"下载波形数据"），使用 download_seismic_data 工具，提供 latitude、longitude、radius_km 参数。下载完成后自动执行定位流程（pick_all_miniseed_files -> add_station_coordinates -> locate_earthquake -> plot_location_map）。
+- 当用户要求“按地点下载并定位”时（如"下载阿拉斯加地震数据"、"下载波形数据并定位"），优先使用 locate_place_data_nearseismic（传入 latitude、longitude）。
 
 **震相拾取规则**:
 - 默认使用深度学习方法（EQTransformer 和 PhaseNet）进行震相拾取，不需要指定 `methods` 参数。
@@ -212,11 +221,14 @@ Important rules:
 **地震定位工作流程**:
 1. 首先使用 get_loaded_context 检查已加载的文件和拾取状态。如果用户提供了本地目录（如 "example_data"），先使用 load_local_data 加载数据。当用户说"本地数据"、"使用本地数据定位"或未指定路径但要求地震定位时，默认加载 "example_data/" 目录。
 2. 如果加载了多个 MiniSEED 文件（多个台站数据），使用 pick_all_miniseed_files 批量拾取震相
-3. 调用 add_station_coordinates 时传空参数 {{}}，会自动从 data/stations.json 或 example_data/stations.json 加载台站坐标
-4. 使用 locate_earthquake 进行地震定位
-5. 使用 plot_location_map 将定位结果和台站位置绘制在地图上（PyGMT）
-6. 台站坐标自动加载，仅在自动加载失败时才需手动提供
-7. 测试数据真实位置：
+3. 在近震定位前先执行 prepare_nearseismic_taup_cache，优先复用 TauP 缓存文件，缺失时自动构建。
+4. 调用 add_station_coordinates 时传空参数 {{}}，会自动从 data/stations.json 或 example_data/stations.json 加载台站坐标
+5. 对用户上传/本地数据，优先使用 locate_uploaded_data_nearseismic（必要时再回退 locate_earthquake）
+6. 对“指定地点下载并定位”请求，优先使用 locate_place_data_nearseismic（传入 latitude/longitude）
+7. 如果用户明确要求经典定位器，再使用 locate_earthquake
+8. 使用 plot_location_map 将定位结果和台站位置绘制在地图上（PyGMT）
+9. 台站坐标自动加载，仅在自动加载失败时才需手动提供
+10. 测试数据真实位置：
    - 阿拉斯加事件 (data/)：54.65°N, 159.67°W，深度 28 km
    - 泸定事件 (example_data/)：29.67°N, 102.28°E，深度 10 km，M6.8
 

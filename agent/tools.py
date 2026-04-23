@@ -7,11 +7,20 @@ from utils.hdf5_handler import HDF5Handler
 from utils.phase_picker import pick_phases, summarize_pick_results, load_traces, plot_waveform_with_picks
 from utils.phase_picker import TraceRecord, PickResult
 from utils.sac_handler import SACHandler
+from utils.continuous_data import (
+    download_continuous_data, load_station_data, fetch_catalog,
+    haversine_km, get_default_data_dir,
+)
+from utils.continuous_picking import continuous_picking, clear_model_cache
+from utils.association import associate_multiple_events
+from utils.catalog_matcher import match_catalogs, compute_detection_stats, print_detection_summary
 import json
 from typing import Union
 import numpy as np
 import os
 import h5py
+import importlib.util
+import shutil
 
 # Global variable to store the current file path being analyzed
 # In a multi-user web app, this should be handled via session state or context
@@ -21,6 +30,7 @@ CURRENT_MINISEED_PATHS = []  # Support multiple MiniSEED files for multi-station
 CURRENT_HDF5_PATH = None
 CURRENT_SAC_PATH = None
 CURRENT_LANG = "en"  # Current UI language, set from app.py
+_VALIDATION_MODULE_CACHE = {}
 
 
 def set_current_lang(lang):
@@ -1593,6 +1603,179 @@ def set_current_stations(stations):
     CURRENT_STATIONS = stations
 
 
+def _load_validation_module(module_key: str):
+    """Dynamically load validation modules under Validation/near-seismic-location."""
+    if module_key in _VALIDATION_MODULE_CACHE:
+        return _VALIDATION_MODULE_CACHE[module_key]
+
+    mapping = {
+        "regular": "nearseismic_location_validation.py",
+        "blind": "nearseismic_location_blind_validation.py",
+    }
+    filename = mapping.get(module_key)
+    if not filename:
+        raise ValueError(f"Unknown validation module key: {module_key}")
+
+    file_path = os.path.join(
+        os.getcwd(), "Validation", "near-seismic-location", filename
+    )
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Validation script not found: {file_path}")
+
+    module_name = f"quakecore_{module_key}_validation"
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load validation module: {file_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _VALIDATION_MODULE_CACHE[module_key] = module
+    return module
+
+
+def _ensure_nearseismic_taup_assets(mode: str = "regular"):
+    """Ensure near-seismic TauP assets exist and are ready.
+
+    Uses centralized assets under resources/taup.
+    Migrates from legacy Validation/near-seismic-location/taup if needed.
+    If any required file is missing, triggers validation module builders.
+    """
+    module_key = "blind" if mode in {"blind", "blind_nearseismic"} else "regular"
+    module = _load_validation_module(module_key)
+
+    project_root = os.getcwd()
+    taup_dir = os.path.join(project_root, "resources", "taup")
+    legacy_taup_dir = os.path.join(project_root, "Validation", "near-seismic-location", "taup")
+    os.makedirs(taup_dir, exist_ok=True)
+
+    # Migrate existing cache/model files from legacy location once.
+    for fname in ("socal.npz", "socal.tvel", "socal.nd", "tt_interp_cache_v2.npz"):
+        src = os.path.join(legacy_taup_dir, fname)
+        dst = os.path.join(taup_dir, fname)
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy2(src, dst)
+
+    # Force validation modules to use centralized TAUP directory.
+    previous_taup_dir = getattr(module, "TAUP_DIR", None)
+    module.TAUP_DIR = taup_dir
+    if hasattr(module, "_TT_CACHE_FILE"):
+        module._TT_CACHE_FILE = os.path.join(taup_dir, "tt_interp_cache_v2.npz")
+
+    # Reset in-module singleton caches only when path switches.
+    if previous_taup_dir != taup_dir:
+        if hasattr(module, "_taup_model"):
+            module._taup_model = None
+        if hasattr(module, "_tt_interp"):
+            module._tt_interp = None
+
+    required = [
+        os.path.join(taup_dir, "socal.npz"),
+        os.path.join(taup_dir, "tt_interp_cache_v2.npz"),
+    ]
+
+    existed_before = {os.path.basename(p): os.path.exists(p) for p in required}
+
+    # Build/load TauP model and travel-time interpolation cache.
+    # Validation modules encapsulate the correct build strategy.
+    module._get_taup()
+    module._get_tt_interp()
+
+    existed_after = {os.path.basename(p): os.path.exists(p) for p in required}
+
+    return {
+        "taup_dir": taup_dir,
+        "required_files": [os.path.basename(p) for p in required],
+        "existed_before": existed_before,
+        "existed_after": existed_after,
+    }
+
+
+def _to_nearseismic_station_dict(stations_dict):
+    """Convert station objects/dicts to near-seismic script station format."""
+    converted = {}
+    for sta_id, sta in stations_dict.items():
+        if hasattr(sta, "latitude"):
+            net = getattr(sta, "network", "XX")
+            name = getattr(sta, "station", "UNK")
+            latitude = float(getattr(sta, "latitude", 0.0))
+            longitude = float(getattr(sta, "longitude", 0.0))
+            elevation = float(getattr(sta, "elevation", 0.0) or 0.0)
+        elif isinstance(sta, dict):
+            net = sta.get("network", "XX")
+            name = sta.get("station", sta.get("name", "UNK"))
+            latitude = float(sta.get("latitude", sta.get("lat", 0.0)) or 0.0)
+            longitude = float(sta.get("longitude", sta.get("lon", 0.0)) or 0.0)
+            elevation = float(sta.get("elevation", sta.get("elev", 0.0)) or 0.0)
+        else:
+            continue
+
+        key = f"{net}.{name}"
+        if sta_id and isinstance(sta_id, str) and "." in sta_id:
+            key = sta_id
+
+        if latitude == 0.0 and longitude == 0.0:
+            continue
+
+        converted[key] = {
+            "network": net,
+            "station": name,
+            "latitude": latitude,
+            "longitude": longitude,
+            "elevation": elevation,
+        }
+    return converted
+
+
+def _to_nearseismic_pick_list(valid_picks):
+    """Convert PhasePick list to near-seismic script pick format."""
+    picks = []
+    for p in valid_picks:
+        sta_id = f"{p.station.network}.{p.station.station}"
+        phase = str(getattr(p, "phase_type", "P") or "P").upper()
+        if phase not in {"P", "S"}:
+            continue
+        score = float(getattr(p, "weight", 1.0) or 1.0)
+        picks.append({
+            "station_id": sta_id,
+            "network": p.station.network,
+            "station": p.station.station,
+            "phase": phase,
+            "time_str": str(getattr(p, "arrival_time", "")),
+            "score": score,
+            "method": str((getattr(p, "metadata", {}) or {}).get("method", "unknown")),
+            "time": float(getattr(p, "arrival_time", 0.0)),
+        })
+    return picks
+
+
+@tool
+def prepare_nearseismic_taup_cache(params: Union[str, dict, None] = None):
+    """Prepare/reuse near-seismic TauP cache files for QuakeCore location.
+
+    Args:
+        params:
+            - mode: "regular" or "blind" (default: "regular")
+    """
+    parsed = _parse_param_dict(params)
+    mode = str(parsed.get("mode", "regular")).strip().lower()
+    try:
+        info = _ensure_nearseismic_taup_assets(mode=mode)
+        return json.dumps({
+            "success": True,
+            "mode": mode,
+            "taup_dir": info["taup_dir"],
+            "required_files": info["required_files"],
+            "existed_before": info["existed_before"],
+            "existed_after": info["existed_after"],
+        }, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "mode": mode,
+            "error": str(e),
+        }, ensure_ascii=False, indent=2)
+
+
 @tool
 def locate_earthquake(params: Union[str, dict, None] = None):
     """
@@ -1602,17 +1785,18 @@ def locate_earthquake(params: Union[str, dict, None] = None):
     1. Phase picks with arrival times (from pick_first_arrivals)
     2. Station coordinates (latitude, longitude)
 
-    The location algorithm uses:
-    - Grid search for initial estimate
-    - Geiger's method (least squares) for refinement
-    - IASP91 velocity model for travel time calculation
+    The location algorithm supports three families:
+    - Default locator: grid search + Geiger with IASP91/TauP
+    - Near-seismic validator locator: 2-stage EDT + P-S depth search
+    - Blind near-seismic locator: REAL-Lite association + EDT grid search
 
     Args:
         params: Dictionary with optional parameters:
-            - method: "auto", "grid_search", or "geiger" (default: "auto")
+            - method: "auto", "grid_search", "geiger", "nearseismic", or "blind_nearseismic" (default: "auto")
             - grid_center: [lat, lon] center of search grid
             - grid_size_deg: Search grid half-width in degrees (default: 2.0)
             - depth_range_km: [min, max] depth range in km (default: [0, 50])
+            - seed_depth_km: Initial depth hint for nearseismic mode (default: 10)
             - stations: List of station metadata with lat/lon coordinates
 
     Returns:
@@ -1749,7 +1933,129 @@ def locate_earthquake(params: Union[str, dict, None] = None):
 
     # Perform location
     try:
-        result = do_locate(valid_picks, method=method, **kwargs)
+        if method in {"nearseismic", "grid_search_edt_local"}:
+            taup_status = _ensure_nearseismic_taup_assets(mode="regular")
+            module = _load_validation_module("regular")
+            near_stations = _to_nearseismic_station_dict(stations_dict)
+            near_picks = _to_nearseismic_pick_list(valid_picks)
+
+            if len(near_stations) < 3:
+                return json.dumps({
+                    "error": "Need at least 3 stations with valid coordinates for nearseismic location.",
+                    "num_stations": len(near_stations),
+                }, ensure_ascii=False, indent=2)
+
+            if len(near_picks) < 4:
+                return json.dumps({
+                    "error": "Need at least 4 valid picks for nearseismic location.",
+                    "num_picks": len(near_picks),
+                }, ensure_ascii=False, indent=2)
+
+            center = parsed.get("grid_center")
+            if isinstance(center, (list, tuple)) and len(center) == 2:
+                seed_lat, seed_lon = float(center[0]), float(center[1])
+            else:
+                lat_arr = np.array([s["latitude"] for s in near_stations.values()])
+                lon_arr = np.array([s["longitude"] for s in near_stations.values()])
+                seed_lat, seed_lon = float(np.mean(lat_arr)), float(np.mean(lon_arr))
+
+            seed_depth = _coerce_float(
+                parsed.get("seed_depth_km"), allow_none=True, default=10.0, field_name="seed_depth_km"
+            )
+
+            loc = module.locate_grid_search_local(
+                near_picks,
+                near_stations,
+                seed_lat,
+                seed_lon,
+                float(seed_depth),
+                cache_dir=None,
+            )
+            if not loc:
+                return json.dumps({
+                    "error": "Near-seismic EDT location failed.",
+                    "method": "nearseismic",
+                }, ensure_ascii=False, indent=2)
+
+            result = {
+                "latitude": float(loc["latitude"]),
+                "longitude": float(loc["longitude"]),
+                "depth_km": float(loc.get("depth", 0.0)),
+                "origin_time": float(loc.get("ot", 0.0) or 0.0),
+                "origin_time_iso": str(loc.get("ot", "")),
+                "rms_residual": float(loc.get("rms", -1.0) or -1.0),
+                "azimuthal_gap": float(loc.get("gap", 360.0) or 360.0),
+                "num_picks": int(loc.get("num_picks", len(near_picks))),
+                "num_stations": int(len(near_stations)),
+                "method": "nearseismic_edt",
+                "picks": loc.get("clean_picks", near_picks),
+                "taup_cache": taup_status,
+            }
+
+        elif method in {"blind_nearseismic", "real_lite_edt"}:
+            taup_status = _ensure_nearseismic_taup_assets(mode="blind")
+            module = _load_validation_module("blind")
+            near_stations = _to_nearseismic_station_dict(stations_dict)
+            near_picks = _to_nearseismic_pick_list(valid_picks)
+
+            if len(near_stations) < 3:
+                return json.dumps({
+                    "error": "Need at least 3 stations with valid coordinates for blind nearseismic location.",
+                    "num_stations": len(near_stations),
+                }, ensure_ascii=False, indent=2)
+
+            if len(near_picks) < 4:
+                return json.dumps({
+                    "error": "Need at least 4 picks for blind nearseismic location.",
+                    "num_picks": len(near_picks),
+                }, ensure_ascii=False, indent=2)
+
+            tt_interp = module._get_tt_interp()
+            associated_picks, init_est = module.associate_by_origin_time(
+                near_picks,
+                near_stations,
+                tt_interp,
+                time_tolerance=1.5,
+                min_picks=4,
+            )
+
+            if not associated_picks or not init_est:
+                return json.dumps({
+                    "error": "Blind association failed: no reliable event cluster.",
+                    "method": "blind_nearseismic",
+                }, ensure_ascii=False, indent=2)
+
+            loc = module.locate_grid_search_local_blind(
+                associated_picks,
+                near_stations,
+                float(init_est["latitude"]),
+                float(init_est["longitude"]),
+                float(init_est.get("depth", 10.0)),
+            )
+
+            if not loc:
+                return json.dumps({
+                    "error": "Blind near-seismic EDT location failed.",
+                    "method": "blind_nearseismic",
+                }, ensure_ascii=False, indent=2)
+
+            result = {
+                "latitude": float(loc["latitude"]),
+                "longitude": float(loc["longitude"]),
+                "depth_km": float(loc.get("depth", 0.0)),
+                "origin_time": float(init_est.get("time", 0.0) or 0.0),
+                "origin_time_iso": str(init_est.get("time", "")),
+                "rms_residual": -1.0,
+                "azimuthal_gap": 360.0,
+                "num_picks": int(loc.get("num_picks", len(associated_picks))),
+                "num_stations": int(len(near_stations)),
+                "method": "blind_real_lite_edt",
+                "picks": associated_picks,
+                "taup_cache": taup_status,
+            }
+
+        else:
+            result = do_locate(valid_picks, method=method, **kwargs)
 
         if "error" in result:
             return json.dumps(result, ensure_ascii=False, indent=2)
@@ -2194,10 +2500,11 @@ def download_seismic_data(params: Union[str, dict, None] = None):
     示例：
         {"latitude": 61.2, "longitude": -150.0, "radius_km": 500, "minmagnitude": 5.0}
     """
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from obspy.clients.fdsn import Client as FDSNClient
     from obspy import UTCDateTime
     from obspy.geodetics import locations2degrees
-    import glob
 
     parsed = _parse_param_dict(params)
     _l = CURRENT_LANG
@@ -2209,8 +2516,15 @@ def download_seismic_data(params: Union[str, dict, None] = None):
     minmagnitude = _coerce_float(parsed.get("minmagnitude"), default=4.0, field_name="minmagnitude")
     max_stations = _coerce_int(parsed.get("max_stations"), default=10, field_name="max_stations")
     network = parsed.get("network", None)
-    channel = parsed.get("channel", "BH?")
+    channel = parsed.get("channel", "BH?,HH?")
     output_dir = parsed.get("output_dir", "data/fdsn/")
+    provider = str(parsed.get("provider", "auto")).lower().strip()
+    max_workers = _coerce_int(parsed.get("max_workers"), default=8, field_name="max_workers")
+    preprocess_raw = parsed.get("preprocess", True)
+    if isinstance(preprocess_raw, str):
+        preprocess = preprocess_raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        preprocess = bool(preprocess_raw)
 
     # Time range
     endtime = parsed.get("endtime")
@@ -2233,38 +2547,75 @@ def download_seismic_data(params: Union[str, dict, None] = None):
 
     os.makedirs(output_dir, exist_ok=True)
 
-    try:
-        client = FDSNClient("IRIS")
-    except Exception as e:
+    # Build candidate FDSN providers: SCEDC first (near-seismic), fallback to IRIS.
+    if provider == "auto":
+        provider_candidates = ["SCEDC", "IRIS"]
+    elif provider in {"scedc", "iris"}:
+        provider_candidates = [provider.upper()]
+    else:
+        provider_candidates = ["SCEDC", "IRIS"]
+
+    def _provider_order(*prefer):
+        out = []
+        seen = set()
+        for item in list(prefer) + provider_candidates:
+            if not item:
+                continue
+            name = str(item).upper()
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
+
+    event_search_errors = []
+    catalog = None
+    client_name = None
+    client = None
+    event_search_s = 0.0
+
+    # Event search with provider fallback.
+    for provider_name in _provider_order():
+        t0_evt = time.perf_counter()
+        try:
+            trial_client = FDSNClient(provider_name, timeout=120)
+            trial_catalog = trial_client.get_events(
+                starttime=starttime,
+                endtime=endtime,
+                latitude=lat,
+                longitude=lon,
+                maxradius=radius_km / 111.0,
+                minmagnitude=minmagnitude,
+                orderby="magnitude",
+            )
+            event_search_s = time.perf_counter() - t0_evt
+            client_name = provider_name
+            client = trial_client
+            catalog = trial_catalog
+            break
+        except Exception as e:
+            event_search_errors.append(f"{provider_name}: {e}")
+
+    if catalog is None or client is None or client_name is None:
         return json.dumps({
-            "error": f"Cannot connect to IRIS FDSN service: {e}",
-            "hint": "无法连接 IRIS FDSN 服务，请检查网络。"
+            "error": "Event search failed on all providers.",
+            "providers": provider_candidates,
+            "details": event_search_errors[:5],
+            "hint": "无法连接 FDSN 服务，请检查网络。" if _l == "zh" else "Cannot connect to FDSN service.",
         }, ensure_ascii=False, indent=2)
 
     lines = []
 
     # Step 1: Search for events
     lines.append(f"### {'地震事件搜索' if _l == 'zh' else 'Event Search'}")
+    lines.append(f"- {'数据源' if _l == 'zh' else 'Provider'}: {client_name}")
     lines.append(f"- {'搜索范围' if _l == 'zh' else 'Region'}: ({lat}, {lon}), {'半径' if _l == 'zh' else 'radius'} {radius_km} km")
     lines.append(f"- {'时间范围' if _l == 'zh' else 'Time range'}: {starttime} ~ {endtime}")
     lines.append(f"- {'最小震级' if _l == 'zh' else 'Min magnitude'}: {minmagnitude}")
     lines.append("")
 
-    try:
-        catalog = client.get_events(
-            starttime=starttime,
-            endtime=endtime,
-            latitude=lat,
-            longitude=lon,
-            maxradius=radius_km / 111.0,  # Convert km to degrees (approximate)
-            minmagnitude=minmagnitude,
-            orderby="magnitude",
-        )
-    except Exception as e:
-        return json.dumps({
-            "error": f"Event search failed: {e}",
-            "hint": f"地震事件搜索失败: {e}"
-        }, ensure_ascii=False, indent=2)
+    lines.append(f"- {'事件检索耗时' if _l == 'zh' else 'Event search time'}: {event_search_s:.2f}s")
+    if event_search_errors:
+        lines.append(f"- {'回退记录' if _l == 'zh' else 'Fallback log'}: {' | '.join(event_search_errors[:2])}")
 
     if len(catalog) == 0:
         lines.append(f"{'未找到符合条件的地震事件' if _l == 'zh' else 'No events found matching criteria'}.")
@@ -2295,29 +2646,53 @@ def download_seismic_data(params: Union[str, dict, None] = None):
     evt_lat = origin.latitude
     evt_lon = origin.longitude
     evt_time = origin.time
+    evt_mag = None
+    preferred_mag = event.preferred_magnitude() or (event.magnitudes[0] if event.magnitudes else None)
+    if preferred_mag is not None and getattr(preferred_mag, "mag", None) is not None:
+        evt_mag = float(preferred_mag.mag)
 
     lines.append(f"### {'下载波形数据' if _l == 'zh' else 'Downloading Waveform Data'}")
     lines.append(f"{'目标事件' if _l == 'zh' else 'Target event'}: {evt_time}, ({evt_lat:.2f}, {evt_lon:.2f})")
     lines.append("")
 
-    # Search for stations
+    # Search for stations (response-level metadata for fast downstream preprocessing)
     station_kwargs = {
         "starttime": evt_time - 3600,
         "endtime": evt_time + 7200,
         "latitude": evt_lat,
         "longitude": evt_lon,
         "maxradius": radius_km / 111.0,
+        "level": "response",
     }
     if network:
         station_kwargs["network"] = network
     if channel:
         station_kwargs["channel"] = channel
 
-    try:
-        inventory = client.get_stations(**station_kwargs, level="station")
-    except Exception as e:
-        lines.append(f"{'台站搜索失败' if _l == 'zh' else 'Station search failed'}: {e}")
+    inventory = None
+    station_provider = None
+    station_search_s = 0.0
+    station_errors = []
+    for provider_name in _provider_order(client_name):
+        t0_sta = time.perf_counter()
+        try:
+            trial_client = FDSNClient(provider_name, timeout=120)
+            trial_inventory = trial_client.get_stations(**station_kwargs)
+            station_search_s = time.perf_counter() - t0_sta
+            inventory = trial_inventory
+            station_provider = provider_name
+            break
+        except Exception as e:
+            station_errors.append(f"{provider_name}: {e}")
+
+    if inventory is None or station_provider is None:
+        lines.append(f"{'台站搜索失败' if _l == 'zh' else 'Station search failed'}")
+        if station_errors:
+            lines.append(f"- {'错误' if _l == 'zh' else 'Errors'}: {' | '.join(station_errors[:3])}")
         return "\n".join(lines)
+
+    lines.append(f"- {'台站检索数据源' if _l == 'zh' else 'Station provider'}: {station_provider}")
+    lines.append(f"- {'台站检索耗时' if _l == 'zh' else 'Station search time'}: {station_search_s:.2f}s")
 
     # Collect stations with distance info
     stations_info = []
@@ -2347,59 +2722,639 @@ def download_seismic_data(params: Union[str, dict, None] = None):
         lines.append(f"- {s['network']}.{s['station']} ({s['latitude']:.2f}, {s['longitude']:.2f}), {'距离' if _l == 'zh' else 'dist'} {s['distance_km']:.0f} km")
     lines.append("")
 
-    # Step 3: Download waveform data
+    # Download window and filter strategy follows validation scripts.
+    if evt_mag is not None and evt_mag >= 5.5:
+        duration_sec = 300
+    else:
+        duration_sec = 180
+    pad_sec = 30
+    t_start_dl = evt_time - 30 - pad_sec
+    t_end_dl = evt_time + duration_sec + pad_sec
+    t_start_save = evt_time - 30
+    t_end_save = evt_time + duration_sec
+    pre_filt = (0.5, 1.0, 30.0, 40.0)
+
+    lines.append(f"- {'下载窗口' if _l == 'zh' else 'Download window'}: {t_start_dl} ~ {t_end_dl}")
+    lines.append(f"- {'保存窗口' if _l == 'zh' else 'Saved window'}: {t_start_save} ~ {t_end_save}")
+    lines.append(f"- {'并行线程' if _l == 'zh' else 'Parallel workers'}: {max_workers}")
+    lines.append("")
+
+    # Step 3: Download waveform data in parallel
     downloaded_files = []
     failed_stations = []
 
-    for s in stations_info:
-        sta_code = f"{s['network']}.{s['station']}"
-        filename = f"{s['network']}.{s['station']}..{channel.replace('?', 'Z')}.mseed"
+    waveform_provider_order = _provider_order(station_provider, client_name)
+    provider_stats = {
+        p: {"ok": 0, "fail": 0, "time_s": 0.0} for p in waveform_provider_order
+    }
+
+    def _download_one(sta_info):
+        sta_code = f"{sta_info['network']}.{sta_info['station']}"
+        filename = f"{sta_info['network']}.{sta_info['station']}.mseed"
         filepath = os.path.join(output_dir, filename)
 
-        try:
-            waveform_kwargs = {
-                "network": s["network"],
-                "station": s["station"],
-                "location": "*",
-                "channel": channel,
-                "starttime": evt_time - 60,
-                "endtime": evt_time + 1800,
-            }
-            st = client.get_waveforms(**waveform_kwargs)
-            st.write(filepath, format="MSEED")
-            downloaded_files.append(filepath)
-            add_miniseed_path(filepath)
-        except Exception as e:
-            failed_stations.append(f"{sta_code}: {e}")
+        if os.path.exists(filepath):
+            return {"ok": True, "filepath": filepath, "station": sta_code, "cached": True}
+
+        waveform_kwargs = {
+            "network": sta_info["network"],
+            "station": sta_info["station"],
+            "location": "*",
+            "channel": channel,
+            "starttime": t_start_dl,
+            "endtime": t_end_dl,
+        }
+
+        errors = []
+        attempts = []
+        for provider_name in waveform_provider_order:
+            t0_wf = time.perf_counter()
+            try:
+                local_client = FDSNClient(provider_name, timeout=60)
+                st = local_client.get_waveforms(**waveform_kwargs)
+                if preprocess:
+                    try:
+                        if provider_name == station_provider:
+                            inv_single = inventory.select(network=sta_info["network"], station=sta_info["station"])
+                        else:
+                            inv_single = local_client.get_stations(
+                                network=sta_info["network"],
+                                station=sta_info["station"],
+                                channel=channel,
+                                starttime=t_start_dl,
+                                endtime=t_end_dl,
+                                level="response",
+                            )
+                        st.detrend("demean")
+                        st.detrend("linear")
+                        st.taper(max_percentage=0.05)
+                        if hasattr(inv_single, "networks") and len(inv_single.networks) > 0:
+                            st.remove_response(inventory=inv_single, output="VEL", pre_filt=pre_filt)
+                        st.trim(starttime=t_start_save, endtime=t_end_save)
+                        st.interpolate(sampling_rate=100.0)
+                    except Exception:
+                        pass
+                st.write(filepath, format="MSEED")
+                elapsed = time.perf_counter() - t0_wf
+                return {
+                    "ok": True,
+                    "filepath": filepath,
+                    "station": sta_code,
+                    "cached": False,
+                    "provider": provider_name,
+                    "elapsed_s": elapsed,
+                    "attempts": attempts,
+                }
+            except Exception as e:
+                elapsed = time.perf_counter() - t0_wf
+                errors.append(f"{provider_name}: {e}")
+                attempts.append({"provider": provider_name, "ok": False, "elapsed_s": elapsed})
+
+        return {
+            "ok": False,
+            "station": sta_code,
+            "error": " | ".join(errors[:3]),
+            "attempts": attempts,
+        }
+
+    t0_wave_all = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+        futures = [pool.submit(_download_one, s) for s in stations_info]
+        for fut in as_completed(futures):
+            out = fut.result()
+            for att in out.get("attempts", []):
+                p_att = att.get("provider")
+                if p_att in provider_stats:
+                    provider_stats[p_att]["fail"] += 1
+                    provider_stats[p_att]["time_s"] += float(att.get("elapsed_s", 0.0) or 0.0)
+
+            if out.get("ok"):
+                downloaded_files.append(out["filepath"])
+                add_miniseed_path(out["filepath"])
+                p = out.get("provider")
+                if p in provider_stats:
+                    provider_stats[p]["ok"] += 1
+                    provider_stats[p]["time_s"] += float(out.get("elapsed_s", 0.0) or 0.0)
+            else:
+                failed_stations.append(f"{out.get('station')}: {out.get('error')}")
+    waveform_wall_s = time.perf_counter() - t0_wave_all
 
     # Step 4: Save stations.json
     if downloaded_files:
         stations_json_path = os.path.join(output_dir, "stations.json")
         stations_dict = {}
         for s in stations_info:
-            if s["network"] in [ds.split("/")[-1].split(".")[0] for ds in downloaded_files if s["station"] in ds]:
-                for f in downloaded_files:
-                    fname = os.path.basename(f)
-                    if s["network"] in fname and s["station"] in fname:
-                        stations_dict[fname] = {
-                            "latitude": s["latitude"],
-                            "longitude": s["longitude"],
-                            "elevation": s["elevation"],
-                        }
-                        break
+            target_name = f"{s['network']}.{s['station']}.mseed"
+            for f in downloaded_files:
+                fname = os.path.basename(f)
+                if fname == target_name:
+                    stations_dict[fname] = {
+                        "latitude": s["latitude"],
+                        "longitude": s["longitude"],
+                        "elevation": s["elevation"],
+                    }
+                    break
 
         with open(stations_json_path, "w") as f:
             json.dump(stations_dict, f, indent=2)
 
         lines.append(f"### {'下载结果' if _l == 'zh' else 'Download Results'}")
         lines.append(f"- {'成功下载' if _l == 'zh' else 'Downloaded'}: {len(downloaded_files)} {'个文件' if _l == 'zh' else 'files'}")
+        lines.append(f"- {'台站坐标条目' if _l == 'zh' else 'Station entries'}: {len(stations_dict)}")
         if failed_stations:
             lines.append(f"- {'失败' if _l == 'zh' else 'Failed'}: {len(failed_stations)} {'个台站' if _l == 'zh' else 'stations'}")
             for fs in failed_stations[:5]:
                 lines.append(f"  - {fs}")
-        lines.append(f"- {'台站坐标已保存至' if _l == 'zh' else 'Station coordinates saved to'}: `{stations_json_path}`")
-        lines.append(f"- {'数据保存目录' if _l == 'zh' else 'Data saved to'}: `{output_dir}`")
+        lines.append(f"- {'台站坐标已保存至' if _l == 'zh' else 'Station coordinates saved to'}: {stations_json_path}")
+        lines.append(f"- {'数据保存目录' if _l == 'zh' else 'Data saved to'}: {output_dir}")
+        lines.append("")
+        lines.append(f"### {'下载性能统计' if _l == 'zh' else 'Download Performance'}")
+        lines.append(f"- {'波形并行总耗时' if _l == 'zh' else 'Waveform wall time'}: {waveform_wall_s:.2f}s")
+        for provider_name in waveform_provider_order:
+            stat = provider_stats.get(provider_name, {"ok": 0, "fail": 0, "time_s": 0.0})
+            lines.append(
+                f"- {provider_name}: "
+                f"{'成功' if _l == 'zh' else 'ok'} {stat['ok']}, "
+                f"{'失败' if _l == 'zh' else 'fail'} {stat['fail']}, "
+                f"{'累计耗时' if _l == 'zh' else 'cum time'} {stat['time_s']:.2f}s"
+            )
         lines.append("")
         lines.append(f"{'下一步可以使用 pick_all_miniseed_files 进行震相拾取，然后定位' if _l == 'zh' else 'Next: use pick_all_miniseed_files for phase picking, then locate_earthquake'}.")
 
+    if not downloaded_files:
+        lines.append(f"{'未下载到可用波形' if _l == 'zh' else 'No waveforms downloaded'}.")
+        lines.append(f"- {'波形并行总耗时' if _l == 'zh' else 'Waveform wall time'}: {waveform_wall_s:.2f}s")
+
     return "\n".join(lines)
+
+
+@tool
+def locate_uploaded_data_nearseismic(params: Union[str, dict, None] = None):
+    """
+    Locate an event from user-uploaded data using near-seismic EDT locator.
+
+    Typical workflow:
+    1. load_local_data
+    2. pick_all_miniseed_files
+    3. add_station_coordinates
+    4. locate_uploaded_data_nearseismic
+
+    Args:
+        params: Optional dict, supports:
+            - grid_center: [lat, lon] search center hint
+            - seed_depth_km: initial depth hint (default 10)
+            - stations: optional station metadata override
+    """
+    parsed = _parse_param_dict(params)
+    payload = {
+        "method": "nearseismic",
+        "grid_center": parsed.get("grid_center"),
+        "seed_depth_km": parsed.get("seed_depth_km", 10.0),
+        "stations": parsed.get("stations", CURRENT_STATIONS),
+    }
+    return locate_earthquake.invoke(payload)
+
+
+@tool
+def locate_place_data_nearseismic(params: Union[str, dict, None] = None):
+    """
+    Download waveform data for a user-specified place and run near-seismic location.
+
+    This tool orchestrates the complete workflow for place-based requests:
+    1) download data around a place
+    2) pick phases for all downloaded stations
+    3) load station coordinates
+    4) locate event with near-seismic/blind-nearseismic engine
+
+    Args:
+        params: Dictionary supports:
+            - latitude (required)
+            - longitude (required)
+            - radius_km (default 200)
+            - minmagnitude (default 4.0)
+            - starttime/endtime (optional)
+            - network/channel/max_stations/output_dir (optional)
+            - method: "nearseismic" or "blind_nearseismic" (default "blind_nearseismic")
+            - grid_center/seed_depth_km (optional for nearseismic)
+    """
+    parsed = _parse_param_dict(params)
+    _l = CURRENT_LANG
+
+    latitude = parsed.get("latitude")
+    longitude = parsed.get("longitude")
+    if latitude is None or longitude is None:
+        return json.dumps({
+            "error": "latitude and longitude are required.",
+            "hint": "请提供 latitude 和 longitude 参数。" if _l == "zh" else "Please provide latitude and longitude.",
+        }, ensure_ascii=False, indent=2)
+
+    download_payload = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "radius_km": parsed.get("radius_km", 200),
+        "minmagnitude": parsed.get("minmagnitude", 4.0),
+        "starttime": parsed.get("starttime"),
+        "endtime": parsed.get("endtime"),
+        "network": parsed.get("network"),
+        "channel": parsed.get("channel", "BH?"),
+        "max_stations": parsed.get("max_stations", 10),
+        "output_dir": parsed.get("output_dir", "data/fdsn/"),
+    }
+
+    download_text = download_seismic_data.invoke(download_payload)
+    if isinstance(download_text, str) and ("\"error\"" in download_text.lower() or "failed" in download_text.lower()):
+        return download_text
+
+    pick_text = pick_all_miniseed_files.invoke({})
+    if isinstance(pick_text, str) and ("failed" in pick_text.lower() or "错误" in pick_text):
+        return f"{download_text}\n\n{pick_text}"
+
+    station_text = add_station_coordinates.invoke({})
+
+    method = str(parsed.get("method", "blind_nearseismic"))
+    if method not in {"nearseismic", "blind_nearseismic"}:
+        method = "blind_nearseismic"
+
+    locate_payload = {
+        "method": method,
+        "grid_center": parsed.get("grid_center", [latitude, longitude]),
+        "seed_depth_km": parsed.get("seed_depth_km", 10.0),
+    }
+    location_text = locate_earthquake.invoke(locate_payload)
+
+    lines = []
+    lines.append("### Place-based Near-Seismic Workflow")
+    lines.append(download_text)
+    lines.append("")
+    lines.append(pick_text)
+    lines.append("")
+    lines.append(station_text)
+    lines.append("")
+    lines.append(location_text)
+    return "\n".join(lines)
+
+
+# =================== Continuous Monitoring Tools ===================
+
+# Global state for continuous monitoring
+_CURRENT_CONTINUOUS_STREAMS = None
+_CURRENT_CONTINUOUS_STATIONS = None
+_CURRENT_CONTINUOUS_PICKS = None
+_CURRENT_TT_INTERP = None
+
+
+def _parse_param_dict(params):
+    """Parse params into dict."""
+    if params is None:
+        return {}
+    if isinstance(params, dict):
+        return params
+    if isinstance(params, str):
+        try:
+            return json.loads(params)
+        except Exception:
+            return {}
+    return {}
+
+
+@tool
+def download_continuous_waveforms(params: Union[str, dict, None] = None):
+    """
+    Download continuous waveform data for a time window and region.
+
+    This is used for continuous monitoring scenarios where you want to:
+    - Monitor a region over a time period
+    - Detect multiple events within the time window
+
+    Args:
+        params: Dictionary supports:
+            - start: Start time in ISO format (e.g., "2019-07-04T17:00:00")
+            - end: End time in ISO format (e.g., "2019-07-04T18:00:00")
+            - min_lat: Minimum latitude (default 32.0 for Southern California)
+            - max_lat: Maximum latitude (default 36.5)
+            - min_lon: Minimum longitude (default -120.0)
+            - max_lon: Maximum longitude (default -115.0)
+            - network: Network code (default "CI" for SCEDC)
+            - channel: Channel codes (default "BH?,HH?")
+            - data_dir: Optional directory to store data
+
+    Returns:
+        JSON string with download status, number of stations, and data location
+    """
+    from obspy import UTCDateTime
+
+    parsed = _parse_param_dict(params)
+    _l = CURRENT_LANG
+
+    start_str = parsed.get("start")
+    end_str = parsed.get("end")
+
+    if not start_str or not end_str:
+        return json.dumps({
+            "error": "start and end times are required.",
+            "hint": "请提供 start 和 end 参数，格式为 ISO 时间字符串。" if _l == "zh"
+                else "Please provide start and end in ISO format (e.g., '2019-07-04T17:00:00').",
+        }, ensure_ascii=False, indent=2)
+
+    try:
+        start_time = UTCDateTime(start_str)
+        end_time = UTCDateTime(end_str)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Invalid time format: {e}",
+            "hint": "请使用 ISO 格式，如 '2019-07-04T17:00:00'。" if _l == "zh"
+                else "Use ISO format like '2019-07-04T17:00:00'.",
+        }, ensure_ascii=False, indent=2)
+
+    streams, stations = download_continuous_data(
+        start_time=start_time,
+        end_time=end_time,
+        min_lat=parsed.get("min_lat", 32.0),
+        max_lat=parsed.get("max_lat", 36.5),
+        min_lon=parsed.get("min_lon", -120.0),
+        max_lon=parsed.get("max_lon", -115.0),
+        network=parsed.get("network", "CI"),
+        channel=parsed.get("channel", "BH?,HH?"),
+        data_dir=parsed.get("data_dir"),
+    )
+
+    global _CURRENT_CONTINUOUS_STREAMS, _CURRENT_CONTINUOUS_STATIONS
+    _CURRENT_CONTINUOUS_STREAMS = streams
+    _CURRENT_CONTINUOUS_STATIONS = stations
+
+    return json.dumps({
+        "status": "success",
+        "n_stations": len(stations),
+        "n_streams": len(streams),
+        "start_time": str(start_time),
+        "end_time": str(end_time),
+        "region": {
+            "min_lat": parsed.get("min_lat", 32.0),
+            "max_lat": parsed.get("max_lat", 36.5),
+            "min_lon": parsed.get("min_lon", -120.0),
+            "max_lon": parsed.get("max_lon", -115.0),
+        },
+        "station_sample": list(stations.items())[:5] if stations else [],
+    }, indent=2, ensure_ascii=False)
+
+
+@tool
+def run_continuous_picking(params: Union[str, dict, None] = None):
+    """
+    Run AI phase picking (PhaseNet + EQTransformer) on downloaded continuous data.
+
+    This tool picks P and S phases from the continuous waveforms downloaded
+    by download_continuous_waveforms.
+
+    Args:
+        params: Dictionary supports:
+            - peak_threshold: Minimum peak height for detection (default 0.3)
+            - merge_window: Time window (s) for merging picks from different models (default 1.0)
+            - batch_size: Number of stations to process at once (default 4)
+
+    Returns:
+        JSON string with number of picks found and sample picks
+    """
+    global _CURRENT_CONTINUOUS_STREAMS, _CURRENT_CONTINUOUS_STATIONS, _CURRENT_CONTINUOUS_PICKS
+
+    if not _CURRENT_CONTINUOUS_STREAMS:
+        return json.dumps({
+            "error": "No continuous data loaded.",
+            "hint": "请先运行 download_continuous_waveforms 下载数据。" if CURRENT_LANG == "zh"
+                else "Please run download_continuous_waveforms first.",
+        }, ensure_ascii=False, indent=2)
+
+    parsed = _parse_param_dict(params)
+
+    picks = continuous_picking(
+        streams=_CURRENT_CONTINUOUS_STREAMS,
+        stations=_CURRENT_CONTINUOUS_STATIONS,
+        peak_threshold=float(parsed.get("peak_threshold", 0.3)),
+        merge_window=float(parsed.get("merge_window", 1.0)),
+        batch_size=int(parsed.get("batch_size", 4)),
+    )
+
+    _CURRENT_CONTINUOUS_PICKS = picks
+
+    return json.dumps({
+        "status": "success",
+        "n_picks": len(picks),
+        "n_stations": len(_CURRENT_CONTINUOUS_STATIONS),
+        "sample_picks": picks[:10] if picks else [],
+    }, indent=2, ensure_ascii=False)
+
+
+@tool
+def associate_continuous_events(params: Union[str, dict, None] = None):
+    """
+    Associate continuous picks into multiple earthquake events using greedy algorithm.
+
+    This tool groups picks from download_continuous_waveforms and run_continuous_picking
+    into distinct earthquake events.
+
+    Args:
+        params: Dictionary supports:
+            - time_tolerance: Time window for associating picks in seconds (default 1.0)
+            - min_picks: Minimum picks to form an event (default 5)
+            - min_lat: Minimum latitude for grid search (default 32.0)
+            - max_lat: Maximum latitude (default 36.5)
+            - min_lon: Minimum longitude (default -120.0)
+            - max_lon: Maximum longitude (default -115.0)
+
+    Returns:
+        JSON string with detected events and their pick counts
+    """
+    global _CURRENT_CONTINUOUS_PICKS, _CURRENT_CONTINUOUS_STATIONS
+
+    if not _CURRENT_CONTINUOUS_PICKS:
+        return json.dumps({
+            "error": "No picks available.",
+            "hint": "请先运行 run_continuous_picking 进行震相拾取。" if CURRENT_LANG == "zh"
+                else "Please run run_continuous_picking first.",
+        }, ensure_ascii=False, indent=2)
+
+    parsed = _parse_param_dict(params)
+    min_lat = float(parsed.get("min_lat", 32.0))
+    max_lat = float(parsed.get("max_lat", 36.5))
+    min_lon = float(parsed.get("min_lon", -120.0))
+    max_lon = float(parsed.get("max_lon", -115.0))
+
+    # Build TT interpolator cache path
+    from utils.continuous_data import _get_tt_interp
+    global _CURRENT_TT_INTERP
+    _CURRENT_TT_INTERP = _get_tt_interp()
+
+    detected = associate_multiple_events(
+        picks=_CURRENT_CONTINUOUS_PICKS,
+        stations=_CURRENT_CONTINUOUS_STATIONS,
+        tt_interp=_CURRENT_TT_INTERP,
+        time_tolerance=float(parsed.get("time_tolerance", 1.0)),
+        min_picks=int(parsed.get("min_picks", 5)),
+        grid_lat_range=(min_lat, max_lat),
+        grid_lon_range=(min_lon, max_lon),
+    )
+
+    result = {
+        "status": "success",
+        "n_events": len(detected),
+        "events": [
+            {
+                "init_lat": ev_info["init_lat"],
+                "init_lon": ev_info["init_lon"],
+                "approx_time": str(ev_info["approx_time"]),
+                "num_picks": ev_info["num_picks"],
+            }
+            for ev_info, _ in detected
+        ],
+    }
+
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@tool
+def run_continuous_monitoring(params: Union[str, dict, None] = None):
+    """
+    Run complete continuous monitoring workflow: download -> pick -> associate -> locate.
+
+    This is the main tool for continuous seismic monitoring. It downloads continuous
+    data for a region and time window, picks phases with AI models, associates picks
+    into events, and optionally evaluates against a ground truth catalog.
+
+    Args:
+        params: Dictionary supports:
+            - start: Start time in ISO format
+            - end: End time in ISO format
+            - min_lat/max_lat/min_lon/max_lon: Region bounds (Southern California defaults)
+            - network: Network code (default "CI")
+            - compare_with_catalog: Whether to fetch ground truth and evaluate (default True)
+            - min_magnitude: Minimum magnitude for ground truth filter (default 1.0)
+            - time_tolerance: Association time tolerance (default 1.0)
+            - min_picks: Minimum picks per event (default 5)
+
+    Returns:
+        JSON string with detection results and evaluation metrics
+    """
+    from obspy import UTCDateTime
+
+    parsed = _parse_param_dict(params)
+    _l = CURRENT_LANG
+
+    start_str = parsed.get("start")
+    end_str = parsed.get("end")
+
+    if not start_str or not end_str:
+        return json.dumps({
+            "error": "start and end times are required.",
+            "hint": "请提供 start 和 end 参数。" if _l == "zh"
+                else "Please provide start and end times.",
+        }, ensure_ascii=False, indent=2)
+
+    try:
+        start_time = UTCDateTime(start_str)
+        end_time = UTCDateTime(end_str)
+    except Exception as e:
+        return json.dumps({"error": f"Invalid time format: {e}"})
+
+    min_lat = float(parsed.get("min_lat", 32.0))
+    max_lat = float(parsed.get("max_lat", 36.5))
+    min_lon = float(parsed.get("min_lon", -120.0))
+    max_lon = float(parsed.get("max_lon", -115.0))
+
+    # Step 1: Download
+    streams, stations = download_continuous_data(
+        start_time=start_time,
+        end_time=end_time,
+        min_lat=min_lat,
+        max_lat=max_lat,
+        min_lon=min_lon,
+        max_lon=max_lon,
+        network=parsed.get("network", "CI"),
+    )
+
+    if not streams:
+        return json.dumps({"error": "No data downloaded."})
+
+    # Step 2: Picking
+    picks = continuous_picking(
+        streams=streams,
+        stations=stations,
+        peak_threshold=float(parsed.get("peak_threshold", 0.3)),
+        merge_window=float(parsed.get("merge_window", 1.0)),
+        batch_size=int(parsed.get("batch_size", 4)),
+    )
+
+    if not picks:
+        return json.dumps({"error": "No picks found."})
+
+    # Step 3: Association
+    from utils.continuous_data import _get_tt_interp
+    tt_interp = _get_tt_interp()
+
+    detected = associate_multiple_events(
+        picks=picks,
+        stations=stations,
+        tt_interp=tt_interp,
+        time_tolerance=float(parsed.get("time_tolerance", 1.0)),
+        min_picks=int(parsed.get("min_picks", 5)),
+        grid_lat_range=(min_lat, max_lat),
+        grid_lon_range=(min_lon, max_lon),
+    )
+
+    result = {
+        "status": "success",
+        "start_time": str(start_time),
+        "end_time": str(end_time),
+        "n_stations": len(stations),
+        "n_picks": len(picks),
+        "n_events_detected": len(detected),
+        "events": [
+            {
+                "init_lat": ev_info["init_lat"],
+                "init_lon": ev_info["init_lon"],
+                "approx_time": str(ev_info["approx_time"]),
+                "num_picks": ev_info["num_picks"],
+            }
+            for ev_info, _ in detected
+        ],
+    }
+
+    # Step 4: Compare with catalog if requested
+    if parsed.get("compare_with_catalog", True):
+        truth = fetch_catalog(
+            start_time=start_time,
+            end_time=end_time,
+            min_lat=min_lat,
+            max_lat=max_lat,
+            min_lon=min_lon,
+            max_lon=max_lon,
+            min_magnitude=float(parsed.get("min_magnitude", 1.0)),
+        )
+
+        if truth:
+            # Convert detected to catalog format
+            detected_cat = [
+                {
+                    "time": ev_info["approx_time"].timestamp,
+                    "latitude": ev_info["init_lat"],
+                    "longitude": ev_info["init_lon"],
+                    "depth": 10.0,  # Default depth
+                }
+                for ev_info, _ in detected
+            ]
+
+            matches, fps, fns = match_catalogs(detected_cat, truth)
+            stats = compute_detection_stats(detected_cat, truth, matches, fps, fns)
+
+            result["catalog_comparison"] = {
+                "n_truth_events": stats["n_truth"],
+                "n_matched": stats["n_matched"],
+                "recall_percent": stats["recall_percent"],
+                "precision_percent": stats["precision_percent"],
+            }
+
+            if "avg_dist_err_km" in stats:
+                result["catalog_comparison"]["avg_dist_err_km"] = stats["avg_dist_err_km"]
+                result["catalog_comparison"]["avg_depth_err_km"] = stats["avg_depth_err_km"]
+
+    return json.dumps(result, indent=2, ensure_ascii=False)
+

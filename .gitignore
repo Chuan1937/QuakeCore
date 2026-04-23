@@ -17,6 +17,19 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+/NonLinLoc
 
 /deploy/
+/Validation/Waveforms-teleseismic
+/Validation/Waveforms-near-seismic
+/Validation/near-seismic-catalog
+/Validation/teleseismic-catalog
+/Validation/near-seismic-location/results
+/Validation/near-seismic-location/results_blind
+/Validation/teleseismic-location/results
+/Validation/near-seismic-location/results_dl
+/Validation/near-seismic-location/taup
+/Validation/near-seismic-location/nlloc_model
+/Validation/teleseismic-location/taup
+/Validation/ContinuousData
 /Validation/
