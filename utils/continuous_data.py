@@ -7,11 +7,365 @@ for specified time windows and geographic regions.
 
 import os
 import glob
-from typing import Dict, Optional, Tuple, Any
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Optional, Tuple, Any, List, Callable
+from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
 
 import numpy as np
 from obspy import UTCDateTime, read as obspy_read
 from obspy.clients.fdsn import Client as FDSNClient
+
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+
+
+# =================== Predefined Seismic Regions ===================
+
+REGIONS = {
+    # Southern California
+    "南加州": {
+        "min_lat": 32.0, "max_lat": 36.5, "min_lon": -120.0, "max_lon": -115.0,
+        "network": "CI", "client": "SCEDC", "catalog": "SCEDC",
+        "description": "Southern California (CI network, SCEDC)"
+    },
+    # Northern California
+    "北加州": {
+        "min_lat": 36.0, "max_lat": 42.0, "min_lon": -124.0, "max_lon": -120.0,
+        "network": "BK", "client": "NCEDC", "catalog": "NCEDC",
+        "description": "Northern California (BK network, NCEDC)"
+    },
+    # Central California
+    "中加州": {
+        "min_lat": 34.0, "max_lat": 38.0, "min_lon": -122.0, "max_lon": -118.0,
+        "network": "CI,BK", "client": "SCEDC", "catalog": "SCEDC",
+        "description": "Central California (CI+BK networks)"
+    },
+    # All California
+    "加州": {
+        "min_lat": 32.0, "max_lat": 42.0, "min_lon": -124.0, "max_lon": -114.0,
+        "network": "CI,BK", "client": "SCEDC", "catalog": "SCEDC",
+        "description": "All California (CI+BK networks)"
+    },
+    # USGS National/Regional
+    "美国西部": {
+        "min_lat": 30.0, "max_lat": 50.0, "min_lon": -130.0, "max_lon": -100.0,
+        "network": "*", "client": "USGS", "catalog": "USGS",
+        "description": "US Western US (USGS)"
+    },
+    # Southern California with USGS catalog comparison
+    "南加州_对比USGS": {
+        "min_lat": 32.0, "max_lat": 36.5, "min_lon": -120.0, "max_lon": -115.0,
+        "network": "CI", "client": "SCEDC", "catalog": "USGS",
+        "description": "Southern California with USGS ground truth"
+    },
+    # Pacific Northwest
+    "太平洋西北": {
+        "min_lat": 40.0, "max_lat": 49.0, "min_lon": -125.0, "max_lon": -116.0,
+        "network": "UW,CC,CN", "client": "IRIS", "catalog": "USGS",
+        "description": "Pacific Northwest (UW/CC/CN networks)"
+    },
+    # Japan
+    "日本": {
+        "min_lat": 30.0, "max_lat": 46.0, "min_lon": 125.0, "max_lon": 150.0,
+        "network": "*", "client": "NIED", "catalog": "NIED",
+        "description": "Japan (NIED)"
+    },
+    # New Zealand
+    "新西兰": {
+        "min_lat": -48.0, "max_lat": -34.0, "min_lon": 165.0, "max_lon": 180.0,
+        "network": "NZ", "client": "GEONET", "catalog": "GEONET",
+        "description": "New Zealand (NZ network)"
+    },
+    # Europe (example: Italy)
+    "欧洲": {
+        "min_lat": 36.0, "max_lat": 48.0, "min_lon": 6.0, "max_lon": 19.0,
+        "network": "IV,MI", "client": "INGV", "catalog": "INGV",
+        "description": "Europe (Italy, IV/MI networks)"
+    },
+}
+
+# Region aliases
+REGION_ALIASES = {
+    "socal": "南加州",
+    "southern_ca": "南加州",
+    "socalifornia": "南加州",
+    "nocal": "北加州",
+    "northern_ca": "北加州",
+    "northern_california": "北加州",
+    "central_ca": "中加州",
+    "central_california": "中加州",
+    "california": "加州",
+    "california_all": "加州",
+    "ca": "加州",
+    "us_west": "美国西部",
+    "western_us": "美国西部",
+    "pacific_nw": "太平洋西北",
+    "pnw": "太平洋西北",
+    "japan": "日本",
+    "nz": "新西兰",
+    "new_zealand": "新西兰",
+    "europe": "欧洲",
+    "italy": "欧洲",
+}
+
+# Catalog to client mapping for ground truth fetching
+CATALOG_CLIENTS = {
+    "SCEDC": "SCEDC",
+    "NCEDC": "NCEDC",
+    "USGS": "USGS",
+    "NIED": "NIED",
+    "GEONET": "GEONET",
+    "INGV": "INGV",
+}
+
+CATALOG_ALIASES = {
+    "usgc": "USGS",
+    "usgs": "USGS",
+    "scedc": "SCEDC",
+    "ncedc": "NCEDC",
+    "nied": "NIED",
+    "geonet": "GEONET",
+    "ingv": "INGV",
+}
+
+PLACE_ALIASES = {
+    "usc": {
+        "name": "南加州大学",
+        "en_name": "University of Southern California",
+        "latitude": 34.0224,
+        "longitude": -118.2851,
+        "radius_km": 40.0,
+        "network": "CI",
+        "client": "SCEDC",
+        "catalog": "SCEDC",
+    },
+    "university of southern california": {
+        "name": "南加州大学",
+        "en_name": "University of Southern California",
+        "latitude": 34.0224,
+        "longitude": -118.2851,
+        "radius_km": 40.0,
+        "network": "CI",
+        "client": "SCEDC",
+        "catalog": "SCEDC",
+    },
+    "南加州大学": {
+        "name": "南加州大学",
+        "en_name": "University of Southern California",
+        "latitude": 34.0224,
+        "longitude": -118.2851,
+        "radius_km": 40.0,
+        "network": "CI",
+        "client": "SCEDC",
+        "catalog": "SCEDC",
+    },
+}
+
+_PLACE_RESOLUTION_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def get_region(region_name: str) -> Optional[Dict[str, Any]]:
+    """Get region config by name, supporting aliases."""
+    # Direct match
+    if region_name in REGIONS:
+        return REGIONS[region_name].copy()
+    # Alias match
+    alias = region_name.lower().strip()
+    if alias in REGION_ALIASES:
+        return REGIONS[REGION_ALIASES[alias]].copy()
+    return None
+
+
+def list_regions() -> List[str]:
+    """List all available region names."""
+    return list(REGIONS.keys())
+
+
+def _normalize_client_name(client_name: str) -> str:
+    """Normalize official client names and common aliases."""
+    if not client_name:
+        return "SCEDC"
+    raw = str(client_name).strip()
+    upper = raw.upper()
+    if upper in CATALOG_CLIENTS:
+        return CATALOG_CLIENTS[upper]
+    lower = raw.lower()
+    if lower in CATALOG_ALIASES:
+        return CATALOG_ALIASES[lower]
+    return upper
+
+
+def _client_candidates(client_name: str) -> List[str]:
+    """Candidate FDSN clients for metadata fallback."""
+    primary = _normalize_client_name(client_name)
+    ordered = [primary]
+    for alt in ["IRIS", "USGS"]:
+        if alt not in ordered:
+            ordered.append(alt)
+    return ordered
+
+
+def _place_cache_path() -> str:
+    return os.path.join(PROJECT_ROOT, "data", "continuous", "place_cache.json")
+
+
+def _load_place_cache() -> Dict[str, Dict[str, Any]]:
+    if _PLACE_RESOLUTION_CACHE:
+        return _PLACE_RESOLUTION_CACHE
+
+    cache_path = _place_cache_path()
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                _PLACE_RESOLUTION_CACHE.update(data)
+    except Exception:
+        pass
+    return _PLACE_RESOLUTION_CACHE
+
+
+def _save_place_cache() -> None:
+    try:
+        cache_path = _place_cache_path()
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(_PLACE_RESOLUTION_CACHE, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _infer_provider_from_coordinates(lat: float, lon: float, country_code: str = "") -> Dict[str, str]:
+    country_code = (country_code or "").lower()
+    if country_code == "us" and 32.0 <= lat <= 42.5 and -125.0 <= lon <= -114.0:
+        if lat < 36.5:
+            return {"network": "CI", "client": "SCEDC", "catalog": "SCEDC"}
+        return {"network": "BK", "client": "NCEDC", "catalog": "NCEDC"}
+    if country_code == "us":
+        return {"network": "*", "client": "IRIS", "catalog": "USGS"}
+    return {"network": "*", "client": "IRIS", "catalog": "USGS"}
+
+
+def _geocode_place(query: str) -> Optional[Dict[str, Any]]:
+    query = str(query).strip()
+    if not query:
+        return None
+
+    cache = _load_place_cache()
+    cached = cache.get(query.lower())
+    if cached:
+        return cached.copy()
+
+    try:
+        url = (
+            "https://nominatim.openstreetmap.org/search?"
+            f"q={quote_plus(query)}&format=jsonv2&addressdetails=1&limit=1"
+        )
+        request = Request(url, headers={"User-Agent": "QuakeCore/1.0"})
+        with urlopen(request, timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if not payload:
+            return None
+
+        top = payload[0]
+        lat = float(top.get("lat"))
+        lon = float(top.get("lon"))
+        address = top.get("address") or {}
+        provider = _infer_provider_from_coordinates(lat, lon, address.get("country_code", ""))
+
+        lower_query = query.lower()
+        radius_km = 20.0 if any(term in lower_query for term in ("university", "campus", "college", "school", "大学", "学院")) else 30.0
+        display_name = top.get("display_name") or query
+        result = {
+            "name": query,
+            "en_name": display_name,
+            "latitude": lat,
+            "longitude": lon,
+            "radius_km": radius_km,
+            "network": provider["network"],
+            "client": provider["client"],
+            "catalog": provider["catalog"],
+            "source": "nominatim",
+        }
+        cache[query.lower()] = result
+        _save_place_cache()
+        return result.copy()
+    except Exception:
+        return None
+
+
+def resolve_named_place(name: str) -> Optional[Dict[str, Any]]:
+    """Resolve a named place to a center point and recommended monitoring defaults."""
+    if not name:
+        return None
+    key = str(name).strip().lower()
+    if key in PLACE_ALIASES:
+        return PLACE_ALIASES[key].copy()
+    geocoded = _geocode_place(name)
+    if geocoded:
+        return geocoded
+    # Try a looser substring match for common punctuation/casing differences.
+    for alias, data in PLACE_ALIASES.items():
+        if alias in key or key in alias:
+            return data.copy()
+    return None
+
+
+def _inventory_to_stations(inv) -> Dict[str, Dict[str, float]]:
+    stations = {}
+    for net in inv:
+        for sta in net:
+            stations[f"{net.code}.{sta.code}"] = {
+                "latitude": sta.latitude,
+                "longitude": sta.longitude,
+                "elevation": sta.elevation or 0.0
+            }
+    return stations
+
+
+def estimate_continuous_download(
+    start_time: UTCDateTime,
+    end_time: UTCDateTime,
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+    network: str = "CI",
+    channel: str = "BH?,HH?",
+    client_name: str = "SCEDC",
+    timeout: int = 120,
+) -> Dict[str, Any]:
+    """Estimate the size and station count for a continuous download."""
+    client = FDSNClient(_normalize_client_name(client_name), timeout=timeout)
+    try:
+        inv = client.get_stations(
+            network=network, station="*", channel=channel,
+            minlatitude=min_lat, maxlatitude=max_lat,
+            minlongitude=min_lon, maxlongitude=max_lon,
+            starttime=start_time, endtime=end_time, level="response"
+        )
+    except Exception as e:
+        return {"error": f"Failed to fetch inventory: {e}"}
+
+    stations = _inventory_to_stations(inv)
+    duration_seconds = max(0.0, float(end_time - start_time))
+    station_count = len(stations)
+    channel_groups = max(1, len([part for part in str(channel).split(",") if part.strip()]))
+    estimated_bytes = station_count * duration_seconds * 100.0 * 3.0 * channel_groups * 4.0
+
+    return {
+        "station_count": station_count,
+        "duration_seconds": duration_seconds,
+        "estimated_bytes": float(estimated_bytes),
+        "estimated_mb": float(estimated_bytes / (1024.0 ** 2)),
+        "estimated_gb": float(estimated_bytes / (1024.0 ** 3)),
+        "stations": stations,
+        "inventory": inv,
+    }
 
 
 # =================== Paths ===================
@@ -24,6 +378,66 @@ def get_default_data_dir() -> str:
     """Get the default directory for continuous data storage."""
     os.makedirs(DATA_DIR, exist_ok=True)
     return DATA_DIR
+
+
+def get_chunk_dir(start_time: UTCDateTime, data_dir: Optional[str] = None) -> str:
+    """Return chunk directory path for a given start time."""
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+    return os.path.join(data_dir, f"chunk_{start_time.strftime('%Y%m%d_%H%M%S')}")
+
+
+def _chunk_stations_json_path(chunk_dir: str) -> str:
+    return os.path.join(chunk_dir, "stations.json")
+
+
+def _save_chunk_stations_cache(chunk_dir: str, stations: Dict[str, Dict[str, float]]) -> None:
+    """Persist station coordinates for local/offline re-runs."""
+    if not stations:
+        return
+    try:
+        os.makedirs(chunk_dir, exist_ok=True)
+        with open(_chunk_stations_json_path(chunk_dir), "w", encoding="utf-8") as f:
+            json.dump(stations, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_chunk_stations_cache(chunk_dir: str) -> Dict[str, Dict[str, float]]:
+    """
+    Load station cache for a chunk.
+    Fallbacks:
+    1) chunk_dir/stations.json
+    2) data/fdsn/stations.json (legacy/global cache)
+    """
+    candidates = [
+        _chunk_stations_json_path(chunk_dir),
+        os.path.join(PROJECT_ROOT, "data", "fdsn", "stations.json"),
+    ]
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                continue
+            normalized = {}
+            for key, val in data.items():
+                if not isinstance(val, dict):
+                    continue
+                if "latitude" in val and "longitude" in val:
+                    sta_key = os.path.splitext(str(key))[0]
+                    normalized[sta_key] = {
+                        "latitude": float(val.get("latitude", 0.0)),
+                        "longitude": float(val.get("longitude", 0.0)),
+                        "elevation": float(val.get("elevation", 0.0) or 0.0),
+                    }
+            if normalized:
+                return normalized
+        except Exception:
+            continue
+    return {}
 
 
 # =================== Distance Functions ===================
@@ -51,6 +465,12 @@ def download_continuous_data(
     data_dir: Optional[str] = None,
     client_name: str = "SCEDC",
     timeout: int = 120,
+    download_workers: Optional[int] = None,
+    inventory=None,
+    stations: Optional[Dict[str, Dict[str, float]]] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    local_only: bool = False,
+    refresh_station_metadata: bool = False,
 ) -> Tuple[Dict[str, str], Dict[str, Dict[str, float]]]:
     """
     Download continuous waveform data for specified region and time window.
@@ -67,6 +487,7 @@ def download_continuous_data(
         data_dir: Directory to store downloaded data
         client_name: FDSN client name (default: "SCEDC")
         timeout: Request timeout in seconds
+        download_workers: Number of parallel station-download workers
 
     Returns:
         Tuple of (streams dict mapping station_id to mseed file path,
@@ -75,85 +496,166 @@ def download_continuous_data(
     if data_dir is None:
         data_dir = get_default_data_dir()
 
-    chunk_dir = os.path.join(data_dir, f"chunk_{start_time.strftime('%Y%m%d_%H%M%S')}")
+    chunk_dir = get_chunk_dir(start_time=start_time, data_dir=data_dir)
     os.makedirs(chunk_dir, exist_ok=True)
+
+    def _emit(stage: str, **payload):
+        message = {"stage": stage, **payload}
+        if progress_callback is not None:
+            try:
+                progress_callback(message)
+            except Exception:
+                pass
+        else:
+            text = payload.get("message")
+            if text:
+                print(f"  [{stage}] {text}")
 
     # Check for existing data
     existing_mseed = glob.glob(os.path.join(chunk_dir, "*.mseed"))
     if existing_mseed:
-        print(f"  [INFO] Found {len(existing_mseed)} existing mseed files in {chunk_dir}")
-
-        client = FDSNClient(client_name, timeout=timeout)
-        try:
-            inv = client.get_stations(
-                network=network, station="*", channel=channel,
-                minlatitude=min_lat, maxlatitude=max_lat,
-                minlongitude=min_lon, maxlongitude=max_lon,
-                starttime=start_time, endtime=end_time, level="response"
-            )
-        except Exception as e:
-            print(f"  [ERROR] Failed to fetch inventory: {e}")
+        _emit("download", message=f"Found {len(existing_mseed)} existing mseed files in {chunk_dir}")
+        existing_keys = {os.path.splitext(os.path.basename(p))[0] for p in existing_mseed}
+        if stations is None:
+            stations = load_chunk_stations_cache(chunk_dir)
+            if stations:
+                _emit("metadata", message=f"Loaded {len(stations)} stations from local cache.")
+        if local_only and (stations is None or not stations):
+            _emit("error", message="local_only=true but no local station cache found for this chunk.")
             return {}, {}
 
-        stations = {}
-        for net in inv:
-            for sta in net:
-                stations[f"{net.code}.{sta.code}"] = {
-                    "latitude": sta.latitude,
-                    "longitude": sta.longitude,
-                    "elevation": sta.elevation or 0.0
-                }
+        coverage = 0.0
+        if stations:
+            covered = sum(1 for k in existing_keys if k in stations)
+            coverage = covered / max(1, len(existing_keys))
+            _emit("metadata", message=f"Local station coverage: {covered}/{len(existing_keys)} ({coverage*100:.1f}%).")
+
+        if stations is None or not stations or coverage < 0.6:
+            if not refresh_station_metadata:
+                _emit("metadata", message="Use local waveform/cache only; skip remote station metadata refresh.")
+            elif local_only:
+                _emit("metadata", message="local_only=true, skip remote station metadata补全。")
+            else:
+                # Fallback to remote metadata when local cache missing or coverage too low.
+                if inventory is None:
+                    last_err = None
+                    for cname in _client_candidates(client_name):
+                        try:
+                            client = FDSNClient(cname, timeout=timeout)
+                            inventory = client.get_stations(
+                                network=network, station="*", channel=channel,
+                                minlatitude=min_lat, maxlatitude=max_lat,
+                                minlongitude=min_lon, maxlongitude=max_lon,
+                                starttime=start_time, endtime=end_time, level="response"
+                            )
+                            _emit("metadata", message=f"Station metadata refreshed from {cname}.")
+                            break
+                        except Exception as e:
+                            last_err = e
+                            continue
+                    if inventory is None:
+                        if stations:
+                            _emit("metadata", message=f"Remote metadata unavailable, continue with local cache: {last_err}")
+                        else:
+                            _emit("error", message=f"Failed to fetch inventory: {last_err}")
+                            return {}, {}
+                if inventory is not None:
+                    stations_remote = _inventory_to_stations(inventory)
+                    if stations_remote:
+                        stations = stations_remote
+                        _save_chunk_stations_cache(chunk_dir, stations)
+                        _emit("metadata", message=f"Updated local station cache: {len(stations)} stations.")
 
         streams = {}
         for net_sta_file in existing_mseed:
             net_sta = os.path.splitext(os.path.basename(net_sta_file))[0]
             streams[net_sta] = net_sta_file
 
-        print(f"  Loaded {len(streams)} stations from existing data.")
+        _emit("download", message=f"Loaded {len(streams)} stations from existing data.")
         return streams, stations
 
     # Download new data
-    client = FDSNClient(client_name, timeout=timeout)
+    client = FDSNClient(_normalize_client_name(client_name), timeout=timeout)
 
-    print(f"--- Fetching Metadata for {network} network ---")
-    try:
-        inv = client.get_stations(
-            network=network, station="*", channel=channel,
-            minlatitude=min_lat, maxlatitude=max_lat,
-            minlongitude=min_lon, maxlongitude=max_lon,
-            starttime=start_time, endtime=end_time, level="response"
-        )
-    except Exception as e:
-        print(f"  [ERROR] Failed to fetch inventory: {e}")
-        return {}, {}
+    if inventory is None or stations is None:
+        _emit("metadata", message=f"Fetching metadata for {network} network")
+        try:
+            inventory = client.get_stations(
+                network=network, station="*", channel=channel,
+                minlatitude=min_lat, maxlatitude=max_lat,
+                minlongitude=min_lon, maxlongitude=max_lon,
+                starttime=start_time, endtime=end_time, level="response"
+            )
+        except Exception as e:
+            _emit("error", message=f"Failed to fetch inventory: {e}")
+            return {}, {}
 
-    stations = {}
-    for net in inv:
-        for sta in net:
-            stations[f"{net.code}.{sta.code}"] = {
-                "latitude": sta.latitude,
-                "longitude": sta.longitude,
-                "elevation": sta.elevation or 0.0
-            }
+    if stations is None:
+        stations = _inventory_to_stations(inventory)
+    _save_chunk_stations_cache(chunk_dir, stations)
 
-    print(f"  Found {len(stations)} stations. Downloading waveforms...")
+    inv_list = list(inventory)
+    _emit("metadata", message=f"Found {len(stations)} stations. Downloading waveforms...")
 
     streams = {}
-    for net in inv:
+    downloaded = 0
+    failed = 0
+    total = sum(len(net) for net in inv_list)
+    workers = int(download_workers or 16)
+    workers = max(1, min(16, workers))
+    progress = None
+    if TQDM_AVAILABLE:
+        progress = tqdm(total=total, desc=f"  [Download] {network}", unit="sta", leave=False)
+
+    tasks = []
+    existing = 0
+    for net in inv_list:
         for sta in net:
             net_sta = f"{net.code}.{sta.code}"
             mseed_file = os.path.join(chunk_dir, f"{net_sta}.mseed")
             if os.path.exists(mseed_file):
                 streams[net_sta] = mseed_file
+                existing += 1
                 continue
-            try:
-                st = client.get_waveforms(net.code, sta.code, "*", channel, start_time, end_time)
-                st.write(mseed_file, format="MSEED")
-                streams[net_sta] = mseed_file
-            except Exception:
-                pass
+            tasks.append((net.code, sta.code, net_sta, mseed_file))
 
-    print(f"  Successfully downloaded data for {len(streams)} stations.")
+    downloaded += existing
+    if existing > 0:
+        _emit("download", message=f"{downloaded}/{total} stations ready", downloaded=downloaded, total=total)
+    if progress is not None and existing > 0:
+        progress.update(existing)
+
+    def _download_one(net_code: str, sta_code: str, net_sta: str, mseed_file: str):
+        local_client = FDSNClient(_normalize_client_name(client_name), timeout=timeout)
+        st = local_client.get_waveforms(net_code, sta_code, "*", channel, start_time, end_time)
+        st.write(mseed_file, format="MSEED")
+        return net_sta, mseed_file
+
+    try:
+        if tasks:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_task = {
+                    executor.submit(_download_one, net_code, sta_code, net_sta, mseed_file): (net_sta,)
+                    for net_code, sta_code, net_sta, mseed_file in tasks
+                }
+                for fut in as_completed(future_to_task):
+                    net_sta = future_to_task[fut][0]
+                    try:
+                        sta_id, out_file = fut.result()
+                        streams[sta_id] = out_file
+                        downloaded += 1
+                        _emit("download", message=f"{downloaded}/{total} stations ready", downloaded=downloaded, total=total)
+                    except Exception as exc:
+                        failed += 1
+                        _emit("download", message=f"{net_sta} failed: {exc}", downloaded=downloaded, total=total, failed=failed)
+                    finally:
+                        if progress is not None:
+                            progress.update(1)
+    finally:
+        if progress is not None:
+            progress.close()
+
+    _emit("download", message=f"Successfully downloaded data for {len(streams)} stations.", downloaded=downloaded, failed=failed, total=total)
     return streams, stations
 
 
@@ -217,7 +719,7 @@ def fetch_catalog(
     Returns:
         List of event dictionaries with time, lat, lon, depth, mag, id
     """
-    client = FDSNClient(client_name)
+    client = FDSNClient(_normalize_client_name(client_name))
     try:
         cat = client.get_events(
             starttime=start_time, endtime=end_time,

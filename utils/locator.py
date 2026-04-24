@@ -915,7 +915,7 @@ def locate_earthquake(
 
 
 def plot_location_map_matplotlib(hypocenter, stations, output_path, title=None):
-    """Fallback plotting method using matplotlib instead of PyGMT"""
+    """Fallback plotting method using plain matplotlib when Cartopy is unavailable."""
     import matplotlib.pyplot as plt
     import os
     
@@ -968,7 +968,7 @@ def plot_location_map(
     title: Optional[str] = None,
 ) -> str:
     """
-    Plot earthquake location and stations using PyGMT.
+    Plot earthquake location and stations using Cartopy.
 
     Automatically detects whether a global or regional map is needed
     based on the spread of stations and event location.
@@ -983,13 +983,6 @@ def plot_location_map(
     Returns:
         Path to the saved figure
     """
-    try:
-        import pygmt
-    except Exception as e:
-        print(f"PyGMT not available or error ({e}). Using matplotlib fallback.")
-        return plot_location_map_matplotlib(hypocenter, stations, output_path, title)
-
-
     # Get hypocenter coordinates
     evt_lat = float(hypocenter.get("latitude", 0))
     evt_lon = float(hypocenter.get("longitude", 0))
@@ -1000,21 +993,18 @@ def plot_location_map(
     sta_lons = [float(s.get("longitude", 0)) for s in stations]
     sta_names = [s.get("station", s.get("name", "UNK")) for s in stations]
 
-    # Determine if we need a global map (stations span > 180° longitude)
     all_lats = [evt_lat] + sta_lats
     all_lons = [evt_lon] + sta_lons
-
     lon_range = max(all_lons) - min(all_lons)
     lat_range = max(all_lats) - min(all_lats)
     is_global = lon_range > 180 or lat_range > 90
 
-    # Determine region if not provided
     if region is None:
         if is_global:
             region = [-180, 180, -90, 90]
         else:
-            lat_margin = 1
-            lon_margin = 1
+            lat_margin = max(1.0, lat_range * 0.2 + 0.2)
+            lon_margin = max(1.0, lon_range * 0.2 + 0.2)
             region = [
                 min(all_lons) - lon_margin,
                 max(all_lons) + lon_margin,
@@ -1022,131 +1012,91 @@ def plot_location_map(
                 min(90, max(all_lats) + lat_margin),
             ]
 
-    # Ensure region is valid
     region = [float(r) for r in region]
 
-    # Create figure
-    fig = pygmt.Figure()
-
-    # Choose projection based on map scale
-    if is_global or (region[1] - region[0]) > 180:
-        projection = "H18c"  # Mollweide for global maps
-        resolution = "30m"   # Lower resolution for global
-        frame_title = title or "Earthquake Location Map"
-        frame = ["af", f'WSne+t"{frame_title}"']
-    else:
-        projection = "M15c"  # Mercator for regional maps
-        resolution = "01m"   # Higher resolution for regional maps
-        frame_title = title or "Earthquake Location Map"
-        frame = ["af", f'WSne+t"{frame_title}"']
-
-    # Plot basemap
-    fig.basemap(
-        region=region,
-        projection=projection,
-        frame=frame,
-    )
-
-    # Add topography using load_earth_relief for high-quality rendering
     try:
-        grid = pygmt.datasets.load_earth_relief(resolution=resolution, region=region)
-        fig.grdimage(
-            grid,
-            region=region,
-            projection=projection,
-            cmap="geo",
-            shading=True,
-        )
-    except Exception:
-        # Fallback: try progressively lower resolutions
-        for fallback_res in ["05m", "10m"]:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        print(f"[INFO] Cartopy unavailable ({e}). Switched to matplotlib fallback.")
+        return plot_location_map_matplotlib(hypocenter, stations, output_path, title)
+
+    try:
+        projection = ccrs.Robinson() if is_global else ccrs.PlateCarree()
+        fig = plt.figure(figsize=(10, 8))
+        ax = plt.axes(projection=projection)
+        data_crs = ccrs.PlateCarree()
+
+        if is_global:
+            ax.set_global()
+        else:
+            ax.set_extent(region, crs=data_crs)
+
+        ax.add_feature(cfeature.OCEAN, facecolor="#DDEEFF", zorder=0)
+        ax.add_feature(cfeature.LAND, facecolor="#F6F2E9", zorder=0)
+        ax.add_feature(cfeature.COASTLINE.with_scale("110m"), linewidth=0.8, zorder=1)
+        ax.add_feature(cfeature.BORDERS.with_scale("110m"), linewidth=0.5, edgecolor="gray", zorder=1)
+
+        if not is_global:
             try:
-                grid = pygmt.datasets.load_earth_relief(resolution=fallback_res, region=region)
-                fig.grdimage(
-                    grid,
-                    region=region,
-                    projection=projection,
-                    cmap="geo",
-                    shading=True,
-                )
-                break
+                ax.add_feature(cfeature.STATES.with_scale("50m"), linewidth=0.4, edgecolor="gray", zorder=1)
             except Exception:
-                continue
+                pass
 
-    # Add coastlines (no fill to let topography show through)
-    fig.coast(
-        region=region,
-        projection=projection,
-        shorelines="1/0.5p,black",
-        borders="1/0.5p,gray",
-    )
+        gl = ax.gridlines(crs=data_crs, draw_labels=not is_global, linewidth=0.4, color="gray", alpha=0.5, linestyle="--")
+        if not is_global:
+            gl.top_labels = False
+            gl.right_labels = False
 
-    # Plot stations
-    if sta_lons and sta_lats:
-        fig.plot(
-            x=sta_lons,
-            y=sta_lats,
-            style="t0.6c",
-            fill="cyan",
-            pen="black",
-            label="Stations",
+        if sta_lons and sta_lats:
+            ax.scatter(
+                sta_lons, sta_lats,
+                transform=data_crs,
+                c="#00BCD4",
+                marker="^",
+                s=55,
+                edgecolors="black",
+                linewidths=0.6,
+                label="Stations",
+                zorder=3,
+            )
+            if len(sta_names) <= 40:
+                for lon, lat, name in zip(sta_lons, sta_lats, sta_names):
+                    ax.text(
+                        lon, lat, name,
+                        transform=data_crs,
+                        fontsize=7,
+                        color="#0A4A5A",
+                        ha="left", va="bottom",
+                        zorder=4,
+                    )
+
+        ax.scatter(
+            [evt_lon], [evt_lat],
+            transform=data_crs,
+            c="red",
+            marker="*",
+            s=220,
+            edgecolors="black",
+            linewidths=0.8,
+            label="Epicenter",
+            zorder=5,
         )
 
-        # Add station labels
-        for lon, lat, name in zip(sta_lons, sta_lats, sta_names):
-            fig.text(
-                x=lon,
-                y=lat,
-                text=name,
-                font="8p,Helvetica,cyan",
-                offset="0.5c/0.5c",
-            )
+        frame_title = title or "Earthquake Location Map"
+        ax.set_title(f"{frame_title}\nDepth: {evt_depth:.1f} km", fontsize=12)
+        ax.legend(loc="lower right", framealpha=0.95)
 
-    # Plot earthquake epicenter
-    fig.plot(
-        x=evt_lon,
-        y=evt_lat,
-        style="a1.0c",
-        fill="red",
-        pen="black",
-        label="Epicenter",
-    )
-
-    # Add legend with custom spacing
-    import tempfile
-    legend_spec = (
-        f"G 0.4c\n"
-        f"S 0.3c t 0.3c cyan 1p,black 0.6c Stations\n"
-        f"G 0.4c\n"
-        f"S 0.3c a 0.5c red 1p,black 0.6c Epicenter\n"
-    )
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
-        tmp.write(legend_spec)
-        tmp_path = tmp.name
-    fig.legend(spec=tmp_path, position="JTR+jTR+o0.3c/0.3c", box="+gwhite+p1p,gray+s")
-    os.unlink(tmp_path)
-
-    # Add info text box
-    info_lines = (
-        f"Location: {abs(evt_lat):.2f}{chr(176)}{'N' if evt_lat >= 0 else 'S'}, "
-        f"{abs(evt_lon):.2f}{chr(176)}{'E' if evt_lon >= 0 else 'W'}  "
-        f"Depth: {evt_depth:.1f} km"
-    )
-    fig.text(
-        text=info_lines,
-        position="TL",
-        font="10p,Helvetica,black",
-        justify="TL",
-        offset="0.2c/0.2c",
-        fill="white@80",
-        pen="0.5p,gray",
-    )
-
-    # Save figure
-    fig.savefig(output_path, dpi=300)
-    print(f"Location map saved to: {output_path}")
-
-    return output_path
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300)
+        plt.close(fig)
+        print(f"Location map saved to: {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"[INFO] Cartopy plotting failed ({e}). Switched to matplotlib fallback.")
+        return plot_location_map_matplotlib(hypocenter, stations, output_path, title)
 
 
 def plot_location_cross_section(
@@ -1267,4 +1217,240 @@ def plot_location_cross_section(
     fig.savefig(output_path, dpi=150)
     print(f"Cross-section saved to: {output_path}")
 
+    return output_path
+
+
+def plot_location_three_views(
+    hypocenter: Dict[str, Any],
+    stations: List[Dict[str, Any]],
+    output_path: str,
+    title: Optional[str] = None,
+) -> str:
+    """
+    Plot a single large 3-view location figure:
+    - map view (lon-lat)
+    - lat-depth profile
+    - lon-depth profile
+    plus a magnitude legend panel.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    import matplotlib as mpl
+
+    evt_lat = float(hypocenter.get("latitude", 0.0))
+    evt_lon = float(hypocenter.get("longitude", 0.0))
+    evt_depth = float(hypocenter.get("depth_km", hypocenter.get("depth", 0.0)))
+    evt_mag = float(hypocenter.get("magnitude", hypocenter.get("mag", 3.0)))
+
+    sta_lats = [float(s.get("latitude", 0.0)) for s in stations]
+    sta_lons = [float(s.get("longitude", 0.0)) for s in stations]
+    sta_names = [s.get("station", s.get("name", "UNK")) for s in stations]
+
+    all_lats = [evt_lat] + sta_lats if sta_lats else [evt_lat]
+    all_lons = [evt_lon] + sta_lons if sta_lons else [evt_lon]
+    min_lat, max_lat = min(all_lats), max(all_lats)
+    min_lon, max_lon = min(all_lons), max(all_lons)
+    lat_pad = max(0.2, (max_lat - min_lat) * 0.15 + 0.1)
+    lon_pad = max(0.2, (max_lon - min_lon) * 0.15 + 0.1)
+
+    depth_cap = max(45.0, evt_depth + 8.0)
+    norm = mpl.colors.Normalize(vmin=0.0, vmax=depth_cap)
+    cmap = cm.jet_r
+    evt_color = cmap(norm(max(0.0, evt_depth)))
+
+    fig = plt.figure(figsize=(9, 8))
+    fig.subplots_adjust(hspace=0.05, wspace=0.05)
+    gs0 = fig.add_gridspec(8, 12)
+
+    use_cartopy = False
+    try:
+        import cartopy.crs as ccrs
+        use_cartopy = True
+    except Exception:
+        use_cartopy = False
+
+    if use_cartopy:
+        data_crs = ccrs.PlateCarree()
+        ax0 = fig.add_subplot(gs0[0:5, 0:7], projection=data_crs)
+        ax0.set_extent(
+            [min_lon - lon_pad, max_lon + lon_pad, min_lat - lat_pad, max_lat + lat_pad],
+            crs=data_crs,
+        )
+        ax0.set_facecolor("#f5f6f8")
+        # Terrain-like basemap without external tile service.
+        try:
+            ax0.stock_img()
+        except Exception:
+            pass
+        gl = ax0.gridlines(
+            crs=data_crs,
+            draw_labels=True,
+            linewidth=0.5,
+            color="gray",
+            alpha=0.6,
+            linestyle="--",
+        )
+        gl.top_labels = False
+        gl.right_labels = False
+    else:
+        ax0 = fig.add_subplot(gs0[0:5, 0:7])
+        ax0.set_facecolor("#f5f6f8")
+        ax0.grid(linestyle="--", alpha=0.6)
+
+    ax1 = fig.add_subplot(gs0[0:5, 7:12])  # depth-lat
+    ax2 = fig.add_subplot(gs0[5:9, 0:7])   # lon-depth
+    ax3 = fig.add_subplot(gs0[5:9, 7:12])  # magnitude legend
+
+    if sta_lons and sta_lats:
+        if use_cartopy:
+            ax0.scatter(
+                sta_lons, sta_lats,
+                transform=data_crs,
+                marker="^",
+                c="#2a9d8f",
+                s=35,
+                edgecolors="black",
+                linewidths=0.5,
+                zorder=5,
+                label="Stations",
+            )
+            if len(sta_names) <= 40:
+                for lon, lat, name in zip(sta_lons, sta_lats, sta_names):
+                    ax0.text(lon, lat, name, transform=data_crs, fontsize=6.5, color="#1b4965")
+        else:
+            ax0.scatter(
+                sta_lons, sta_lats,
+                marker="^",
+                c="#2a9d8f",
+                s=35,
+                edgecolors="black",
+                linewidths=0.5,
+                zorder=5,
+                label="Stations",
+            )
+            if len(sta_names) <= 40:
+                for lon, lat, name in zip(sta_lons, sta_lats, sta_names):
+                    ax0.text(lon, lat, name, fontsize=6.5, color="#1b4965")
+
+    event_size = max(30.0, evt_mag * 20.0)
+    if use_cartopy:
+        ax0.scatter(
+            [evt_lon], [evt_lat],
+            transform=data_crs,
+            marker="*",
+            c=[evt_color],
+            s=event_size * 2.2,
+            edgecolors="black",
+            linewidths=0.8,
+            zorder=10,
+            label="Event",
+        )
+    else:
+        ax0.scatter(
+            [evt_lon], [evt_lat],
+            marker="*",
+            c=[evt_color],
+            s=event_size * 2.2,
+            edgecolors="black",
+            linewidths=0.8,
+            zorder=10,
+            label="Event",
+        )
+        ax0.set_xlim(min_lon - lon_pad, max_lon + lon_pad)
+        ax0.set_ylim(min_lat - lat_pad, max_lat + lat_pad)
+        ax0.set_xlabel("Lon. (°)")
+        ax0.set_ylabel("Lat. (°)")
+
+    ax0.set_title("Plan View")
+    ax0.legend(loc="lower right", fontsize=8, framealpha=0.9)
+
+    if sta_lats:
+        ax1.scatter(
+            [0.0] * len(sta_lats),
+            sta_lats,
+            marker="^",
+            c="#2a9d8f",
+            s=30,
+            edgecolors="black",
+            linewidths=0.5,
+            zorder=4,
+        )
+    ax1.scatter(
+        [max(0.0, evt_depth)],
+        [evt_lat],
+        marker="*",
+        c=[evt_color],
+        s=event_size * 1.6,
+        edgecolors="black",
+        linewidths=0.8,
+        zorder=10,
+    )
+    ax1.set_ylim(min_lat - lat_pad, max_lat + lat_pad)
+    ax1.set_xlim(0.0, depth_cap)
+    ax1.set_facecolor("#d9d9d9")
+    ax1.tick_params(axis="both", which="major", labelsize=10)
+    ax1.set_xlabel("Depth (km)", fontsize=11)
+    ax1.xaxis.tick_top()
+    ax1.xaxis.set_label_position("top")
+    ax1.set_yticklabels([])
+    ax1.set_title("Lat-Depth")
+
+    if sta_lons:
+        ax2.scatter(
+            sta_lons,
+            [0.0] * len(sta_lons),
+            marker="^",
+            c="#2a9d8f",
+            s=30,
+            edgecolors="black",
+            linewidths=0.5,
+            zorder=4,
+        )
+    ax2.scatter(
+        [evt_lon],
+        [max(0.0, evt_depth)],
+        marker="*",
+        c=[evt_color],
+        s=event_size * 1.6,
+        edgecolors="black",
+        linewidths=0.8,
+        zorder=10,
+    )
+    ax2.set_xlim(min_lon - lon_pad, max_lon + lon_pad)
+    ax2.set_ylim(depth_cap, 0.0)
+    ax2.set_facecolor("#d9d9d9")
+    ax2.tick_params(axis="both", which="major", labelsize=10)
+    ax2.set_xlabel("Lon. (°)", fontsize=11)
+    ax2.set_ylabel("Depth (km)", fontsize=11)
+    ax2.set_title("Lon-Depth")
+
+    ax3.plot(0.10, 0.90, "o", mec="k", mfc="none", mew=1, ms=3 * 3)
+    ax3.plot(0.10, 0.78, "o", mec="k", mfc="none", mew=1, ms=4 * 3)
+    ax3.plot(0.10, 0.65, "o", mec="k", mfc="none", mew=1, ms=5 * 3)
+    ax3.plot(0.10, 0.50, "o", mec="k", mfc="none", mew=1, ms=6 * 3)
+    ax3.text(0.20, 0.88, "M 3.0", fontsize=11)
+    ax3.text(0.20, 0.76, "M 4.0", fontsize=11)
+    ax3.text(0.20, 0.62, "M 5.0", fontsize=11)
+    ax3.text(0.20, 0.47, "M 6.0", fontsize=11)
+    ax3.set_xticks([])
+    ax3.set_yticks([])
+    ax3.set_xlim(0, 1)
+    ax3.set_ylim(0, 1)
+    ax3.spines["left"].set_visible(False)
+    ax3.spines["right"].set_visible(False)
+    ax3.spines["bottom"].set_visible(False)
+    ax3.spines["top"].set_visible(False)
+
+    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax1, orientation="vertical")
+    cbar.set_label(label="Depth (km)", fontsize=11)
+    cbar.ax.tick_params(labelsize=10)
+
+    fig.suptitle(title or "Earthquake Location (Three Views)", fontsize=13)
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
     return output_path

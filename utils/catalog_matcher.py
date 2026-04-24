@@ -12,6 +12,40 @@ import numpy as np
 from .continuous_data import haversine_km
 
 
+def _to_epoch_seconds(value: Any) -> float:
+    """Convert supported time representations to epoch seconds (float)."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    # ObsPy UTCDateTime and similar objects expose timestamp as attr or method.
+    ts_attr = getattr(value, "timestamp", None)
+    if callable(ts_attr):
+        try:
+            return float(ts_attr())
+        except Exception:
+            pass
+    if ts_attr is not None:
+        try:
+            return float(ts_attr)
+        except Exception:
+            pass
+
+    # Datetime-like fallback
+    if hasattr(value, "timestamp"):
+        try:
+            return float(value.timestamp())
+        except Exception:
+            pass
+
+    # Last resort: parse as float-like string
+    try:
+        return float(str(value))
+    except Exception:
+        return 0.0
+
+
 def match_catalogs(
     detected_cat: List[Dict[str, Any]],
     truth_cat: List[Dict[str, Any]],
@@ -42,12 +76,14 @@ def match_catalogs(
     false_positives = []
 
     for det in detected_cat:
+        det_time = _to_epoch_seconds(det.get("time"))
         best_match = None
         min_time_diff = float('inf')
         best_truth_idx = -1
 
         for i, tru in enumerate(truth_cat):
-            t_diff = abs(det["time"] - tru["time"])
+            tru_time = _to_epoch_seconds(tru.get("time"))
+            t_diff = abs(det_time - tru_time)
             dist = haversine_km(det["latitude"], det["longitude"], tru["lat"], tru["lon"])
 
             # Check if this is a better match than current best
