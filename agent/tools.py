@@ -1,5 +1,6 @@
 import csv
 from dataclasses import asdict
+from datetime import datetime
 
 from langchain.tools import tool
 from utils.segy_handler import SegyHandler
@@ -207,6 +208,52 @@ def _normalize_method_list(raw_value):
     if isinstance(raw_value, (list, tuple, set)):
         return [str(item).strip() for item in raw_value if str(item).strip()]
     return None
+
+
+def _pick_weighted_score(pick: PickResult) -> float:
+    """Weighted score used for selecting best P/S pick for plotting."""
+    method_weights = {
+        "phasenet": 1.2,
+        "eqtransformer": 1.2,
+        "gpd": 1.1,
+        "sta_lta": 1.0,
+        "aic": 0.9,
+        "pai_k": 0.9,
+        "pai_s": 0.9,
+        "s_phase": 0.8,
+        "frequency_ratio": 0.8,
+        "autocorr": 0.7,
+        "feature_threshold": 0.7,
+        "ar_model": 0.7,
+        "template_correlation": 0.8,
+    }
+    base = float(pick.normalized_score) if pick.normalized_score is not None else 0.0
+    return base * method_weights.get(pick.method, 0.8)
+
+
+def _select_best_p_s_for_trace(picks: list[PickResult], trace_index: int) -> list[PickResult]:
+    """Force plotting to include best P and best S (if detected) for the target trace."""
+    trace_picks = [p for p in picks if int(p.trace_index) == int(trace_index)]
+    p_candidates = [p for p in trace_picks if (p.phase_type or "P").upper() == "P"]
+    s_candidates = [p for p in trace_picks if (p.phase_type or "P").upper() == "S"]
+
+    selected = []
+    if p_candidates:
+        selected.append(max(p_candidates, key=_pick_weighted_score))
+    if s_candidates:
+        selected.append(max(s_candidates, key=_pick_weighted_score))
+    return selected
+
+
+def _trace_channel_priority(trace) -> int:
+    """Prefer vertical channels when selecting a representative trace for plotting."""
+    metadata = getattr(trace, "metadata", {}) or {}
+    channel = str(metadata.get("channel", "")).upper()
+    if channel.endswith("Z"):
+        return 0
+    if channel.endswith(("N", "E")):
+        return 1
+    return 2
 
 
 def _parse_method_params(raw_value):
@@ -1636,21 +1683,60 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
         CURRENT_PICKS = picks
 
         summary = summarize_pick_results(picks)
-        
-        # 2. Load traces for plotting
         traces = load_traces(
             source=path,
             file_type=file_type,
             dataset=dataset
         )
-        
+
+        # Find best trace:
+        # 1) Prefer traces with both P and S picks
+        # 2) Then choose highest total confidence score
+        best_trace_idx = 0
+        best_trace_score = -1.0
+        best_has_both = False
+        for item in summary:
+            trace_idx = int(item.get("trace_index", 0))
+            best_p = item.get("best_p") or {}
+            best_s = item.get("best_s") or {}
+            phase_scores = []
+            for best_pick in (best_p, best_s):
+                if isinstance(best_pick, dict):
+                    score = best_pick.get("weighted_score")
+                    if score is None:
+                        score = best_pick.get("score")
+                    if score is not None:
+                        phase_scores.append(float(score))
+            total_score = sum(phase_scores) if phase_scores else float(item.get("average_score") or 0.0)
+            has_both = bool(best_p and best_s)
+            if (
+                (has_both and not best_has_both)
+                or (has_both == best_has_both and total_score > best_trace_score)
+                or (
+                    has_both == best_has_both
+                    and total_score == best_trace_score
+                    and _trace_channel_priority(traces[trace_idx] if trace_idx < len(traces) else traces[0])
+                    < _trace_channel_priority(traces[best_trace_idx] if best_trace_idx < len(traces) else traces[0])
+                )
+            ):
+                best_trace_score = total_score
+                best_trace_idx = trace_idx
+                best_has_both = has_both
+
+        # Filter to best trace only
+        best_traces = [t for t in traces if t.metadata.get("trace_index", 0) == best_trace_idx]
+        if not best_traces and traces:
+            best_traces = [traces[best_trace_idx] if best_trace_idx < len(traces) else traces[0]]
+
+        best_picks = _select_best_p_s_for_trace(picks, best_trace_idx)
+
         # 3. Generate plot with filename-based naming
         station_name = os.path.splitext(os.path.basename(path))[0]
         plot_filename = f"{station_name}_picks.png"
         plot_path = os.path.join(DEFAULT_PICKS_DIR, plot_filename)
         os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
         configure_plot_fonts()
-        plot_waveform_with_picks(traces, picks, plot_path)
+        plot_waveform_with_picks(best_traces, best_picks, plot_path)
 
         # 3.5. Save picks to CSV
         csv_path = None
@@ -1768,7 +1854,7 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
     This tool will:
     1. Pick P and S phases on each loaded MiniSEED file
     2. Store all picks for later use by locate_earthquake
-    3. Generate a combined plot showing picks from all stations
+    3. Generate only one best-result plot (full results are saved in CSV)
 
     Args:
         params: Dictionary with optional parameters:
@@ -1805,8 +1891,8 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
     all_picks = []
     all_traces = []
     file_summaries = []
-    individual_plot_paths = []
     picks_by_station = []  # List of (station_name, picks) tuples for CSV
+    plot_candidates = []  # Collect per-file best trace/picks, then plot only global best
 
     try:
         for filepath in CURRENT_MINISEED_PATHS:
@@ -1832,23 +1918,69 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
                 filename = os.path.basename(filepath)
                 station_name = os.path.splitext(filename)[0]
 
-                # Store picks with station name for CSV
+                # Store picks with station name for CSV, attach filepath to each pick
+                for pick in file_picks:
+                    pick.metadata['filepath'] = filepath
                 picks_by_station.append((station_name, file_picks))
+
+                # Get summary to find best trace
+                file_summary = summarize_pick_results(file_picks)
+
+                # Find best trace:
+                # 1) Prefer traces with both P and S picks
+                # 2) Then choose highest total confidence score
+                best_trace_idx = 0
+                best_trace_score = -1.0
+                best_has_both = False
+                for item in file_summary:
+                    trace_idx = int(item.get("trace_index", 0))
+                    best_p = item.get("best_p") or {}
+                    best_s = item.get("best_s") or {}
+                    phase_scores = []
+                    for best_pick in (best_p, best_s):
+                        if isinstance(best_pick, dict):
+                            score = best_pick.get("weighted_score")
+                            if score is None:
+                                score = best_pick.get("score")
+                            if score is not None:
+                                phase_scores.append(float(score))
+                    total_score = sum(phase_scores) if phase_scores else float(item.get("average_score") or 0.0)
+                    has_both = bool(best_p and best_s)
+                    if (
+                        (has_both and not best_has_both)
+                        or (has_both == best_has_both and total_score > best_trace_score)
+                        or (
+                            has_both == best_has_both
+                            and total_score == best_trace_score
+                            and _trace_channel_priority(file_traces[trace_idx] if trace_idx < len(file_traces) else file_traces[0])
+                            < _trace_channel_priority(file_traces[best_trace_idx] if best_trace_idx < len(file_traces) else file_traces[0])
+                        )
+                    ):
+                        best_trace_score = total_score
+                        best_trace_idx = trace_idx
+                        best_has_both = has_both
+
+                # Filter to best trace only
+                best_traces = [t for t in file_traces if t.metadata.get("trace_index", 0) == best_trace_idx]
+                if not best_traces and file_traces:
+                    best_traces = [file_traces[best_trace_idx] if best_trace_idx < len(file_traces) else file_traces[0]]
+                best_picks = _select_best_p_s_for_trace(file_picks, best_trace_idx)
 
                 file_summaries.append({
                     "file": filename,
                     "station": station_name,
                     "traces": len(file_traces),
-                    "picks": len(file_picks)
+                    "picks": len(file_picks),
+                    "best_trace": best_trace_idx
                 })
 
-                # Generate individual station plot
-                if file_traces and file_picks:
-                    individual_plot_path = os.path.join(DEFAULT_PICKS_DIR, f"{station_name}_picks.png")
-                    os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
-                    configure_plot_fonts()
-                    plot_waveform_with_picks(file_traces, file_picks, individual_plot_path)
-                    individual_plot_paths.append((station_name, individual_plot_path))
+                if best_traces and best_picks:
+                    plot_candidates.append({
+                        "station": station_name,
+                        "best_score": best_trace_score,
+                        "traces": best_traces,
+                        "picks": best_picks,
+                    })
 
             except Exception as e:
                 file_summaries.append({
@@ -1862,14 +1994,16 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
         # Save all picks to CSV
         csv_path = None
         if picks_by_station:
-            csv_path = os.path.join(DEFAULT_PICKS_DIR, "all_picks.csv")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_path = os.path.join(DEFAULT_PICKS_DIR, f"picks_{timestamp}.csv")
             os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
             with open(csv_path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['station', 'trace_index', 'phase_type', 'method', 'sample_index', 'absolute_time', 'normalized_score'])
+                writer.writerow(['original_file', 'station', 'trace_index', 'phase_type', 'method', 'sample_index', 'absolute_time', 'normalized_score'])
                 for station_name, station_picks in picks_by_station:
                     for pick in station_picks:
                         writer.writerow([
+                            os.path.basename(pick.metadata.get('filepath', '')),
                             station_name,
                             pick.trace_index,
                             pick.phase_type or 'P',
@@ -1879,20 +2013,30 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
                             pick.normalized_score if pick.normalized_score is not None else ''
                         ])
 
+        # Generate ONE plot only: global best result among all files/traces
+        plot_path = None
+        if plot_candidates:
+            best_item = max(plot_candidates, key=lambda x: x.get("best_score", -1))
+            station_name = best_item["station"]
+            plot_path = os.path.join(DEFAULT_PICKS_DIR, f"{station_name}_picks.png")
+            os.makedirs(DEFAULT_PICKS_DIR, exist_ok=True)
+            configure_plot_fonts()
+            plot_waveform_with_picks(best_item["traces"], best_item["picks"], plot_path)
+
         # Build output (language-aware)
         _l = CURRENT_LANG
         lines = []
 
-        # Add individual station plots
-        for station_name, ipath in individual_plot_paths:
-            lines.append(f"![{'台站' if _l == 'zh' else 'Station'} {station_name}]({ipath})")
-        if individual_plot_paths:
+        if plot_path:
+            lines.append(f"![{'拾取结果图' if _l == 'zh' else 'Picking Results'}]({plot_path})")
             lines.append("")
 
         lines.append(f"**{'初至拾取完成' if _l == 'zh' else 'Phase picking completed'}**")
         lines.append(f"- {'处理文件数' if _l == 'zh' else 'Files processed'}: {len(CURRENT_MINISEED_PATHS)}")
         lines.append(f"- {'总拾取数' if _l == 'zh' else 'Total picks'}: {len(all_picks)}")
         lines.append(f"- {'总轨迹数' if _l == 'zh' else 'Total traces'}: {len(all_traces)}")
+        if plot_path:
+            lines.append(f"- {'最佳结果图' if _l == 'zh' else 'Best result plot'}: `{plot_path}`")
         if csv_path:
             lines.append(f"- {'拾取结果CSV' if _l == 'zh' else 'Picks CSV'}: `{csv_path}`")
         lines.append("")
@@ -1904,9 +2048,9 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
                 lines.append(f"- **{fs['file']}**: {'错误' if _l == 'zh' else 'error'} - {fs['error']}")
             else:
                 if _l == "zh":
-                    lines.append(f"- **{fs['file']}**: {fs['picks']} 个拾取, {fs['traces']} 条轨迹")
+                    lines.append(f"- **{fs['file']}**: {fs['picks']} 个拾取, {fs['traces']} 条轨迹, {'最佳道' if _l == 'zh' else 'best trace'} #{fs.get('best_trace', 0)}")
                 else:
-                    lines.append(f"- **{fs['file']}**: {fs['picks']} picks, {fs['traces']} traces")
+                    lines.append(f"- **{fs['file']}**: {fs['picks']} picks, {fs['traces']} traces, best trace #{fs.get('best_trace', 0)}")
 
         lines.append("")
         if _l == "zh":
@@ -3697,4 +3841,3 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                 result["catalog_comparison"]["avg_depth_err_km"] = stats["avg_depth_err_km"]
 
     return json.dumps(result, indent=2, ensure_ascii=False)
-

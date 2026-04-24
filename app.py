@@ -18,6 +18,16 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.callbacks import StreamlitCallbackHandler
 from deploy.i18n import t
 
+
+def _detect_prompt_lang(text: str) -> str:
+    """Heuristic language detection for current user turn."""
+    if not text:
+        return "en"
+    # Any CJK character -> Chinese
+    if re.search(r"[\u4e00-\u9fff]", text):
+        return "zh"
+    return "en"
+
 # Page Config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOGO_PNG = os.path.join(BASE_DIR, "resources", "QuakeCore.png")
@@ -748,7 +758,7 @@ if "current_conversation_id" not in st.session_state:
 if "agent" not in st.session_state:
     st.session_state.agent = None
 if "agent_config" not in st.session_state:
-    st.session_state.agent_config = {"provider": "deepseek", "model_name": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY", ""), "base_url": "https://api.deepseek.com"}
+    st.session_state.agent_config = {"provider": "deepseek", "model_name": "deepseek-v4-flash", "api_key": os.getenv("DEEPSEEK_API_KEY", ""), "base_url": "https://api.deepseek.com"}
 if "agent_code_fingerprint" not in st.session_state:
     st.session_state.agent_code_fingerprint = None
 if "agent_error" not in st.session_state:
@@ -768,7 +778,7 @@ with st.sidebar:
     st.divider()
 
     # New Chat button
-    if st.button("➕ 新对话", key="new_chat_btn", use_container_width=True):
+    if st.button("➕ 新对话", key="new_chat_btn", width="stretch"):
         if st.session_state.current_conversation_id and st.session_state.messages:
             st.session_state.conversations[st.session_state.current_conversation_id]["messages"] = st.session_state.messages
         import uuid
@@ -789,14 +799,14 @@ with st.sidebar:
             label = f"**{i}. {conv_data['title']}**" if is_active else f"{i}. {conv_data['title']}"
             row_cols = st.columns([6.5, 1], gap="small")
             with row_cols[0]:
-                if st.button(label, key=f"conv_{conv_id}", use_container_width=True):
+                if st.button(label, key=f"conv_{conv_id}", width="stretch"):
                     if st.session_state.current_conversation_id and st.session_state.messages:
                         st.session_state.conversations[st.session_state.current_conversation_id]["messages"] = st.session_state.messages
                     st.session_state.current_conversation_id = conv_id
                     st.session_state.messages = conv_data["messages"]
                     st.rerun()
             with row_cols[1]:
-                if st.button("✕", key=f"del_conv_{conv_id}", help="删除对话", type="tertiary", use_container_width=True):
+                if st.button("✕", key=f"del_conv_{conv_id}", help="删除对话", type="tertiary", width="stretch"):
                     st.session_state.conversations.pop(conv_id, None)
 
                     if st.session_state.current_conversation_id == conv_id:
@@ -852,12 +862,12 @@ if is_homepage:
         st.markdown('<div class="qc-home-actions-spacer"></div>', unsafe_allow_html=True)
         action_cols = st.columns(2, gap="small")
         with action_cols[0]:
-            if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang), use_container_width=True):
+            if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang), width="stretch"):
                 st.session_state.lang = "en" if lang == "zh" else "zh"
                 st.session_state.agent = None
                 st.rerun()
         with action_cols[1]:
-            if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang), use_container_width=True):
+            if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang), width="stretch"):
                 st.session_state.show_settings = True
 else:
     cols = st.columns([0.5, 3, 0.7])
@@ -870,12 +880,12 @@ else:
     with cols[2]:
         action_cols = st.columns(2, gap="small")
         with action_cols[0]:
-            if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang), use_container_width=True):
+            if st.button(t("lang_toggle", lang), key="lang_btn", help=t("lang_tooltip", lang), width="stretch"):
                 st.session_state.lang = "en" if lang == "zh" else "zh"
                 st.session_state.agent = None
                 st.rerun()
         with action_cols[1]:
-            if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang), use_container_width=True):
+            if st.button("⚙️", key="settings_btn", help=t("settings_tooltip", lang), width="stretch"):
                 st.session_state.show_settings = True
 
 # Settings Dialog
@@ -896,18 +906,18 @@ if st.session_state.get("show_settings"):
             current_config = {"provider": "ollama", "model_name": model_name, "api_key": None, "base_url": None}
         else:
             api_key = st.text_input(t("api_key_label", _lang), value=os.getenv("DEEPSEEK_API_KEY", ""), type="password")
-            model_name = st.text_input(t("model_label", _lang), value="deepseek-chat")
+            model_name = st.text_input(t("model_label", _lang), value="deepseek-v4-flash")
             current_config = {"provider": "deepseek", "model_name": model_name, "api_key": api_key, "base_url": "https://api.deepseek.com"}
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button(t("save", _lang), use_container_width=True):
+            if st.button(t("save", _lang), width="stretch"):
                 st.session_state.agent_config = current_config
                 st.session_state.agent = None  # Force re-initialize
                 st.session_state.show_settings = False
                 st.rerun()
         with col2:
-            if st.button(t("cancel", _lang), use_container_width=True):
+            if st.button(t("cancel", _lang), width="stretch"):
                 st.session_state.show_settings = False
                 st.rerun()
 
@@ -967,7 +977,7 @@ for msg in st.session_state.messages:
         if msg.get("images"):
             for img_path in msg["images"]:
                 if os.path.exists(img_path):
-                    st.image(img_path, use_container_width=True)
+                    st.image(img_path, width="stretch")
 
         # Thinking process expander
         if steps := msg.get("steps"):
@@ -1019,6 +1029,21 @@ if prompt and agent_ready:
         else:
             content = f"[{t('uploaded', lang)}: {file_names}]\n\n{t('read_file_default', lang)}"
 
+
+    # Auto-switch response language by current user query language
+    turn_lang = _detect_prompt_lang(content)
+    if turn_lang != st.session_state.lang:
+        st.session_state.lang = turn_lang
+        set_current_lang(turn_lang)
+        st.session_state.agent = None
+        try:
+            st.session_state.agent = get_agent_executor(**st.session_state.agent_config, lang=turn_lang)
+            st.session_state.agent_error = None
+        except Exception as e:
+            st.session_state.agent_error = str(e)
+
+    # Keep local lang variable in sync for this turn UI text
+    lang = st.session_state.lang
 
     # Add user message
     st.session_state.messages.append({
@@ -1096,7 +1121,7 @@ if prompt and agent_ready:
             if response_images:
                 for img_path in response_images:
                     if os.path.exists(img_path):
-                        st.image(img_path, use_container_width=True)
+                        st.image(img_path, width="stretch")
 
             # Store message with images
             st.session_state.messages.append({
