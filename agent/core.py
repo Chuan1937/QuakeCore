@@ -86,7 +86,7 @@ def get_agent_executor(
     # provider: Provider = "ollama",
     # model_name: str = "qwen2.5:3b",
     provider: Provider = "deepseek",
-    model_name: str = "deepseek",
+    model_name: str = "deepseek-v4-flash",
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     lang: str = "en",

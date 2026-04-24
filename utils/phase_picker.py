@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from obspy import UTCDateTime, read as obspy_read
+from obspy import Stream, Trace, UTCDateTime, read as obspy_read
 from obspy.signal.filter import bandpass
 from obspy.signal.trigger import classic_sta_lta, trigger_onset
 
@@ -333,11 +333,18 @@ def load_traces(
 ) -> List[TraceRecord]:
     """Normalize arbitrary waveform sources into TraceRecord objects."""
 
+    def _attach_trace_index(traces: List[TraceRecord]) -> List[TraceRecord]:
+        for idx, tr in enumerate(traces):
+            if tr.metadata is None:
+                tr.metadata = {}
+            tr.metadata.setdefault("trace_index", idx)
+        return traces
+
     if isinstance(source, np.ndarray):
-        return _collect_numpy_traces(source, sampling_rate)
+        return _attach_trace_index(_collect_numpy_traces(source, sampling_rate))
     if isinstance(source, (list, tuple)) and source and isinstance(source[0], np.ndarray):
         sr = _ensure_sampling_rate(sampling_rate)
-        return [TraceRecord(data=np.asarray(arr, dtype=np.float64), sampling_rate=sr) for arr in source]
+        return _attach_trace_index([TraceRecord(data=np.asarray(arr, dtype=np.float64), sampling_rate=sr) for arr in source])
     if not isinstance(source, str):
         raise ValueError("Unsupported source type. Provide a file path or numpy array.")
 
@@ -360,13 +367,13 @@ def load_traces(
     fmt = file_type or ext_map.get(ext)
 
     if fmt in {"mseed", "miniseed", "sac"}:
-        return _collect_obspy_traces(path)
+        return _attach_trace_index(_collect_obspy_traces(path))
     if fmt == "segy":
-        return _collect_segy_traces(path)
+        return _attach_trace_index(_collect_segy_traces(path))
     if fmt == "hdf5":
-        return _collect_hdf5_traces(path, dataset, sampling_rate)
+        return _attach_trace_index(_collect_hdf5_traces(path, dataset, sampling_rate))
     if fmt in {"npy", "npz"}:
-        return _collect_numpy_traces(path, sampling_rate)
+        return _attach_trace_index(_collect_numpy_traces(path, sampling_rate))
 
     raise ValueError(f"Unsupported file type '{ext}'. Specify file_type explicitly if needed.")
 
@@ -377,6 +384,37 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     window = min(window, values.size)
     kernel = np.ones(window) / window
     return np.convolve(values, kernel, mode="same")
+
+
+def _robust_normalize(data: np.ndarray) -> np.ndarray:
+    """
+    Robust normalization for picking:
+    1) sanitize NaN/Inf
+    2) clip extreme amplitudes
+    3) normalize by robust scale (MAD) with std fallback
+    """
+    if data.size == 0:
+        return data
+
+    arr = np.nan_to_num(data.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Clip rare spikes that can destabilize classic and ML pickers
+    p1, p99 = np.percentile(arr, [1.0, 99.0])
+    if np.isfinite(p1) and np.isfinite(p99) and p99 > p1:
+        arr = np.clip(arr, p1, p99)
+
+    median = np.median(arr)
+    mad = np.median(np.abs(arr - median))
+    robust_std = 1.4826 * mad
+
+    if robust_std > 1e-12:
+        return (arr - median) / robust_std
+
+    std = np.std(arr)
+    if std > 1e-12:
+        return (arr - np.mean(arr)) / std
+
+    return arr
 
 
 def _burg_prediction_error(signal: np.ndarray, order: int) -> float:
@@ -418,6 +456,9 @@ class PhasePickingEngine:
         if data.size == 0:
             return data
 
+        # 0. Sanitize invalid values early
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+
         # 1. Remove linear trend
         data = detrend(data, type='linear')
 
@@ -435,11 +476,8 @@ class PhasePickingEngine:
         # 4. Bandpass filter (1-45 Hz for local/regional events)
         data = _bandpass_filter(data, sr, freqmin=1.0, freqmax=min(45.0, sr * 0.45))
 
-        # 5. Normalize to unit standard deviation
-        std = np.std(data)
-        if std > 0:
-            data /= std
-        return data
+        # 5. Robust normalization
+        return _robust_normalize(data)
 
     def _get_seisbench_model(self, model_name: str, pretrained: bool = True):
         """Load and cache a SeisBench model."""
@@ -451,10 +489,26 @@ class PhasePickingEngine:
             return self._seisbench_models[cache_key]
 
         try:
+            pretrained_name = "scedc" if pretrained else "original"
+            fallback_names = (pretrained_name, "original", "instance")
             if model_name.lower() == "phasenet":
-                model = sbm.PhaseNet.from_pretrained("instance" if pretrained else "original")
+                for name in fallback_names:
+                    try:
+                        model = sbm.PhaseNet.from_pretrained(name)
+                        break
+                    except Exception:
+                        model = None
+                if model is None:
+                    return None
             elif model_name.lower() == "eqtransformer":
-                model = sbm.EQTransformer.from_pretrained("instance" if pretrained else "original")
+                for name in fallback_names:
+                    try:
+                        model = sbm.EQTransformer.from_pretrained(name)
+                        break
+                    except Exception:
+                        model = None
+                if model is None:
+                    return None
             elif model_name.lower() == "gpd":
                 model = sbm.GPD.from_pretrained("instance" if pretrained else "original")
             else:
@@ -526,6 +580,13 @@ class PhasePickingEngine:
         phase_type: str = "P",
         extra: Optional[Dict[str, Any]] = None,
     ) -> PickResult:
+        # Keep sample index within current trace bounds so picks are always plottable.
+        npts = int(len(record.data))
+        if npts > 0:
+            sample_index = int(max(0, min(int(sample_index), npts - 1)))
+        else:
+            sample_index = int(sample_index)
+
         time_offset = sample_index / record.sampling_rate if record.sampling_rate else None
         abs_time = None
         if time_offset is not None and record.start_time is not None:
@@ -546,6 +607,171 @@ class PhasePickingEngine:
 
     def _signal(self, trace_index: int) -> np.ndarray:
         return self._processed_traces[trace_index]
+
+    @staticmethod
+    def _to_1d_prob(arr: Any) -> Optional[np.ndarray]:
+        """Convert a model output fragment to a 1D probability array."""
+        if arr is None:
+            return None
+        try:
+            if torch is not None and hasattr(arr, "detach"):
+                arr = arr.detach().cpu().numpy()
+            arr = np.asarray(arr, dtype=np.float64)
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        arr = np.squeeze(arr)
+        if arr.ndim == 0:
+            return None
+        if arr.ndim > 1:
+            return None
+        return arr
+
+    @staticmethod
+    def _resample_prob(prob: Optional[np.ndarray], target_len: int) -> Optional[np.ndarray]:
+        """Resample probability curve to a target length for index alignment."""
+        if prob is None or target_len <= 0:
+            return None
+        p = np.asarray(prob, dtype=np.float64).reshape(-1)
+        if p.size == 0:
+            return None
+        if p.size == target_len:
+            return p
+        if p.size == 1:
+            return np.full(target_len, float(p[0]), dtype=np.float64)
+        x_old = np.linspace(0.0, 1.0, p.size)
+        x_new = np.linspace(0.0, 1.0, target_len)
+        return np.interp(x_new, x_old, p)
+
+    def _extract_phase_probs(self, output: Any, expected_len: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Parse model output robustly and return aligned (P, S) probability curves.
+        Supports dict/tuple/tensor outputs from different SeisBench model versions.
+        """
+        p_pred = None
+        s_pred = None
+
+        if isinstance(output, dict):
+            p_pred = output.get("p_pick", output.get("p", output.get("P", None)))
+            s_pred = output.get("s_pick", output.get("s", output.get("S", None)))
+        elif isinstance(output, (list, tuple)):
+            # Common order for EQTransformer: (det, p, s)
+            if len(output) >= 3:
+                p_pred = output[1]
+                s_pred = output[2]
+            elif len(output) == 2:
+                p_pred = output[0]
+                s_pred = output[1]
+            elif len(output) == 1:
+                output = output[0]
+
+        if p_pred is None and s_pred is None:
+            # Fallback tensor/array path: preserve channel axis if present.
+            try:
+                raw = output
+                if torch is not None and hasattr(raw, "detach"):
+                    raw = raw.detach().cpu().numpy()
+                raw = np.asarray(raw, dtype=np.float64)
+                raw = np.squeeze(raw)
+                if raw.ndim == 3 and raw.shape[0] == 1:
+                    raw = raw[0]
+                if raw.ndim == 2:
+                    if raw.shape[0] >= 3:
+                        p_pred = raw[1]
+                        s_pred = raw[2]
+                    elif raw.shape[1] >= 3:
+                        p_pred = raw[:, 1]
+                        s_pred = raw[:, 2]
+                    elif raw.shape[0] == 2:
+                        p_pred = raw[0]
+                        s_pred = raw[1]
+                    else:
+                        p_pred = raw[0]
+                elif raw.ndim == 1:
+                    p_pred = raw
+            except Exception:
+                pass
+
+        p = self._resample_prob(self._to_1d_prob(p_pred), expected_len)
+        s = self._resample_prob(self._to_1d_prob(s_pred), expected_len)
+        return p, s
+
+    def _first_peak(self, prob: Optional[np.ndarray], threshold: float) -> Optional[Tuple[int, float]]:
+        """Return the earliest peak index/score above threshold."""
+        if prob is None:
+            return None
+        peaks = self._find_peaks_simple(prob, threshold)
+        if len(peaks) > 0:
+            best_idx = int(peaks[0])
+            return best_idx, float(prob[best_idx])
+        # Fallback: allow global max if above threshold (for plateau outputs)
+        idx = int(np.argmax(prob))
+        score = float(prob[idx])
+        if score > threshold:
+            return idx, score
+        return None
+
+    @staticmethod
+    def _annotation_stream(record: TraceRecord) -> Stream:
+        """Build a 3-component stream from a single record for SeisBench annotate()."""
+        data = np.asarray(record.data, dtype=np.float32)
+        start_time = record.start_time or UTCDateTime(0)
+        metadata = record.metadata or {}
+        network = str(metadata.get("network") or "XX")
+        station = str(metadata.get("station") or metadata.get("id") or "STA")
+        channel = str(metadata.get("channel") or "BHZ").upper()
+        prefix = channel[:-1] if len(channel) >= 3 else "BH"
+        if len(prefix) < 2:
+            prefix = "BH"
+        location = str(metadata.get("location") or "")
+
+        traces = []
+        for comp in ("Z", "N", "E"):
+            tr = Trace(data=data.copy())
+            tr.stats.network = network
+            tr.stats.station = station
+            tr.stats.location = location
+            tr.stats.channel = f"{prefix}{comp}"
+            tr.stats.starttime = start_time
+            tr.stats.sampling_rate = record.sampling_rate
+            traces.append(tr)
+        return Stream(traces)
+
+    def _pick_from_annotation(
+        self,
+        annotated: Stream,
+        trace_index: int,
+        record: TraceRecord,
+        method: str,
+        model_label: str,
+        threshold: float,
+    ) -> Optional[List[PickResult]]:
+        """Convert annotated probability traces into PickResult objects."""
+        results: List[PickResult] = []
+        for phase in ("P", "S"):
+            phase_trace = next((tr for tr in annotated if str(getattr(tr.stats, "channel", "")).upper().endswith(phase)), None)
+            if phase_trace is None:
+                continue
+            prob = np.asarray(phase_trace.data, dtype=np.float64).reshape(-1)
+            peak = self._first_peak(prob, threshold)
+            if peak is None:
+                continue
+            sample_index, raw_score = peak
+            normalized = min(1.0, raw_score)
+            results.append(
+                self._format_result(
+                    trace_index,
+                    method,
+                    record,
+                    sample_index,
+                    raw_score,
+                    normalized,
+                    phase_type=phase,
+                    extra={"model": model_label},
+                )
+            )
+        return results if results else None
 
     def _pick_sta_lta(
         self,
@@ -945,126 +1171,88 @@ class PhasePickingEngine:
 
         try:
             data = self._signal(trace_index)
-            sr = record.sampling_rate
+            if hasattr(model, "annotate"):
+                try:
+                    annotated = model.annotate(self._annotation_stream(record))
+                    picks = self._pick_from_annotation(
+                        annotated,
+                        trace_index,
+                        record,
+                        "phasenet",
+                        "PhaseNet",
+                        threshold,
+                    )
+                    if picks:
+                        return picks
+                except Exception:
+                    pass
 
-            # Get model's expected input size
-            model_samples = model.in_samples if hasattr(model, 'in_samples') else 3001
+            # Fallback for model versions that do not support annotate() cleanly.
+            model_samples = model.in_samples if hasattr(model, "in_samples") else 3001
+            best_p_score = -1.0
+            best_p_idx = None
+            best_s_score = -1.0
+            best_s_idx = None
 
-            # Handle data length - use windowing for long traces
             if len(data) >= model_samples:
-                # For long data, use sliding window and take best result
-                best_p_score = 0
-                best_p_idx = 0
-                best_s_score = 0
-                best_s_idx = 0
-
-                step = model_samples // 2  # 50% overlap
-                for start in range(0, len(data) - model_samples + 1, step):
+                step = max(1, model_samples // 2)
+                starts = list(range(0, len(data) - model_samples + 1, step))
+                tail_start = len(data) - model_samples
+                if starts and starts[-1] != tail_start:
+                    starts.append(tail_start)
+                for start in starts:
                     window = data[start:start + model_samples]
-
-                    # Create 3-component data
-                    window_data = np.zeros((3, model_samples), dtype=np.float32)
-                    window_data[0] = window
-                    window_data[1] = window
-                    window_data[2] = window
-
-                    # Normalize per component
+                    window_data = np.stack([window, window, window]).astype(np.float32)
                     for i in range(3):
                         std = np.std(window_data[i]) + 1e-10
                         window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
-
-                    # Convert to tensor
                     tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
-
-                    # Run inference
                     with torch.no_grad():
                         output = model(tensor_data)
-
-                    # Get predictions
-                    p_pred = output[0, 0, :].cpu().numpy()
-                    s_pred = output[0, 1, :].cpu().numpy()
-
-                    # Find best peak in this window
-                    p_peaks = self._find_peaks_simple(p_pred, threshold)
-                    if len(p_peaks) > 0:
-                        local_p_idx = int(p_peaks[np.argmax(p_pred[p_peaks])])
-                        global_p_idx = start + local_p_idx
-                        if p_pred[local_p_idx] > best_p_score:
-                            best_p_score = p_pred[local_p_idx]
-                            best_p_idx = global_p_idx
-
-                    s_peaks = self._find_peaks_simple(s_pred, threshold)
-                    if len(s_peaks) > 0:
-                        local_s_idx = int(s_peaks[np.argmax(s_pred[s_peaks])])
-                        global_s_idx = start + local_s_idx
-                        if s_pred[local_s_idx] > best_s_score:
-                            best_s_score = s_pred[local_s_idx]
-                            best_s_idx = global_s_idx
-
-                results = []
-                if best_p_score > threshold:
-                    results.append(self._format_result(
-                        trace_index, "phasenet", record, best_p_idx, best_p_score, min(1.0, best_p_score),
-                        phase_type="P", extra={"model": "PhaseNet"}
-                    ))
-                if best_s_score > threshold:
-                    results.append(self._format_result(
-                        trace_index, "phasenet", record, best_s_idx, best_s_score, min(1.0, best_s_score),
-                        phase_type="S", extra={"model": "PhaseNet"}
-                    ))
-                return results if results else None
+                    p_pred, s_pred = self._extract_phase_probs(output, expected_len=model_samples)
+                    p_peak = self._first_peak(p_pred, threshold)
+                    if p_peak is not None:
+                        local_idx, p_score = p_peak
+                        global_idx = start + local_idx
+                        if best_p_idx is None or global_idx < best_p_idx or (global_idx == best_p_idx and p_score > best_p_score):
+                            best_p_idx = global_idx
+                            best_p_score = p_score
+                    s_peak = self._first_peak(s_pred, threshold)
+                    if s_peak is not None:
+                        local_idx, s_score = s_peak
+                        global_idx = start + local_idx
+                        if best_s_idx is None or global_idx < best_s_idx or (global_idx == best_s_idx and s_score > best_s_score):
+                            best_s_idx = global_idx
+                            best_s_score = s_score
             else:
-                # Data is shorter than model expects - pad it
                 padded_data = np.zeros(model_samples, dtype=np.float32)
                 padded_data[:len(data)] = data
-
-                # Create 3-component data
-                window_data = np.zeros((3, model_samples), dtype=np.float32)
-                window_data[0] = padded_data
-                window_data[1] = padded_data
-                window_data[2] = padded_data
-
-                # Normalize per component
+                window_data = np.stack([padded_data, padded_data, padded_data]).astype(np.float32)
                 for i in range(3):
                     std = np.std(window_data[i]) + 1e-10
                     window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
-
-                # Convert to tensor
                 tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
-
-                # Run inference
                 with torch.no_grad():
                     output = model(tensor_data)
-
-            # Get predictions (P and S probabilities)
-            # Output shape is (batch, n_classes, n_samples), so use output[0, class_idx, :]
-            p_pred = output[0, 0, :].cpu().numpy()  # P probability
-            s_pred = output[0, 1, :].cpu().numpy()  # S probability
+                p_pred, s_pred = self._extract_phase_probs(output, expected_len=model_samples)
+                p_peak = self._first_peak(p_pred, threshold)
+                if p_peak is not None:
+                    best_p_idx, best_p_score = p_peak
+                s_peak = self._first_peak(s_pred, threshold)
+                if s_peak is not None:
+                    best_s_idx, best_s_score = s_peak
 
             results = []
-
-            # Find P pick
-            p_peaks = self._find_peaks_simple(p_pred, threshold)
-            if len(p_peaks) > 0:
-                p_idx = int(p_peaks[0])  # Take first P pick
-                p_score = float(p_pred[p_idx])
-                normalized = min(1.0, p_score)
+            if best_p_idx is not None and best_p_score > threshold:
                 results.append(self._format_result(
-                    trace_index, "phasenet", record, p_idx, p_score, normalized,
+                    trace_index, "phasenet", record, int(best_p_idx), float(best_p_score), min(1.0, float(best_p_score)),
                     phase_type="P", extra={"model": "PhaseNet"}
                 ))
-
-            # Find S pick
-            s_peaks = self._find_peaks_simple(s_pred, threshold)
-            if len(s_peaks) > 0:
-                s_idx = int(s_peaks[0])  # Take first S pick
-                s_score = float(s_pred[s_idx])
-                normalized = min(1.0, s_score)
+            if best_s_idx is not None and best_s_score > threshold:
                 results.append(self._format_result(
-                    trace_index, "phasenet", record, s_idx, s_score, normalized,
+                    trace_index, "phasenet", record, int(best_s_idx), float(best_s_score), min(1.0, float(best_s_score)),
                     phase_type="S", extra={"model": "PhaseNet"}
                 ))
-
             return results if results else None
 
         except Exception as e:
@@ -1097,156 +1285,88 @@ class PhasePickingEngine:
 
         try:
             data = self._signal(trace_index)
-            sr = record.sampling_rate
+            if hasattr(model, "annotate"):
+                try:
+                    annotated = model.annotate(self._annotation_stream(record))
+                    picks = self._pick_from_annotation(
+                        annotated,
+                        trace_index,
+                        record,
+                        "eqtransformer",
+                        "EQTransformer",
+                        threshold,
+                    )
+                    if picks:
+                        return picks
+                except Exception:
+                    pass
 
-            # EQTransformer expects 6000 samples (60 seconds at 100 Hz)
-            model_samples = model.in_samples if hasattr(model, 'in_samples') else 6000
+            # Fallback for model versions that do not support annotate() cleanly.
+            model_samples = model.in_samples if hasattr(model, "in_samples") else 6000
+            best_p_score = -1.0
+            best_p_idx = None
+            best_s_score = -1.0
+            best_s_idx = None
 
-            # Handle data length
-            if len(data) < model_samples:
-                # Pad data if too short
-                padded_data = np.zeros(model_samples, dtype=np.float32)
-                padded_data[:len(data)] = data
-                data_for_model = padded_data
-                offset = 0  # No offset for padded data
-            elif len(data) > model_samples:
-                # Use sliding window for long data
-                best_p_score = 0
-                best_p_idx = 0
-                best_s_score = 0
-                best_s_idx = 0
-
-                step = model_samples // 2  # 50% overlap
-                for start in range(0, len(data) - model_samples + 1, step):
+            if len(data) >= model_samples:
+                step = max(1, model_samples // 2)
+                starts = list(range(0, len(data) - model_samples + 1, step))
+                tail_start = len(data) - model_samples
+                if starts and starts[-1] != tail_start:
+                    starts.append(tail_start)
+                for start in starts:
                     window = data[start:start + model_samples]
-
-                    # Create 3-component data
-                    window_data = np.zeros((3, model_samples), dtype=np.float32)
-                    window_data[0] = window
-                    window_data[1] = window
-                    window_data[2] = window
-
-                    # Normalize per component
+                    window_data = np.stack([window, window, window]).astype(np.float32)
                     for i in range(3):
                         std = np.std(window_data[i]) + 1e-10
                         window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
-
-                    # Convert to tensor
                     tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
-
-                    # Run inference
                     with torch.no_grad():
                         output = model(tensor_data)
-
-                    # Get predictions
-                    if isinstance(output, dict):
-                        p_pred = output.get("p_pick", output.get("p", None))
-                        s_pred = output.get("s_pick", output.get("s", None))
-                    elif isinstance(output, (list, tuple)) and len(output) >= 3:
-                        p_pred = output[1][0].cpu().numpy() if output[1] is not None else None
-                        s_pred = output[2][0].cpu().numpy() if output[2] is not None else None
-                    else:
-                        output_np = output[0].cpu().numpy()
-                        if output_np.shape[0] >= 3:
-                            p_pred = output_np[1]
-                            s_pred = output_np[2]
-                        else:
-                            continue
-
-                    # Find best peaks
-                    if p_pred is not None:
-                        p_peaks = self._find_peaks_simple(p_pred, threshold)
-                        if len(p_peaks) > 0:
-                            local_idx = int(p_peaks[np.argmax(p_pred[p_peaks])])
-                            global_idx = start + local_idx
-                            if p_pred[local_idx] > best_p_score:
-                                best_p_score = p_pred[local_idx]
-                                best_p_idx = global_idx
-
-                    if s_pred is not None:
-                        s_peaks = self._find_peaks_simple(s_pred, threshold)
-                        if len(s_peaks) > 0:
-                            local_idx = int(s_peaks[np.argmax(s_pred[s_peaks])])
-                            global_idx = start + local_idx
-                            if s_pred[local_idx] > best_s_score:
-                                best_s_score = s_pred[local_idx]
-                                best_s_idx = global_idx
-
-                results = []
-                if best_p_score > threshold:
-                    results.append(self._format_result(
-                        trace_index, "eqtransformer", record, best_p_idx, best_p_score, min(1.0, best_p_score),
-                        phase_type="P", extra={"model": "EQTransformer"}
-                    ))
-                if best_s_score > threshold:
-                    results.append(self._format_result(
-                        trace_index, "eqtransformer", record, best_s_idx, best_s_score, min(1.0, best_s_score),
-                        phase_type="S", extra={"model": "EQTransformer"}
-                    ))
-                return results if results else None
+                    p_pred, s_pred = self._extract_phase_probs(output, expected_len=model_samples)
+                    p_peak = self._first_peak(p_pred, threshold)
+                    if p_peak is not None:
+                        local_idx, p_score = p_peak
+                        global_idx = start + local_idx
+                        if best_p_idx is None or global_idx < best_p_idx or (global_idx == best_p_idx and p_score > best_p_score):
+                            best_p_idx = global_idx
+                            best_p_score = p_score
+                    s_peak = self._first_peak(s_pred, threshold)
+                    if s_peak is not None:
+                        local_idx, s_score = s_peak
+                        global_idx = start + local_idx
+                        if best_s_idx is None or global_idx < best_s_idx or (global_idx == best_s_idx and s_score > best_s_score):
+                            best_s_idx = global_idx
+                            best_s_score = s_score
             else:
-                data_for_model = data
-                offset = 0
-
-            # Single window case
-            # Create 3-component data
-            window_data = np.zeros((3, model_samples), dtype=np.float32)
-            window_data[0] = data_for_model
-            window_data[1] = data_for_model
-            window_data[2] = data_for_model
-
-            # Normalize per component
-            for i in range(3):
-                std = np.std(window_data[i]) + 1e-10
-                window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
-
-            # Convert to tensor with shape (1, 3, n_samples)
-            tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
-
-            # Run inference
-            with torch.no_grad():
-                output = model(tensor_data)
-
-            # EQTransformer outputs: detection, p_pick, s_pick
-            if isinstance(output, dict):
-                p_pred = output.get("p_pick", output.get("p", None))
-                s_pred = output.get("s_pick", output.get("s", None))
-            elif isinstance(output, (list, tuple)) and len(output) >= 3:
-                p_pred = output[1][0].cpu().numpy() if output[1] is not None else None
-                s_pred = output[2][0].cpu().numpy() if output[2] is not None else None
-            else:
-                output_np = output[0].cpu().numpy()
-                if output_np.shape[0] >= 3:
-                    p_pred = output_np[1]
-                    s_pred = output_np[2]
-                else:
-                    return None
+                padded_data = np.zeros(model_samples, dtype=np.float32)
+                padded_data[:len(data)] = data
+                window_data = np.stack([padded_data, padded_data, padded_data]).astype(np.float32)
+                for i in range(3):
+                    std = np.std(window_data[i]) + 1e-10
+                    window_data[i] = (window_data[i] - np.mean(window_data[i])) / std
+                tensor_data = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0)
+                with torch.no_grad():
+                    output = model(tensor_data)
+                p_pred, s_pred = self._extract_phase_probs(output, expected_len=model_samples)
+                p_peak = self._first_peak(p_pred, threshold)
+                if p_peak is not None:
+                    best_p_idx, best_p_score = p_peak
+                s_peak = self._first_peak(s_pred, threshold)
+                if s_peak is not None:
+                    best_s_idx, best_s_score = s_peak
 
             results = []
-
-            # Find P pick
-            if p_pred is not None:
-                p_peaks = self._find_peaks_simple(p_pred, threshold)
-                if len(p_peaks) > 0:
-                    p_idx = int(p_peaks[0])
-                    p_score = float(p_pred[p_idx])
-                    normalized = min(1.0, p_score)
-                    results.append(self._format_result(
-                        trace_index, "eqtransformer", record, p_idx + offset, p_score, normalized,
-                        phase_type="P", extra={"model": "EQTransformer"}
-                    ))
-
-            # Find S pick
-            if s_pred is not None:
-                s_peaks = self._find_peaks_simple(s_pred, threshold)
-                if len(s_peaks) > 0:
-                    s_idx = int(s_peaks[0])
-                    s_score = float(s_pred[s_idx])
-                    normalized = min(1.0, s_score)
-                    results.append(self._format_result(
-                        trace_index, "eqtransformer", record, s_idx + offset, s_score, normalized,
-                        phase_type="S", extra={"model": "EQTransformer"}
-                    ))
+            if best_p_idx is not None and best_p_score > threshold:
+                results.append(self._format_result(
+                    trace_index, "eqtransformer", record, int(best_p_idx), float(best_p_score), min(1.0, float(best_p_score)),
+                    phase_type="P", extra={"model": "EQTransformer"}
+                ))
+            if best_s_idx is not None and best_s_score > threshold:
+                results.append(self._format_result(
+                    trace_index, "eqtransformer", record, int(best_s_idx), float(best_s_score), min(1.0, float(best_s_score)),
+                    phase_type="S", extra={"model": "EQTransformer"}
+                ))
 
             return results if results else None
 
@@ -1491,14 +1611,13 @@ def summarize_pick_results(picks: Sequence[PickResult]) -> List[Dict[str, Any]]:
 
 def get_best_picks_for_plotting(
     picks: List[PickResult],
-    max_per_phase: int = 3
+    max_per_phase: int = 1
 ) -> List[PickResult]:
     """
     Select the best picks for plotting.
     Returns top N picks per trace per phase type, prioritizing:
-    1. Deep learning methods (PhaseNet, EQTransformer)
-    2. High confidence scores
-    3. Method consensus
+    1. High confidence score
+    2. Deep learning method priority as tie-breaker
     """
     # Group picks by trace and phase
     grouped: Dict[Tuple[int, str], List[PickResult]] = {}
@@ -1518,11 +1637,11 @@ def get_best_picks_for_plotting(
         "pai_k": 5,
     }
 
-    def _sort_key(pick: PickResult) -> Tuple[int, float]:
-        """Sort by method priority, then by score."""
+    def _sort_key(pick: PickResult) -> Tuple[float, int]:
+        """Sort by score first, then by method priority."""
         priority = PLOT_PRIORITY.get(pick.method, 10)
         score = pick.normalized_score or 0
-        return (priority, -score)  # Negative score for descending
+        return (-score, priority)
 
     best_picks = []
     for (trace_idx, phase), pick_list in grouped.items():
@@ -1539,7 +1658,7 @@ def plot_waveform_with_picks(
     picks: List[PickResult],
     output_path: str,
     max_traces: int = 5,
-    max_picks_per_phase: int = 2
+    max_picks_per_phase: int = 1
 ) -> str:
     """Plot waveforms with best picks and save to file."""
 
@@ -1547,29 +1666,13 @@ def plot_waveform_with_picks(
     plot_picks = get_best_picks_for_plotting(picks, max_per_phase=max_picks_per_phase)
 
     def _pick_to_color(method: str, phase: str):
-        """Assign bright, high-contrast colors per method+phase combination."""
-        # Deep learning methods: vivid, well-separated colors
-        # EQTransformer P/S: cyan / magenta;  PhaseNet P/S: lime / yellow
-        colors = {
-            ("eqtransformer", "P"): "#00FFFF",   # Bright cyan
-            ("eqtransformer", "S"): "#FF00FF",   # Bright magenta
-            ("phasenet",      "P"): "#00FF00",   # Bright lime
-            ("phasenet",      "S"): "#FFE500",   # Bright yellow
-            ("gpd",           "P"): "#FF6F61",   # Coral
-            ("gpd",           "S"): "#8B5CF6",   # Purple
-            # Conventional methods: muted but still visible
-            ("sta_lta",       "P"): "#4DBBD5",   # Cyan
-            ("sta_lta",       "S"): "#3C5488",   # Dark blue
-            ("aic",           "P"): "#00A087",   # Teal
-            ("aic",           "S"): "#7E6148",   # Brown
-            ("pai_k",         "P"): "#E64B35",   # Red
-            ("pai_k",         "S"): "#F39B7F",   # Salmon
-            ("s_phase",       "S"): "#91D1C2",   # Light green
-        }
-        return colors.get((method, (phase or "P").upper()),
-                          colors.get((method, "P"), "#999999"))
+        """Scientific palette by phase: P=green, S=magenta-purple."""
+        phase_key = (phase or "P").upper()
+        if phase_key == "S":
+            return "#C2185B"  # Magenta-purple
+        return "#1B9E77"      # Scientific green
 
-    # Group filtered picks by trace index
+    # Group filtered picks by original trace index
     picks_by_trace = {}
     for p in plot_picks:
         if p.trace_index not in picks_by_trace:
@@ -1595,8 +1698,11 @@ def plot_waveform_with_picks(
         ax.plot(times, data, 'k-', linewidth=0.6, label="Waveform")
         ax.set_ylabel("Amplitude")
 
-        # Plot only the best picks for this trace
-        trace_picks = picks_by_trace.get(i, [])
+        # Match picks using the original trace index if available
+        trace_idx = trace.metadata.get("trace_index")
+        if trace_idx is None:
+            trace_idx = i
+        trace_picks = picks_by_trace.get(int(trace_idx), [])
         legend_items = {}
 
         for p in trace_picks:
@@ -1616,7 +1722,7 @@ def plot_waveform_with_picks(
                 color=color,
                 linestyle=linestyle,
                 alpha=0.95,
-                linewidth=2.2,
+                linewidth=1.1,
                 label=legend_label
             )
 
