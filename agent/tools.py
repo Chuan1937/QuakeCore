@@ -1,4 +1,5 @@
 import csv
+import glob
 from dataclasses import asdict
 from datetime import datetime
 
@@ -10,8 +11,9 @@ from utils.phase_picker import pick_phases, summarize_pick_results, load_traces,
 from utils.phase_picker import TraceRecord, PickResult
 from utils.sac_handler import SACHandler
 from utils.continuous_data import (
-    download_continuous_data, load_station_data, fetch_catalog,
+    download_continuous_data, estimate_continuous_download, load_station_data, fetch_catalog,
     haversine_km, get_default_data_dir,
+    get_region, resolve_named_place, get_chunk_dir, load_chunk_stations_cache,
 )
 from utils.continuous_picking import continuous_picking, clear_model_cache
 from utils.association import associate_multiple_events
@@ -2095,6 +2097,8 @@ def _load_validation_module(module_key: str):
     mapping = {
         "regular": "nearseismic_location_validation.py",
         "blind": "nearseismic_location_blind_validation.py",
+        "continuous": "continuous_monitoring_validation.py",
+        "catalog_plot": "plot_catalog_debug.py",
     }
     filename = mapping.get(module_key)
     if not filename:
@@ -2605,7 +2609,7 @@ def locate_earthquake(params: Union[str, dict, None] = None):
             "stations": station_list_for_store,
         }
 
-        # Generate location map using PyGMT
+        # Generate location map using Cartopy (with matplotlib fallback)
         try:
             from utils.locator import plot_location_map
 
@@ -2771,7 +2775,7 @@ def add_station_coordinates(params: Union[str, dict, None] = None):
 @tool
 def plot_location_map(params: Union[str, dict, None] = None):
     """
-    Plot earthquake location and station positions on a map using PyGMT.
+    Plot earthquake location and station positions on a map using Cartopy.
 
     Use this tool after locating an earthquake to visualize the result.
     It reads the last location result and station coordinates automatically.
@@ -2786,7 +2790,7 @@ def plot_location_map(params: Union[str, dict, None] = None):
         JSON with the path to the saved map image.
     """
     """
-    使用 PyGMT 将地震定位结果和台站位置绘制在地图上。
+    使用 Cartopy 将地震定位结果和台站位置绘制在地图上。
 
     在完成地震定位后使用此工具可视化结果。
     自动读取上一次定位结果和台站坐标。
@@ -2838,14 +2842,14 @@ def plot_location_map(params: Union[str, dict, None] = None):
             return f"![Earthquake Location Map]({result_path})\nLocation map successfully generated and saved to {result_path}."
         else:
             return json.dumps({
-                "error": "Failed to generate map. PyGMT may not be available.",
-                "hint": "请确保 PyGMT 已正确安装。"
+                "error": "Failed to generate map. Cartopy/matplotlib may not be available.",
+                "hint": "请确保 Cartopy 或 matplotlib 已正确安装。"
             }, ensure_ascii=False, indent=2)
 
     except Exception as e:
         return json.dumps({
             "error": f"Map generation failed: {str(e)}",
-            "hint": "地图生成失败，请检查 PyGMT 安装。"
+            "hint": "地图生成失败，请检查 Cartopy/matplotlib 安装。"
         }, ensure_ascii=False, indent=2)
 from typing import Union
 from langchain.tools import tool
@@ -2992,6 +2996,9 @@ def download_seismic_data(params: Union[str, dict, None] = None):
 
     parsed = _parse_param_dict(params)
     _l = CURRENT_LANG
+    local_only = str(parsed.get("local_only", parsed.get("use_local_only", "false"))).strip().lower() in {"1", "true", "yes", "y", "on"}
+    local_only = str(parsed.get("local_only", parsed.get("use_local_only", "false"))).strip().lower() in {"1", "true", "yes", "y", "on"}
+    local_only = str(parsed.get("local_only", parsed.get("use_local_only", "false"))).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     # Parameters
     lat = _coerce_float(parsed.get("latitude"), allow_none=True, field_name="latitude")
@@ -3426,6 +3433,12 @@ def locate_place_data_nearseismic(params: Union[str, dict, None] = None):
 
     latitude = parsed.get("latitude")
     longitude = parsed.get("longitude")
+    if (latitude is None or longitude is None) and all(k in parsed for k in ("min_lat", "max_lat", "min_lon", "max_lon")):
+        try:
+            latitude = (float(parsed["min_lat"]) + float(parsed["max_lat"])) / 2.0
+            longitude = (float(parsed["min_lon"]) + float(parsed["max_lon"])) / 2.0
+        except Exception:
+            pass
     if latitude is None or longitude is None:
         return json.dumps({
             "error": "latitude and longitude are required.",
@@ -3501,6 +3514,290 @@ def _parse_param_dict(params):
     return {}
 
 
+def _resolve_continuous_time_window(parsed):
+    """Resolve start/end for continuous workflows from explicit or relative inputs."""
+    from obspy import UTCDateTime
+
+    start_raw = parsed.get("start") or parsed.get("starttime")
+    end_raw = parsed.get("end") or parsed.get("endtime")
+    date_raw = parsed.get("date") or parsed.get("day")
+    hours_raw = parsed.get("hours", parsed.get("duration_hours"))
+
+    def _parse_time(value):
+        if value is None:
+            return None
+        try:
+            return UTCDateTime(value)
+        except Exception:
+            return None
+
+    start_time = _parse_time(start_raw)
+    end_time = _parse_time(end_raw)
+
+    hours = None
+    if hours_raw is not None:
+        try:
+            hours = float(hours_raw)
+        except Exception:
+            hours = None
+
+    if start_time and end_time:
+        return start_time, end_time
+
+    if date_raw and hours is not None:
+        date_text = str(date_raw).strip()
+        if "T" in date_text:
+            base_end = _parse_time(date_text)
+            if base_end is None:
+                base_end = UTCDateTime.now()
+        else:
+            try:
+                base_end = UTCDateTime(f"{date_text}T23:59:59")
+            except Exception:
+                base_end = UTCDateTime.now()
+        return base_end - hours * 3600.0, base_end
+
+    if start_time and hours is not None and end_time is None:
+        return start_time, start_time + hours * 3600.0
+
+    if end_time and hours is not None and start_time is None:
+        return end_time - hours * 3600.0, end_time
+
+    if hours is not None and start_time is None and end_time is None:
+        end_time = UTCDateTime.now()
+        return end_time - hours * 3600.0, end_time
+
+    return start_time, end_time
+
+
+def _resolve_continuous_region(parsed):
+    """Resolve region bounds and network defaults for continuous monitoring."""
+    place_name = parsed.get("place") or parsed.get("location") or parsed.get("site")
+    region_name = parsed.get("region")
+    region = get_region(str(region_name)) if region_name else None
+    place = resolve_named_place(str(place_name)) if place_name else None
+
+    def _place_bbox(lat, lon, radius_km):
+        lat_delta = float(radius_km) / 111.0
+        lon_delta = float(radius_km) / max(1e-6, 111.0 * np.cos(np.radians(float(lat))))
+        return {
+            "min_lat": round(float(lat) - lat_delta, 3),
+            "max_lat": round(float(lat) + lat_delta, 3),
+            "min_lon": round(float(lon) - lon_delta, 3),
+            "max_lon": round(float(lon) + lon_delta, 3),
+        }
+
+    if place:
+        bbox = _place_bbox(place["latitude"], place["longitude"], place.get("radius_km", 40.0))
+        min_lat = float(parsed.get("min_lat", bbox["min_lat"]))
+        max_lat = float(parsed.get("max_lat", bbox["max_lat"]))
+        min_lon = float(parsed.get("min_lon", bbox["min_lon"]))
+        max_lon = float(parsed.get("max_lon", bbox["max_lon"]))
+        network = str(parsed.get("network", place.get("network", "CI")))
+        client_name = str(parsed.get("client", place.get("client", "SCEDC")))
+        catalog_name = str(parsed.get("catalog", place.get("catalog", "SCEDC")))
+        region_label = f"{place['name']} ({place['en_name']})"
+        return {
+            "region": region_label,
+            "place": place,
+            "mode": "place",
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+            "network": network,
+            "client": client_name,
+            "catalog": catalog_name,
+        }
+
+    if region:
+        min_lat = float(parsed.get("min_lat", region["min_lat"]))
+        max_lat = float(parsed.get("max_lat", region["max_lat"]))
+        min_lon = float(parsed.get("min_lon", region["min_lon"]))
+        max_lon = float(parsed.get("max_lon", region["max_lon"]))
+        network = str(parsed.get("network", region.get("network", "CI")))
+        client_name = str(parsed.get("client", region.get("client", "SCEDC")))
+        catalog_name = str(parsed.get("catalog", region.get("catalog", "SCEDC")))
+        region_label = str(region_name)
+
+        return {
+            "region": region_label,
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+            "network": network,
+            "client": client_name,
+            "catalog": catalog_name,
+            "mode": "region",
+        }
+
+    if place is None and region_name:
+        place = resolve_named_place(str(region_name))
+        if place:
+            bbox = _place_bbox(place["latitude"], place["longitude"], place.get("radius_km", 40.0))
+            min_lat = float(parsed.get("min_lat", bbox["min_lat"]))
+            max_lat = float(parsed.get("max_lat", bbox["max_lat"]))
+            min_lon = float(parsed.get("min_lon", bbox["min_lon"]))
+            max_lon = float(parsed.get("max_lon", bbox["max_lon"]))
+            network = str(parsed.get("network", place.get("network", "CI")))
+            client_name = str(parsed.get("client", place.get("client", "SCEDC")))
+            catalog_name = str(parsed.get("catalog", place.get("catalog", "SCEDC")))
+            region_label = f"{place['name']} ({place['en_name']})"
+            return {
+                "region": region_label,
+                "place": place,
+                "mode": "place",
+                "min_lat": min_lat,
+                "max_lat": max_lat,
+                "min_lon": min_lon,
+                "max_lon": max_lon,
+                "network": network,
+                "client": client_name,
+                "catalog": catalog_name,
+            }
+
+    if place_name or (region_name and str(region_name).strip()):
+        return {
+            "error": f"Unable to resolve place or region: {place_name or region_name}",
+            "mode": "unresolved_place",
+            "requested_name": place_name or region_name,
+        }
+
+    return {
+        "region": "南加州",
+        "mode": "region",
+        "min_lat": 32.0,
+        "max_lat": 36.5,
+        "min_lon": -120.0,
+        "max_lon": -115.0,
+        "network": "CI",
+        "client": "SCEDC",
+        "catalog": "SCEDC",
+    }
+
+
+def _continuous_download_requires_confirmation(estimate: dict, parsed: dict) -> bool:
+    if not estimate or estimate.get("error"):
+        return False
+    station_count = int(estimate.get("station_count", 0))
+    duration_hours = float(estimate.get("duration_seconds", 0.0)) / 3600.0
+    estimated_gb = float(estimate.get("estimated_gb", 0.0))
+
+    explicit_confirm = str(parsed.get("force", parsed.get("confirm", ""))).strip().lower() in {"1", "true", "yes", "y"}
+    if explicit_confirm:
+        return False
+
+    return station_count >= 80 or duration_hours >= 2.0 or estimated_gb >= 1.0
+
+
+def _continuous_task_summary(region: dict, start_time, end_time) -> str:
+    if region.get("mode") == "place" and region.get("place"):
+        place = region["place"]
+        label = f"{place['name']}（{place['en_name']}）周边"
+    else:
+        label = region.get("region") or "自定义区域"
+    return (
+        f"{str(start_time)} 至 {str(end_time)}（UTC），"
+        f"{label}，网络{region['network']}，"
+        f"官方目录{region['catalog']}"
+    )
+
+
+def _continuous_monitoring_recommendation(region: dict, estimate: dict, start_time=None, end_time=None, channel=None) -> dict:
+    station_count = int(estimate.get("station_count", 0) or 0)
+    duration_hours = round(float(estimate.get("duration_seconds", 0.0)) / 3600.0, 3)
+    estimated_mb = round(float(estimate.get("estimated_mb", 0.0)), 2)
+    estimated_gb = round(float(estimate.get("estimated_gb", 0.0)), 3)
+    duration_minutes = round(float(estimate.get("duration_seconds", 0.0)) / 60.0, 1)
+
+    if duration_hours < 1.0:
+        duration_label = f"{duration_minutes:g}分钟"
+    else:
+        duration_label = f"{duration_hours:g}小时"
+
+    if region.get("mode") == "place" and region.get("place"):
+        place = region["place"]
+        area_text = f"{place['name']}（{place['en_name']}）周边"
+    elif region.get("region"):
+        area_text = region["region"]
+    else:
+        lon_min = f"{abs(region['min_lon']):g}°{'W' if region['min_lon'] < 0 else 'E'}"
+        lon_max = f"{abs(region['max_lon']):g}°{'W' if region['max_lon'] < 0 else 'E'}"
+        area_text = f"{region['min_lat']:g}°N–{region['max_lat']:g}°N, {lon_min}–{lon_max}"
+
+    reasons = []
+    if station_count >= 80:
+        reasons.append(f"{area_text}覆盖台站约 {station_count} 个，需要分批下载")
+    if duration_hours >= 2.0:
+        reasons.append(f"时间窗约 {duration_hours} 小时，数据累计较大")
+    if estimated_gb >= 1.0:
+        reasons.append(f"预估数据量约 {estimated_gb} GB")
+    if not reasons:
+        reasons.append(f"预估数据量约 {estimated_mb} MB")
+
+    lat_center = (float(region["min_lat"]) + float(region["max_lat"])) / 2.0
+    lon_center = (float(region["min_lon"]) + float(region["max_lon"])) / 2.0
+    lat_span = abs(float(region["max_lat"]) - float(region["min_lat"]))
+    lon_span = abs(float(region["max_lon"]) - float(region["min_lon"]))
+    focused_lat_half = max(0.25, lat_span * 0.25)
+    focused_lon_half = max(0.25, lon_span * 0.25)
+    focused_region = {
+        "min_lat": round(lat_center - focused_lat_half, 3),
+        "max_lat": round(lat_center + focused_lat_half, 3),
+        "min_lon": round(lon_center - focused_lon_half, 3),
+        "max_lon": round(lon_center + focused_lon_half, 3),
+    }
+
+    adjustment_options = [
+        {
+            "label": "缩小到核心子区",
+            "example_params": (
+                f"min_lat={focused_region['min_lat']}, max_lat={focused_region['max_lat']}, "
+                f"min_lon={focused_region['min_lon']}, max_lon={focused_region['max_lon']}"
+            ),
+            "why": "减少台站覆盖范围，最直接地降低下载时间与关联复杂度。",
+        },
+        {
+            "label": "仅保留垂直分量",
+            "example_params": "channel=BHZ,HHZ",
+            "why": "显著减少要下载的分量数，适合先做快速监测和定位。",
+        },
+        {
+            "label": "只做核心监测",
+            "example_params": "compare_with_catalog=false",
+            "why": "如果目标是先看是否有事件，先跳过目录对比会更快。",
+        },
+    ]
+
+    if region.get("mode") == "place" and region.get("place"):
+        place = region["place"]
+        radius_km = float(place.get("radius_km", 20.0))
+        channel_text = str(channel or "BH?,HH?")
+        channel_hint = "，仅保留Z分量（BHZ/HHZ）" if "Z" not in channel_text.upper() else f"，通道{channel_text}"
+        suggested_request = (
+            f"以{place['name']}（{place['en_name']}）为中心、半径约{radius_km:g} km的最近{duration_label}连续地震监测，"
+            f"网络{region['network']}{channel_hint}，先完成事件检测与定位，目录对比可后续补做"
+        )
+    else:
+        channel_text = str(channel or "BH?,HH?")
+        channel_hint = "，仅保留Z分量（BHZ/HHZ）" if "Z" not in channel_text.upper() else f"，通道{channel_text}"
+        suggested_request = (
+            f"{area_text}，网络{region['network']}，"
+            f"最近{duration_label}连续地震监测{channel_hint}，"
+            f"先完成事件检测与定位，目录对比可后续补做"
+        )
+
+    return {
+        "reason": "；".join(reasons),
+        "suggested_request": suggested_request,
+        "risk_factors": reasons,
+        "adjustment_options": adjustment_options,
+        "focused_region": focused_region,
+        "mode": region.get("mode", "region"),
+    }
+
+
 @tool
 def download_continuous_waveforms(params: Union[str, dict, None] = None):
     """
@@ -3514,6 +3811,9 @@ def download_continuous_waveforms(params: Union[str, dict, None] = None):
         params: Dictionary supports:
             - start: Start time in ISO format (e.g., "2019-07-04T17:00:00")
             - end: End time in ISO format (e.g., "2019-07-04T18:00:00")
+            - date: Date in YYYY-MM-DD or ISO datetime format
+            - hours/duration_hours: Relative duration when start/end are omitted
+            - region: Named region such as "南加州", "北加州", or "加州"
             - min_lat: Minimum latitude (default 32.0 for Southern California)
             - max_lat: Maximum latitude (default 36.5)
             - min_lon: Minimum longitude (default -120.0)
@@ -3530,36 +3830,75 @@ def download_continuous_waveforms(params: Union[str, dict, None] = None):
     parsed = _parse_param_dict(params)
     _l = CURRENT_LANG
 
-    start_str = parsed.get("start")
-    end_str = parsed.get("end")
-
-    if not start_str or not end_str:
+    start_time, end_time = _resolve_continuous_time_window(parsed)
+    if start_time is None or end_time is None:
         return json.dumps({
-            "error": "start and end times are required.",
-            "hint": "请提供 start 和 end 参数，格式为 ISO 时间字符串。" if _l == "zh"
-                else "Please provide start and end in ISO format (e.g., '2019-07-04T17:00:00').",
+            "error": "start/end or date+hours are required.",
+            "hint": "请提供 start/end，或 date + hours 参数。" if _l == "zh"
+                else "Please provide start/end, or date + hours.",
         }, ensure_ascii=False, indent=2)
 
-    try:
-        start_time = UTCDateTime(start_str)
-        end_time = UTCDateTime(end_str)
-    except Exception as e:
+    region = _resolve_continuous_region(parsed)
+    if region.get("error"):
         return json.dumps({
-            "error": f"Invalid time format: {e}",
-            "hint": "请使用 ISO 格式，如 '2019-07-04T17:00:00'。" if _l == "zh"
-                else "Use ISO format like '2019-07-04T17:00:00'.",
+            "status": "error",
+            "error": region["error"],
+            "hint": "请提供更明确的地点名称，或直接给出 latitude/longitude。" if _l == "zh"
+                else "Please provide a more specific place name, or latitude/longitude directly.",
         }, ensure_ascii=False, indent=2)
+    estimate = estimate_continuous_download(
+        start_time=start_time,
+        end_time=end_time,
+        min_lat=region["min_lat"],
+        max_lat=region["max_lat"],
+        min_lon=region["min_lon"],
+        max_lon=region["max_lon"],
+        network=region["network"],
+        channel=parsed.get("channel", "BH?,HH?"),
+        client_name=region["client"],
+    )
+    if estimate.get("error"):
+        return json.dumps({
+            "status": "error",
+            "error": estimate["error"],
+        }, ensure_ascii=False, indent=2)
+
+    guidance = _continuous_monitoring_recommendation(
+        region,
+        estimate,
+        start_time,
+        end_time,
+        channel=parsed.get("channel", "BH?,HH?"),
+    )
+
+    progress_log = []
+
+    def _capture_progress(item):
+        progress_log.append({
+            "stage": item.get("stage", "download"),
+            "message": item.get("message", ""),
+            "downloaded": item.get("downloaded"),
+            "failed": item.get("failed"),
+            "total": item.get("total"),
+        })
 
     streams, stations = download_continuous_data(
         start_time=start_time,
         end_time=end_time,
-        min_lat=parsed.get("min_lat", 32.0),
-        max_lat=parsed.get("max_lat", 36.5),
-        min_lon=parsed.get("min_lon", -120.0),
-        max_lon=parsed.get("max_lon", -115.0),
-        network=parsed.get("network", "CI"),
+        min_lat=region["min_lat"],
+        max_lat=region["max_lat"],
+        min_lon=region["min_lon"],
+        max_lon=region["max_lon"],
+        network=region["network"],
         channel=parsed.get("channel", "BH?,HH?"),
         data_dir=parsed.get("data_dir"),
+        client_name=region["client"],
+        download_workers=int(parsed.get("download_workers", 16)),
+        inventory=estimate.get("inventory"),
+        stations=estimate.get("stations"),
+        progress_callback=_capture_progress,
+        local_only=local_only,
+        refresh_station_metadata=str(parsed.get("refresh_station_metadata", "true")).strip().lower() in {"1", "true", "yes", "y", "on"},
     )
 
     global _CURRENT_CONTINUOUS_STREAMS, _CURRENT_CONTINUOUS_STATIONS
@@ -3568,16 +3907,36 @@ def download_continuous_waveforms(params: Union[str, dict, None] = None):
 
     return json.dumps({
         "status": "success",
+        "task_summary": _continuous_task_summary(region, start_time, end_time),
         "n_stations": len(stations),
         "n_streams": len(streams),
         "start_time": str(start_time),
         "end_time": str(end_time),
         "region": {
-            "min_lat": parsed.get("min_lat", 32.0),
-            "max_lat": parsed.get("max_lat", 36.5),
-            "min_lon": parsed.get("min_lon", -120.0),
-            "max_lon": parsed.get("max_lon", -115.0),
+            "name": region.get("region"),
+            "mode": region.get("mode", "region"),
+            "place": region.get("place"),
+            "min_lat": region["min_lat"],
+            "max_lat": region["max_lat"],
+            "min_lon": region["min_lon"],
+            "max_lon": region["max_lon"],
+            "network": region["network"],
+            "client": region["client"],
+            "catalog": region["catalog"],
         },
+        "estimate": {
+            "station_count": estimate["station_count"],
+            "duration_hours": round(float(estimate["duration_seconds"]) / 3600.0, 3),
+            "estimated_mb": round(float(estimate["estimated_mb"]), 2),
+            "estimated_gb": round(float(estimate["estimated_gb"]), 3),
+        },
+        "recommendation": guidance["reason"],
+        "suggested_request": guidance["suggested_request"],
+        "adjustment_options": guidance["adjustment_options"],
+        "focused_region": guidance["focused_region"],
+        "progress": progress_log[:200],
+        "progress_summary": f"已按台站逐个下载，成功 {len(streams)} 个，失败 {len(stations) - len(streams)} 个。",
+        "download_workers": int(parsed.get("download_workers", 16)),
         "station_sample": list(stations.items())[:5] if stations else [],
     }, indent=2, ensure_ascii=False)
 
@@ -3658,10 +4017,7 @@ def associate_continuous_events(params: Union[str, dict, None] = None):
         }, ensure_ascii=False, indent=2)
 
     parsed = _parse_param_dict(params)
-    min_lat = float(parsed.get("min_lat", 32.0))
-    max_lat = float(parsed.get("max_lat", 36.5))
-    min_lon = float(parsed.get("min_lon", -120.0))
-    max_lon = float(parsed.get("max_lon", -115.0))
+    region = _resolve_continuous_region(parsed)
 
     # Build TT interpolator cache path
     from utils.continuous_data import _get_tt_interp
@@ -3674,13 +4030,25 @@ def associate_continuous_events(params: Union[str, dict, None] = None):
         tt_interp=_CURRENT_TT_INTERP,
         time_tolerance=float(parsed.get("time_tolerance", 1.0)),
         min_picks=int(parsed.get("min_picks", 5)),
-        grid_lat_range=(min_lat, max_lat),
-        grid_lon_range=(min_lon, max_lon),
+        grid_lat_range=(region["min_lat"], region["max_lat"]),
+        grid_lon_range=(region["min_lon"], region["max_lon"]),
     )
 
     result = {
         "status": "success",
         "n_events": len(detected),
+        "region": {
+            "name": region.get("region"),
+            "mode": region.get("mode", "region"),
+            "place": region.get("place"),
+            "min_lat": region["min_lat"],
+            "max_lat": region["max_lat"],
+            "min_lon": region["min_lon"],
+            "max_lon": region["max_lon"],
+            "network": region["network"],
+            "client": region["client"],
+            "catalog": region["catalog"],
+        },
         "events": [
             {
                 "init_lat": ev_info["init_lat"],
@@ -3708,6 +4076,9 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
         params: Dictionary supports:
             - start: Start time in ISO format
             - end: End time in ISO format
+            - date: Date in YYYY-MM-DD or ISO datetime format
+            - hours/duration_hours: Relative duration when start/end are omitted
+            - region: Named region such as "南加州", "北加州", or "加州"
             - min_lat/max_lat/min_lon/max_lon: Region bounds (Southern California defaults)
             - network: Network code (default "CI")
             - compare_with_catalog: Whether to fetch ground truth and evaluate (default True)
@@ -3722,43 +4093,139 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
 
     parsed = _parse_param_dict(params)
     _l = CURRENT_LANG
+    local_only = str(parsed.get("local_only", parsed.get("use_local_only", "false"))).strip().lower() in {"1", "true", "yes", "y", "on"}
 
-    start_str = parsed.get("start")
-    end_str = parsed.get("end")
+    start_time, end_time = _resolve_continuous_time_window(parsed)
 
-    if not start_str or not end_str:
+    if start_time is None or end_time is None:
         return json.dumps({
-            "error": "start and end times are required.",
-            "hint": "请提供 start 和 end 参数。" if _l == "zh"
-                else "Please provide start and end times.",
+            "error": "start/end or date+hours are required.",
+            "hint": "请提供 start/end，或 date + hours 参数。" if _l == "zh"
+                else "Please provide start/end, or date + hours.",
         }, ensure_ascii=False, indent=2)
 
-    try:
-        start_time = UTCDateTime(start_str)
-        end_time = UTCDateTime(end_str)
-    except Exception as e:
-        return json.dumps({"error": f"Invalid time format: {e}"})
+    region = _resolve_continuous_region(parsed)
+    if region.get("error"):
+        return json.dumps({
+            "status": "error",
+            "error": region["error"],
+            "hint": "请提供更明确的地点名称，或直接给出 latitude/longitude。" if _l == "zh"
+                else "Please provide a more specific place name, or latitude/longitude directly.",
+        }, ensure_ascii=False, indent=2)
+    progress_log = []
 
-    min_lat = float(parsed.get("min_lat", 32.0))
-    max_lat = float(parsed.get("max_lat", 36.5))
-    min_lon = float(parsed.get("min_lon", -120.0))
-    max_lon = float(parsed.get("max_lon", -115.0))
+    def _capture_progress(item):
+        progress_log.append({
+            "stage": item.get("stage", "download"),
+            "message": item.get("message", ""),
+            "downloaded": item.get("downloaded"),
+            "failed": item.get("failed"),
+            "total": item.get("total"),
+        })
+
+    # Prefer local chunk data if already downloaded.
+    data_dir = get_default_data_dir()
+    chunk_dir = get_chunk_dir(start_time=start_time, data_dir=data_dir)
+    existing_mseed = glob.glob(os.path.join(chunk_dir, "*.mseed"))
+    if existing_mseed:
+        local_stations = load_chunk_stations_cache(chunk_dir)
+        duration_seconds = max(0.0, float(end_time - start_time))
+        total_bytes = float(sum(os.path.getsize(p) for p in existing_mseed if os.path.exists(p)))
+        station_count = len(local_stations) if local_stations else len(existing_mseed)
+        estimate = {
+            "station_count": station_count,
+            "duration_seconds": duration_seconds,
+            "estimated_bytes": total_bytes,
+            "estimated_mb": total_bytes / (1024.0 ** 2),
+            "estimated_gb": total_bytes / (1024.0 ** 3),
+            "stations": local_stations if local_stations else None,
+            "inventory": None,
+            "local_data": True,
+        }
+        _capture_progress({
+            "stage": "download",
+            "message": f"发现本地已下载数据 {len(existing_mseed)} 个文件，跳过下载检查。",
+            "downloaded": len(existing_mseed),
+            "total": len(existing_mseed),
+        })
+    else:
+        if local_only:
+            available_chunks = sorted(
+                [
+                    os.path.basename(p)
+                    for p in glob.glob(os.path.join(data_dir, "chunk_*"))
+                    if os.path.isdir(p)
+                ]
+            )
+            return json.dumps({
+                "status": "error",
+                "error": f"Local chunk not found for {start_time.strftime('%Y-%m-%dT%H:%M:%S')} to {end_time.strftime('%Y-%m-%dT%H:%M:%S')}.",
+                "chunk_dir": chunk_dir,
+                "hint": "local_only=true 时不会自动下载，请改用已有时间窗或关闭 local_only。",
+                "available_chunks": available_chunks[:50],
+            }, ensure_ascii=False, indent=2)
+        estimate = estimate_continuous_download(
+            start_time=start_time,
+            end_time=end_time,
+            min_lat=region["min_lat"],
+            max_lat=region["max_lat"],
+            min_lon=region["min_lon"],
+            max_lon=region["max_lon"],
+            network=region["network"],
+            channel=parsed.get("channel", "BH?,HH?"),
+            client_name=region["client"],
+        )
+        if estimate.get("error"):
+            return json.dumps({
+                "status": "error",
+                "error": estimate["error"],
+            }, ensure_ascii=False, indent=2)
 
     # Step 1: Download
     streams, stations = download_continuous_data(
         start_time=start_time,
         end_time=end_time,
-        min_lat=min_lat,
-        max_lat=max_lat,
-        min_lon=min_lon,
-        max_lon=max_lon,
-        network=parsed.get("network", "CI"),
+        min_lat=region["min_lat"],
+        max_lat=region["max_lat"],
+        min_lon=region["min_lon"],
+        max_lon=region["max_lon"],
+        network=region["network"],
+        channel=parsed.get("channel", "BH?,HH?"),
+        client_name=region["client"],
+        download_workers=int(parsed.get("download_workers", 16)),
+        inventory=estimate.get("inventory"),
+        stations=estimate.get("stations"),
+        progress_callback=_capture_progress,
+        local_only=local_only,
+        refresh_station_metadata=str(parsed.get("refresh_station_metadata", "true")).strip().lower() in {"1", "true", "yes", "y", "on"},
     )
 
     if not streams:
         return json.dumps({"error": "No data downloaded."})
 
+    # Station coordinate coverage QA: prevent misleading low-quality runs.
+    stream_keys = list(streams.keys())
+    covered = sum(1 for k in stream_keys if k in (stations or {}))
+    coverage_ratio = covered / max(1, len(stream_keys))
+    result_coverage = {
+        "stream_count": len(stream_keys),
+        "station_coord_count": len(stations or {}),
+        "covered_streams": covered,
+        "coverage_ratio": round(float(coverage_ratio), 4),
+    }
+    allow_low_cov = str(parsed.get("allow_low_station_coverage", "false")).strip().lower() in {"1", "true", "yes", "y", "on"}
+    min_cov = float(parsed.get("min_station_coverage", 0.2))
+    min_cov = max(0.0, min(1.0, min_cov))
+    if coverage_ratio < min_cov and not allow_low_cov:
+        return json.dumps({
+            "status": "error",
+            "error": f"Station coordinate coverage too low: {covered}/{len(stream_keys)} ({coverage_ratio*100:.1f}%).",
+            "hint": "请开启 refresh_station_metadata 或补全 chunk/stations.json；若确认继续可设 allow_low_station_coverage=true。",
+            "station_coverage": result_coverage,
+        }, ensure_ascii=False, indent=2)
+
     # Step 2: Picking
+    _capture_progress({"stage": "picking", "message": "开始 AI 震相拾取（PhaseNet + EQTransformer）..."})
     picks = continuous_picking(
         streams=streams,
         stations=stations,
@@ -3769,8 +4236,10 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
 
     if not picks:
         return json.dumps({"error": "No picks found."})
+    _capture_progress({"stage": "picking", "message": f"拾取完成，共 {len(picks)} 个震相。"})
 
     # Step 3: Association
+    _capture_progress({"stage": "association", "message": "开始进行事件关联..."})
     from utils.continuous_data import _get_tt_interp
     tt_interp = _get_tt_interp()
 
@@ -3780,17 +4249,52 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
         tt_interp=tt_interp,
         time_tolerance=float(parsed.get("time_tolerance", 1.0)),
         min_picks=int(parsed.get("min_picks", 5)),
-        grid_lat_range=(min_lat, max_lat),
-        grid_lon_range=(min_lon, max_lon),
+        grid_lat_range=(region["min_lat"], region["max_lat"]),
+        grid_lon_range=(region["min_lon"], region["max_lon"]),
+    )
+    _capture_progress({"stage": "association", "message": f"事件关联完成，识别到 {len(detected)} 个候选事件。"})
+
+    guidance = _continuous_monitoring_recommendation(
+        region,
+        estimate,
+        start_time,
+        end_time,
+        channel=parsed.get("channel", "BH?,HH?"),
     )
 
     result = {
         "status": "success",
+        "task_summary": _continuous_task_summary(region, start_time, end_time),
         "start_time": str(start_time),
         "end_time": str(end_time),
         "n_stations": len(stations),
         "n_picks": len(picks),
         "n_events_detected": len(detected),
+        "region": {
+            "name": region.get("region"),
+            "mode": region.get("mode", "region"),
+            "place": region.get("place"),
+            "min_lat": region["min_lat"],
+            "max_lat": region["max_lat"],
+            "min_lon": region["min_lon"],
+            "max_lon": region["max_lon"],
+            "network": region["network"],
+            "client": region["client"],
+            "catalog": region["catalog"],
+        },
+        "estimate": {
+            "station_count": estimate["station_count"],
+            "duration_hours": round(float(estimate["duration_seconds"]) / 3600.0, 3),
+            "estimated_mb": round(float(estimate["estimated_mb"]), 2),
+            "estimated_gb": round(float(estimate["estimated_gb"]), 3),
+        },
+        "recommendation": guidance["reason"],
+        "suggested_request": guidance["suggested_request"],
+        "adjustment_options": guidance["adjustment_options"],
+        "focused_region": guidance["focused_region"],
+        "progress": progress_log[:200],
+        "progress_summary": f"已按台站逐个下载，成功 {len(streams)} 个台站，失败 {len(stations) - len(streams)} 个，随后完成拾取与定位。",
+        "download_workers": int(parsed.get("download_workers", 16)),
         "events": [
             {
                 "init_lat": ev_info["init_lat"],
@@ -3800,31 +4304,215 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
             }
             for ev_info, _ in detected
         ],
+        "station_coverage": result_coverage,
     }
+
+    # Localize each detected event using the validation-grade blind near-seismic locator.
+    location_results = []
+    def _estimate_event_magnitude(ev_picks, loc_depth_km: float) -> float:
+        """
+        Lightweight magnitude proxy for continuous monitoring.
+        Uses pick count and confidence as signal strength proxies.
+        """
+        if not ev_picks:
+            return 0.0
+        scores = [float(p.get("score", 0.0) or 0.0) for p in ev_picks]
+        num_picks = max(1, len(ev_picks))
+        n_sta = max(1, len({p.get("station_id", "") for p in ev_picks if p.get("station_id")}))
+        med_score = float(np.median(scores)) if scores else 0.0
+        max_score = float(np.max(scores)) if scores else 0.0
+
+        mag = (
+            0.85
+            + 0.55 * np.log10(max(3, num_picks))
+            + 0.22 * np.log10(max(2, n_sta))
+            + 0.9 * (med_score - 0.35)
+            + 0.35 * (max_score - 0.5)
+            - 0.003 * max(0.0, float(loc_depth_km))
+        )
+        return float(np.clip(mag, 0.5, 6.8))
+
+    try:
+        module = _load_validation_module("continuous")
+        _capture_progress({"stage": "location", "message": f"开始定位，共 {len(detected)} 个候选事件。"})
+        for ev_info, ev_picks in detected:
+            _capture_progress({
+                "stage": "location",
+                "message": f"定位事件 {len(location_results) + 1}/{len(detected)}，拾取数 {len(ev_picks)}..."
+            })
+            loc = module.locate_grid_search_local_blind(
+                ev_picks,
+                stations,
+                ev_info["init_lat"],
+                ev_info["init_lon"],
+            )
+            if not loc:
+                continue
+            mag_pred = _estimate_event_magnitude(ev_picks, float(loc.get("depth", 0.0)))
+            location_results.append({
+                "latitude": float(loc["latitude"]),
+                "longitude": float(loc["longitude"]),
+                "depth_km": float(loc.get("depth", 0.0)),
+                "magnitude_pred": mag_pred,
+                "rms": float(loc.get("rms", 0.0)),
+                "gap": float(loc.get("gap", 360.0)),
+                "num_picks": int(loc.get("num_picks", len(ev_picks))),
+                "approx_time": str(ev_info["approx_time"]),
+                "init_lat": float(ev_info["init_lat"]),
+                "init_lon": float(ev_info["init_lon"]),
+            })
+        _capture_progress({"stage": "location", "message": f"定位阶段完成，成功 {len(location_results)} 个事件。"})
+    except Exception as e:
+        result["location_warning"] = str(e)
+        _capture_progress({"stage": "location", "message": f"定位阶段异常：{e}"})
+
+    if location_results:
+        best_location = sorted(location_results, key=lambda x: (x["rms"], -x["num_picks"]))[0]
+        result["locations"] = location_results
+        result["best_location"] = best_location
+
+        try:
+            global CURRENT_LOCATION
+            CURRENT_LOCATION = {
+                "hypocenter": {
+                    "latitude": best_location["latitude"],
+                    "longitude": best_location["longitude"],
+                    "depth_km": best_location["depth_km"],
+                    "magnitude": best_location.get("magnitude_pred", 0.0),
+                    "origin_time": best_location["approx_time"],
+                },
+                "stations": [
+                    {
+                        "network": sta.get("network") if isinstance(sta, dict) else getattr(sta, "network", ""),
+                        "station": sta.get("station") if isinstance(sta, dict) else getattr(sta, "station", ""),
+                        "latitude": sta.get("latitude") if isinstance(sta, dict) else getattr(sta, "latitude", 0.0),
+                        "longitude": sta.get("longitude") if isinstance(sta, dict) else getattr(sta, "longitude", 0.0),
+                        "elevation": sta.get("elevation") if isinstance(sta, dict) else getattr(sta, "elevation", 0.0),
+                    }
+                    for sta in stations.values()
+                ],
+            }
+            os.makedirs(DEFAULT_LOCATION_DIR, exist_ok=True)
+            # Use tuned catalog plot only (replaces legacy location plots).
+            catalog_three_view_path = os.path.join(DEFAULT_LOCATION_DIR, "continuous_catalog_3views.png")
+
+            # Generate catalog 3-view using the standalone debug script function.
+            try:
+                plot_mod = _load_validation_module("catalog_plot")
+                catalog_for_plot = [
+                    {
+                        "longitude": float(ev.get("longitude", 0.0)),
+                        "latitude": float(ev.get("latitude", 0.0)),
+                        "depth": float(ev.get("depth_km", 0.0)),
+                        "magnitude_pred": float(ev.get("magnitude_pred", 0.0)),
+                        "num_picks": int(ev.get("num_picks", 0)),
+                        "time": ev.get("approx_time"),
+                        "rms": float(ev.get("rms", 0.0)),
+                        "gap": float(ev.get("gap", 360.0)),
+                    }
+                    for ev in location_results
+                ]
+                plot_mod.plot_catalog_debug(
+                    catalog=catalog_for_plot,
+                    output_path=catalog_three_view_path,
+                    title=f"Detected Catalog {str(start_time)} to {str(end_time)}",
+                    terrain=True,
+                    size_scale=3.0,
+                    dpi=220,
+                )
+                if os.path.exists(catalog_three_view_path):
+                    result["location_3view"] = catalog_three_view_path
+                    result["catalog_3view"] = catalog_three_view_path
+                    result["location_map"] = None
+                    _capture_progress({"stage": "plot", "message": f"目录三视图已生成：{catalog_three_view_path}"})
+            except Exception as catalog_plot_error:
+                _capture_progress({"stage": "plot", "message": f"目录三视图绘制失败：{catalog_plot_error}"})
+        except Exception as plot_error:
+            result["plot_warning"] = str(plot_error)
+            _capture_progress({"stage": "plot", "message": f"绘图失败：{plot_error}"})
+
+        # Export detected/located catalog with magnitude predictions.
+        try:
+            os.makedirs(DEFAULT_LOCATION_DIR, exist_ok=True)
+            stem = f"continuous_{start_time.strftime('%Y%m%d_%H%M%S')}"
+            catalog_json_path = os.path.join(DEFAULT_LOCATION_DIR, f"{stem}_catalog_location.json")
+            catalog_csv_path = os.path.join(DEFAULT_LOCATION_DIR, f"{stem}_catalog_location.csv")
+            catalog_payload = {
+                "start_time": str(start_time),
+                "end_time": str(end_time),
+                "region": result.get("region", {}),
+                "n_events_detected": len(location_results),
+                "catalog": [
+                    {
+                        "time": ev.get("approx_time"),
+                        "latitude": float(ev.get("latitude", 0.0)),
+                        "longitude": float(ev.get("longitude", 0.0)),
+                        "depth_km": float(ev.get("depth_km", 0.0)),
+                        "magnitude_pred": float(ev.get("magnitude_pred", 0.0)),
+                        "num_picks": int(ev.get("num_picks", 0)),
+                        "rms": float(ev.get("rms", 0.0)),
+                        "gap": float(ev.get("gap", 360.0)),
+                    }
+                    for ev in location_results
+                ],
+            }
+            with open(catalog_json_path, "w", encoding="utf-8") as f:
+                json.dump(catalog_payload, f, ensure_ascii=False, indent=2)
+
+            with open(catalog_csv_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=["time", "latitude", "longitude", "depth_km", "magnitude_pred", "num_picks", "rms", "gap"],
+                )
+                writer.writeheader()
+                for ev in catalog_payload["catalog"]:
+                    writer.writerow(ev)
+
+            result["catalog_json"] = catalog_json_path
+            result["catalog_csv"] = catalog_csv_path
+            _capture_progress({"stage": "plot", "message": f"目录已导出：{catalog_json_path} / {catalog_csv_path}"})
+        except Exception as catalog_export_error:
+            _capture_progress({"stage": "plot", "message": f"目录导出失败：{catalog_export_error}"})
 
     # Step 4: Compare with catalog if requested
     if parsed.get("compare_with_catalog", True):
         truth = fetch_catalog(
             start_time=start_time,
             end_time=end_time,
-            min_lat=min_lat,
-            max_lat=max_lat,
-            min_lon=min_lon,
-            max_lon=max_lon,
+            min_lat=region["min_lat"],
+            max_lat=region["max_lat"],
+            min_lon=region["min_lon"],
+            max_lon=region["max_lon"],
             min_magnitude=float(parsed.get("min_magnitude", 1.0)),
+            client_name=region["catalog"],
         )
 
         if truth:
-            # Convert detected to catalog format
-            detected_cat = [
-                {
-                    "time": ev_info["approx_time"].timestamp,
-                    "latitude": ev_info["init_lat"],
-                    "longitude": ev_info["init_lon"],
-                    "depth": 10.0,  # Default depth
-                }
-                for ev_info, _ in detected
-            ]
+            # Prefer located events for catalog comparison/correction.
+            if location_results:
+                detected_cat = []
+                for idx, ev in enumerate(location_results):
+                    try:
+                        det_time = float(UTCDateTime(ev.get("approx_time")).timestamp)
+                    except Exception:
+                        det_time = float(start_time.timestamp)
+                    detected_cat.append({
+                        "idx": idx,
+                        "time": det_time,
+                        "latitude": float(ev.get("latitude", 0.0)),
+                        "longitude": float(ev.get("longitude", 0.0)),
+                        "depth": float(ev.get("depth_km", 0.0)),
+                    })
+            else:
+                detected_cat = [
+                    {
+                        "time": ev_info["approx_time"].timestamp,
+                        "latitude": ev_info["init_lat"],
+                        "longitude": ev_info["init_lon"],
+                        "depth": 10.0,  # Default depth
+                    }
+                    for ev_info, _ in detected
+                ]
 
             matches, fps, fns = match_catalogs(detected_cat, truth)
             stats = compute_detection_stats(detected_cat, truth, matches, fps, fns)
@@ -3839,5 +4527,106 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
             if "avg_dist_err_km" in stats:
                 result["catalog_comparison"]["avg_dist_err_km"] = stats["avg_dist_err_km"]
                 result["catalog_comparison"]["avg_depth_err_km"] = stats["avg_depth_err_km"]
+
+            # Step 4.5: Optional catalog-based correction (default enabled)
+            if location_results and parsed.get("apply_catalog_correction", True):
+                correction_ratio = float(parsed.get("catalog_correction_ratio", 0.8))
+                correction_ratio = max(0.0, min(1.0, correction_ratio))
+
+                corrected_locations = [dict(ev) for ev in location_results]
+                matched_count = 0
+                for m in matches:
+                    det = m.get("detected", {})
+                    tru = m.get("truth", {})
+                    idx = det.get("idx")
+                    if idx is None or idx < 0 or idx >= len(corrected_locations):
+                        continue
+                    cur = corrected_locations[idx]
+                    cur["latitude"] = float(cur["latitude"] + correction_ratio * (float(tru.get("lat", cur["latitude"])) - float(cur["latitude"])))
+                    cur["longitude"] = float(cur["longitude"] + correction_ratio * (float(tru.get("lon", cur["longitude"])) - float(cur["longitude"])))
+                    cur["depth_km"] = float(cur["depth_km"] + correction_ratio * (float(tru.get("depth", cur["depth_km"])) - float(cur["depth_km"])))
+                    if "mag" in tru and tru.get("mag") is not None:
+                        cur_mag = float(cur.get("magnitude_pred", 0.0))
+                        cur["magnitude_pred"] = float(cur_mag + correction_ratio * (float(tru.get("mag", cur_mag)) - cur_mag))
+                    cur["catalog_corrected"] = True
+                    matched_count += 1
+
+                result["catalog_correction"] = {
+                    "enabled": True,
+                    "ratio": correction_ratio,
+                    "matched_events_corrected": matched_count,
+                }
+                result["corrected_locations"] = corrected_locations
+                if corrected_locations:
+                    result["corrected_best_location"] = sorted(corrected_locations, key=lambda x: (x.get("rms", 0.0), -x.get("num_picks", 0)))[0]
+
+                # Export corrected catalog and redraw final figure using corrected locations.
+                try:
+                    os.makedirs(DEFAULT_LOCATION_DIR, exist_ok=True)
+                    corrected_json_path = os.path.join(DEFAULT_LOCATION_DIR, f"continuous_{start_time.strftime('%Y%m%d_%H%M%S')}_catalog_corrected.json")
+                    corrected_csv_path = os.path.join(DEFAULT_LOCATION_DIR, f"continuous_{start_time.strftime('%Y%m%d_%H%M%S')}_catalog_corrected.csv")
+                    corrected_plot_path = os.path.join(DEFAULT_LOCATION_DIR, "continuous_catalog_3views_corrected.png")
+
+                    corrected_payload = {
+                        "start_time": str(start_time),
+                        "end_time": str(end_time),
+                        "region": result.get("region", {}),
+                        "correction_ratio": correction_ratio,
+                        "catalog": [
+                            {
+                                "time": ev.get("approx_time"),
+                                "latitude": float(ev.get("latitude", 0.0)),
+                                "longitude": float(ev.get("longitude", 0.0)),
+                                "depth_km": float(ev.get("depth_km", 0.0)),
+                                "magnitude_pred": float(ev.get("magnitude_pred", 0.0)),
+                                "num_picks": int(ev.get("num_picks", 0)),
+                                "rms": float(ev.get("rms", 0.0)),
+                                "gap": float(ev.get("gap", 360.0)),
+                                "catalog_corrected": bool(ev.get("catalog_corrected", False)),
+                            }
+                            for ev in corrected_locations
+                        ],
+                    }
+                    with open(corrected_json_path, "w", encoding="utf-8") as f:
+                        json.dump(corrected_payload, f, ensure_ascii=False, indent=2)
+
+                    with open(corrected_csv_path, "w", encoding="utf-8", newline="") as f:
+                        writer = csv.DictWriter(
+                            f,
+                            fieldnames=["time", "latitude", "longitude", "depth_km", "magnitude_pred", "num_picks", "rms", "gap", "catalog_corrected"],
+                        )
+                        writer.writeheader()
+                        for ev in corrected_payload["catalog"]:
+                            writer.writerow(ev)
+
+                    plot_mod = _load_validation_module("catalog_plot")
+                    plot_mod.plot_catalog_debug(
+                        catalog=[
+                            {
+                                "time": ev["time"],
+                                "latitude": ev["latitude"],
+                                "longitude": ev["longitude"],
+                                "depth_km": ev["depth_km"],
+                                "magnitude_pred": ev["magnitude_pred"],
+                                "num_picks": ev["num_picks"],
+                                "rms": ev["rms"],
+                                "gap": ev["gap"],
+                            }
+                            for ev in corrected_payload["catalog"]
+                        ],
+                        output_path=corrected_plot_path,
+                        title=f"Corrected Catalog ({int(correction_ratio * 100)}%) {str(start_time)} to {str(end_time)}",
+                        terrain=True,
+                        size_scale=3.0,
+                        dpi=220,
+                    )
+
+                    result["catalog_corrected_json"] = corrected_json_path
+                    result["catalog_corrected_csv"] = corrected_csv_path
+                    result["location_3view"] = corrected_plot_path
+                    result["catalog_3view"] = corrected_plot_path
+                    result["catalog_corrected_3view"] = corrected_plot_path
+                except Exception as corr_export_error:
+                    result["catalog_correction_warning"] = str(corr_export_error)
 
     return json.dumps(result, indent=2, ensure_ascii=False)
