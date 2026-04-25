@@ -64,7 +64,21 @@ export type SkillDetail = {
 };
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
+
+export function toBackendUrl(url: string): string {
+  const base = API_BASE_URL;
+  if (!url) {
+    return url;
+  }
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  if (url.startsWith("/")) {
+    return `${base}${url}`;
+  }
+  return `${base}/${url}`;
+}
 
 export async function chatWithAgent(payload: ChatRequest): Promise<ChatResponse> {
   const response = await fetch(`${API_BASE_URL}/api/chat`, {

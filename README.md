@@ -33,6 +33,7 @@ pip install -r requirements-backend.txt
 streamlit run app.py
 ```
 Open your browser to `http://localhost:8501`.
+The legacy Streamlit UI is still kept for comparison and fallback.
 
 ### 3. Run the Backend API
 ```bash
@@ -122,5 +123,13 @@ pytest tests/test_deepseek_live.py -q
 - Upload endpoint accepts unknown extensions as `unknown`; unknown files are not bound to agent current-file state.
 - Chat artifact metadata includes `type`, `name`, `path`, and `url` for explicit frontend rendering.
 - Do not commit real API keys or `.env` files to the repository.
+
+## Current Limitations
+
+- The project still keeps compatibility with legacy `agent.tools` behaviors.
+- Deterministic workflow currently focuses on `earthquake_location`.
+- Other routes are still primarily handled by Agent + tools.
+- LangGraph is disabled by default (`QUAKECORE_USE_LANGGRAPH=0`).
+- RAG and Python Runner are not enabled by default.
 
 No Docker is used in this repository.

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { WorkflowSteps } from "@/components/workflow-steps";
-import { chatWithAgent, type ChatArtifact, type ChatResponse, type WorkflowResult } from "@/lib/api";
+import { chatWithAgent, toBackendUrl, type ChatArtifact, type ChatResponse, type WorkflowResult } from "@/lib/api";
 
 type Message = {
   role: "user" | "assistant";
@@ -15,9 +15,9 @@ type Message = {
 };
 
 const EXAMPLES = [
-  "Analyze this file structure.",
-  "Perform phase picking on the waveform.",
-  "Help me locate the earthquake from the picked phases.",
+  "请分析当前文件结构",
+  "对当前波形进行震相拾取",
+  "使用当前数据进行地震定位",
 ];
 
 export default function HomePage() {
@@ -48,7 +48,7 @@ export default function HomePage() {
       const response: ChatResponse = await chatWithAgent({
         message: text,
         session_id: sessionId,
-        lang: "en",
+        lang: "zh",
       });
 
       setSessionId(response.session_id);
@@ -136,11 +136,16 @@ export default function HomePage() {
                     {message.artifacts.map((artifact) => (
                       <div key={artifact.url} className="artifact-card">
                         {artifact.type === "image" ? (
-                          <a href={artifact.url} target="_blank" rel="noreferrer" className="artifact-preview">
-                            <img src={artifact.url} alt={artifact.name} />
+                          <a
+                            href={toBackendUrl(artifact.url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="artifact-preview"
+                          >
+                            <img src={toBackendUrl(artifact.url)} alt={artifact.name} />
                           </a>
                         ) : (
-                          <a href={artifact.url} target="_blank" rel="noreferrer">
+                          <a href={toBackendUrl(artifact.url)} target="_blank" rel="noreferrer">
                             {artifact.name}
                           </a>
                         )}
