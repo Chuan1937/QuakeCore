@@ -5,15 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
 class AgentSession:
     session_id: str
-    lang: str
-    agent: Any
+    lang: str = "en"
+    agent: Any = None
     skill_context: str = ""
+    uploaded_files: list[str] = field(default_factory=list)
+    current_file: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_active_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -26,7 +28,7 @@ class SessionStore:
         self._sessions: dict[str, AgentSession] = {}
         self._lock = Lock()
 
-    def get_or_create(self, session_id: str, factory) -> AgentSession:
+    def get_or_create(self, session_id: str, factory: Callable[[], AgentSession]) -> AgentSession:
         with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
@@ -35,3 +37,46 @@ class SessionStore:
             session.touch()
             return session
 
+    def ensure_session(self, session_id: str) -> AgentSession:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = AgentSession(session_id=session_id)
+                self._sessions[session_id] = session
+            session.touch()
+            return session
+
+    def add_file(self, session_id: str, path: str) -> AgentSession:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = AgentSession(session_id=session_id)
+                self._sessions[session_id] = session
+            session.uploaded_files.append(path)
+            session.touch()
+            return session
+
+    def set_current_file(self, session_id: str, path: str | None) -> AgentSession:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = AgentSession(session_id=session_id)
+                self._sessions[session_id] = session
+            session.current_file = path
+            session.touch()
+            return session
+
+    def get_current_file(self, session_id: str) -> str | None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            session.touch()
+            return session.current_file
+
+
+_session_store = SessionStore()
+
+
+def get_session_store() -> SessionStore:
+    return _session_store

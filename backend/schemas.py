@@ -10,6 +10,7 @@ class HealthResponse(BaseModel):
 
 
 class FileUploadResponse(BaseModel):
+    session_id: str
     filename: str
     path: str
     file_type: str

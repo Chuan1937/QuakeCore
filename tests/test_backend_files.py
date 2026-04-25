@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services.file_service import FileService
+from backend.services.session_store import SessionStore
 
 
 def test_infer_file_type_maps_expected_suffixes():
@@ -20,7 +21,9 @@ def test_infer_file_type_maps_expected_suffixes():
 
 
 def test_upload_file_mseed_binds_agent_state(tmp_path, monkeypatch):
+    session_store = SessionStore()
     monkeypatch.setattr("backend.routes.files.FileService", lambda: FileService(tmp_path))
+    monkeypatch.setattr("backend.routes.files.get_session_store", lambda: session_store)
     monkeypatch.setattr(
         "backend.routes.files.bind_uploaded_file_to_agent",
         lambda _path, file_type: file_type == "miniseed",
@@ -34,16 +37,20 @@ def test_upload_file_mseed_binds_agent_state(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["session_id"]
     assert payload["filename"] == "demo.mseed"
     assert payload["file_type"] == "miniseed"
     assert payload["bound_to_agent"] is True
     saved_path = Path(payload["path"])
     assert saved_path.exists()
     assert saved_path.parent == tmp_path
+    assert session_store.get_current_file(payload["session_id"]) == str(saved_path)
 
 
 def test_upload_file_txt_is_unknown_without_binding(tmp_path, monkeypatch):
+    session_store = SessionStore()
     monkeypatch.setattr("backend.routes.files.FileService", lambda: FileService(tmp_path))
+    monkeypatch.setattr("backend.routes.files.get_session_store", lambda: session_store)
     monkeypatch.setattr(
         "backend.routes.files.bind_uploaded_file_to_agent",
         lambda _path, file_type: file_type in {"segy", "miniseed", "hdf5", "sac"},
@@ -57,9 +64,11 @@ def test_upload_file_txt_is_unknown_without_binding(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["session_id"]
     assert payload["filename"] == "demo.txt"
     assert payload["file_type"] == "unknown"
     assert payload["bound_to_agent"] is False
     saved_path = Path(payload["path"])
     assert saved_path.exists()
     assert saved_path.parent == tmp_path
+    assert session_store.get_current_file(payload["session_id"]) == str(saved_path)
