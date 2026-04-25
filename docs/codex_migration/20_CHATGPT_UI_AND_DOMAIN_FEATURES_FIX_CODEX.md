@@ -1,53 +1,67 @@
-# Task 20: ChatGPT 风格 UI + 上传体验 + 领域功能入口修复
+# Task 20: ChatGPT-like 极简聊天界面 + 集成上传
 
-推荐模型：`gpt-5.3-codex`。如果只修前端样式，可用 `gpt-5.4-mini`，但本任务涉及前后端上传闭环，建议先用 Codex。
+推荐模型：`gpt-5.3-codex`。如果只修前端样式和 TypeScript，可切换 `gpt-5.4-mini`。
 
-## 背景：当前问题
+## 背景：必须修正的方向
 
-当前 `refactor` 分支的功能架构已经比较完整，但前端体验不达标：
+当前 `refactor` 分支的后端能力已经比较完整：
 
-1. 页面不是 ChatGPT 风格，而是 landing page / hero page。
-2. 没有明显的文件上传入口。
-3. 不支持像 ChatGPT 一样点击、拖拽、复制粘贴上传文件。
-4. 用户看不到已上传文件列表。
-5. 原有领域能力入口不明显，例如：
-   - 地震监测
-   - 初至拾取 / 震相拾取
-   - 文件结构分析
-   - 波形读取
-   - 地震定位
-   - 地图绘制
-6. 当前前端虽然能 chat，但不像一个可用的专业 Agent 工作台。
+- `/api/chat`
+- `/api/files/upload`
+- `/api/workflows/location/run`
+- session file context
+- ToolResult 标准化
+- earthquake_location workflow
+- DeepSeek `deepseek-v4-flash`
 
-当前后端其实已经有 `/api/files/upload`，并且上传后会写入 session context、绑定旧 `agent.tools` 当前文件状态。问题主要是前端没有把它产品化。
-
-## 总目标
-
-把前端从“展示页”改成“ChatGPT 风格地震 Agent 工作台”。
-
-目标体验：
+问题在于前端体验：当前页面像 landing page，不像 ChatGPT。用户希望的是：
 
 ```text
-左侧：会话 / 功能快捷入口 / 已上传文件
-中间：ChatGPT 风格消息流
-底部：输入框 + 上传按钮 + 拖拽/粘贴上传
-右侧或消息内：workflow steps / artifacts / 文件卡片
+打开就是聊天窗口。
+上传、拖拽、粘贴都集成在输入框。
+所有地震能力由后端 router / agent / workflow 自动执行。
 ```
 
-必须支持：
-
-- 点击上传文件
-- 拖拽上传文件
-- Ctrl+V / Cmd+V 粘贴文件上传
-- 上传后显示文件列表
-- 上传后保持同一个 session_id
-- 后续 chat 使用同一个 session_id
-- 快捷按钮触发地震领域任务
+不要做传统软件式工具面板，也不要做一堆领域功能按钮。
 
 ---
 
-## 禁止事项
+## 核心目标
 
+把首页改成 ChatGPT-like 极简界面：
+
+```text
+顶部：QuakeCore / Settings / Skills
+中间：消息流
+底部：composer 输入框
+composer 左侧：附件上传按钮
+全页面：支持拖拽上传
+输入框：支持粘贴文件上传
+```
+
+用户只通过自然语言触发能力：
+
+```text
+请分析当前文件结构
+对这个波形做初至拾取
+使用当前数据进行地震定位
+帮我做连续地震监测
+画出台站和震中位置图
+```
+
+这些不需要 UI 按钮，全部交给后端自动 route。
+
+---
+
+## 严格禁止
+
+- 不要添加“文件结构分析”按钮。
+- 不要添加“初至拾取”按钮。
+- 不要添加“地震定位”按钮。
+- 不要添加“连续监测”按钮。
+- 不要添加传统工具面板。
+- 不要做复杂左侧功能栏。
+- 不要把前端做成传统地震软件操作界面。
 - 不要改动 `agent/tools.py`。
 - 不要删除 `app.py`。
 - 不要重写后端架构。
@@ -59,72 +73,71 @@
 
 ---
 
-# Part A: 前端整体布局改造
+# Part A: 页面结构改成 ChatGPT-like
 
-## A1. 移除 hero landing 风格
+## A1. 移除 landing hero
 
-当前 `frontend/app/page.tsx` 有 hero 区域：
-
-- `Seismic analysis, routed through chat.`
-- 大号标题
-- session card
-
-这不符合 ChatGPT 风格。
-
-请改为三栏或两栏布局：
+当前 `frontend/app/page.tsx` 中有 hero / card 风格，例如：
 
 ```text
-┌──────────────────────────────────────────────┐
-│ Top bar: QuakeCore | Settings | Skills       │
-├──────────────┬───────────────────────────────┤
-│ Sidebar      │ Chat messages                 │
-│ - New Chat   │                               │
-│ - Files      │                               │
-│ - Tools      │                               │
-│ - Shortcuts  │                               │
-│              │ Composer + upload             │
-└──────────────┴───────────────────────────────┘
+Seismic analysis, routed through chat.
+Session card
+大块展示区
 ```
 
-可以保留深色主题，但视觉应接近 ChatGPT：
+请删除或重构这些 landing 元素。
 
-- 左侧窄 sidebar
-- 中间消息流
-- 底部固定 composer
-- 用户/assistant 消息左右或块状区分
-- 不要大幅 hero 标题占屏幕
+首页应是一个聊天页面，而不是宣传页。
 
-## A2. Chat 页面结构建议
+## A2. 推荐布局
 
-在 `frontend/app/page.tsx` 中组织为：
+实现类似：
 
-```tsx
-<div className="chat-app">
-  <aside className="sidebar">...</aside>
-  <main className="chat-main">
-    <header className="chat-header">...</header>
-    <section className="message-list">...</section>
-    <section className="composer-wrap">...</section>
-  </main>
-</div>
+```text
+┌───────────────────────────────────────────────┐
+│ QuakeCore                         Settings Skills │
+├───────────────────────────────────────────────┤
+│                                               │
+│                message list                   │
+│                                               │
+│        今天要分析什么地震数据？                 │
+│        上传数据，或直接输入问题。               │
+│                                               │
+├───────────────────────────────────────────────┤
+│  +   输入消息...                         Send │
+└───────────────────────────────────────────────┘
 ```
 
-可以新增组件：
+可以保留轻量顶部导航：
 
-- `frontend/components/file-uploader.tsx`
-- `frontend/components/uploaded-files.tsx`
-- `frontend/components/domain-shortcuts.tsx`
-- `frontend/components/artifact-card.tsx`
+- QuakeCore
+- Settings
+- Skills
 
-但不要过度拆分。
+不要在首页展示复杂 sidebar。最多可以有一个很窄的 session/new chat 区，但不是必须。
+
+## A3. 空状态提示
+
+空消息时显示：
+
+```text
+今天要分析什么地震数据？
+上传 MiniSEED、SAC、SEGY、HDF5，或直接提问。
+```
+
+可以给自然语言示例，但必须只是提示文本，不是功能按钮：
+
+```text
+例如：请分析当前文件结构 / 对当前波形做初至拾取 / 使用当前数据进行地震定位
+```
 
 ---
 
-# Part B: 文件上传体验
+# Part B: 上传集成到 composer
 
 ## B1. API 封装
 
-检查 `frontend/lib/api.ts`，如果没有上传函数，请新增：
+检查 `frontend/lib/api.ts`。如果没有上传函数，请新增：
 
 ```ts
 export async function uploadFile(file: File, sessionId?: string | null): Promise<FileUploadResponse> {
@@ -148,7 +161,7 @@ export async function uploadFile(file: File, sessionId?: string | null): Promise
 类型：
 
 ```ts
-export type UploadedFile = {
+export type FileUploadResponse = {
   session_id: string;
   filename: string;
   path: string;
@@ -159,92 +172,98 @@ export type UploadedFile = {
 
 ## B2. 点击上传
 
-在 composer 左侧或输入框内增加上传按钮：
+在 composer 左侧放一个附件按钮：
 
 ```text
-＋ / paperclip / 上传文件
++
 ```
 
-支持多文件上传。对每个文件调用 `/api/files/upload`。
+或 paperclip 图标。
 
-上传成功后：
+要求：
 
-- 更新 `sessionId` 为 response.session_id
-- 添加到 uploadedFiles 列表
-- 在消息流中插入一条 assistant/system 提示：
-
-```text
-已上传 demo.mseed，类型 miniseed，已绑定到当前会话。
-```
+- 使用隐藏 `<input type="file" multiple />`。
+- 用户点击附件按钮后选择文件。
+- 支持多文件上传。
+- 每个文件调用 `/api/files/upload`。
+- 上传成功后更新 `sessionId = response.session_id`。
+- 后续 chat request 必须带这个 session_id。
 
 ## B3. 拖拽上传
 
-支持把文件拖到 chat 主区域。
+支持把文件拖到整个聊天页面。
 
 行为：
 
-- drag over 时显示 overlay：`释放以上传地震数据文件`
-- drop 后调用 upload
-- 支持 `.mseed`, `.miniseed`, `.sac`, `.sgy`, `.segy`, `.h5`, `.hdf5`, `.npy`, `.npz`, `.csv`, `.txt`
+- drag over 时显示轻量 overlay：
+
+```text
+释放以上传地震数据文件
+```
+
+- drop 后自动上传。
+- 支持常见文件：`.mseed`, `.miniseed`, `.sac`, `.sgy`, `.segy`, `.h5`, `.hdf5`, `.npy`, `.npz`, `.csv`, `.txt`。
+
+不要做复杂文件管理 UI。
 
 ## B4. 粘贴上传
 
 监听 paste 事件。
 
-如果 clipboard 中有 file：
+如果 clipboard 中有文件：
 
-- 自动上传
-- 显示上传成功消息
+- 自动上传。
+- 不阻止普通文本粘贴。
 
-注意：不要阻止普通文本粘贴。
+## B5. 上传后的聊天展示
 
-## B5. 已上传文件列表
+上传成功后，不要显示成传统文件管理器。
 
-Sidebar 显示 uploaded files：
+要像 ChatGPT 一样，把它插入消息流：
+
+用户消息：
 
 ```text
-已上传文件
-- demo.mseed  miniseed  bound
-- stations.csv unknown
+上传了 demo.mseed
 ```
 
-显示字段：
+助手/系统消息：
 
-- filename
-- file_type
-- bound_to_agent 状态
+```text
+已接收 demo.mseed，识别为 miniseed，已绑定到当前会话。你可以直接问我：分析文件结构、初至拾取或地震定位。
+```
+
+如果 `bound_to_agent=false`，提示：
+
+```text
+已接收文件，但该类型暂未自动绑定为当前地震数据。
+```
 
 ---
 
-# Part C: 地震领域快捷入口恢复
+# Part C: 自然语言触发领域能力
 
-在 sidebar 或 composer 上方添加快捷按钮：
+## C1. 不做按钮，只保留提示
 
-## C1. 必须有这些快捷入口
+不要添加功能按钮。
 
-```text
-文件结构分析
-读取/绘制波形
-初至拾取 / 震相拾取
-地震定位
-连续地震监测
-地图绘制
-```
-
-点击后直接发送对应 prompt：
+但可以在空状态或上传成功提示中给出自然语言示例：
 
 ```text
-请分析当前文件结构
-请读取当前文件第0道波形并绘图
-请对当前波形进行初至拾取和P/S震相拾取
-请使用当前数据进行地震定位并给出结果和地图
-请基于当前配置进行连续地震监测
-请绘制当前定位结果和台站分布地图
+你可以这样问：
+“请分析当前文件结构”
+“对当前波形做初至拾取”
+“使用当前数据进行地震定位”
+“帮我做连续地震监测”
 ```
 
-## C2. Route 预期
+这些示例不要做成按钮。
 
-这些 prompt 应尽量命中：
+## C2. 后端负责 route
+
+前端只发送用户文本到 `/api/chat`。
+
+后端负责判断：
 
 - file_structure
 - waveform_reading
@@ -252,106 +271,101 @@ Sidebar 显示 uploaded files：
 - earthquake_location
 - continuous_monitoring
 - map_plotting
+- seismo_qa
 
-如果 router 不准确，可微调 `backend/services/router_service.py` 关键词，但不要过度复杂化。
+如果 router 关键词缺失，可以小范围补充 `backend/services/router_service.py`，但不要把业务逻辑搬到前端。
 
-## C3. 功能提示
-
-如果用户未上传文件就点击快捷入口，应发送也可以，但前端最好提示：
-
-```text
-建议先上传 MiniSEED/SAC/SEGY/HDF5 文件。
-```
-
-不要阻止发送，因为后端可能使用 example_data。
-
----
-
-# Part D: 消息体验改造
-
-## D1. 消息流
-
-消息应该像 ChatGPT：
-
-- user 消息靠右或显著区分
-- assistant 消息靠左或全宽
-- assistant 显示 route badge
-- error 显示红色/警告卡片
-- workflow steps 嵌在 assistant 消息下方
-- artifacts 嵌在 assistant 消息下方
-
-## D2. 输入框
-
-底部 composer：
-
-- 大 textarea
-- Enter 发送，Shift+Enter 换行
-- 上传按钮
-- 发送按钮
-- loading 状态
-
-当前如果只支持 form submit，可以增强：
-
-```ts
-onKeyDown={(e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    handleSend(input);
-  }
-}}
-```
-
-## D3. 初始空状态
-
-不要再显示巨大标题。
-
-空状态显示：
-
-```text
-今天要分析什么地震数据？
-上传 MiniSEED、SAC、SEGY、HDF5，或直接提问。
-```
-
----
-
-# Part E: 后端确认与小修
-
-## E1. 上传 route 已存在
-
-确认 `backend/routes/files.py`：
-
-- 接收 `session_id` form field
-- 返回 `session_id`
-- session_store 写入文件
-- bind_uploaded_file_to_agent
-
-如果已完成，不要大改。
-
-## E2. Chat 同 session
-
-前端必须确保：
-
-- 上传文件返回的 `session_id` 存入 state
-- 后续 chat request 带同一个 `session_id`
-
-否则 Agent 无法知道用户上传过文件。
-
-## E3. Router 关键词
-
-如果连续监测或初至拾取命中不准，补充关键词：
+建议补充关键词：
 
 - 初至
 - 初至拾取
 - 到时拾取
 - first arrival
-- continuous monitoring
 - 连续地震监测
+- 地震监测
 
 ---
 
-# Part F: 测试与验证
+# Part D: 消息体验
 
-## F1. 前端 build
+## D1. 消息流
+
+消息应该像 ChatGPT：
+
+- 用户消息和助手消息清晰区分。
+- assistant 显示 route badge，但不要太显眼。
+- workflow steps 嵌在 assistant 消息下方。
+- artifacts 嵌在 assistant 消息下方。
+- error 显示为警告卡片，不让页面崩溃。
+- 上传文件显示为消息流中的 file chip。
+
+## D2. 输入框行为
+
+底部 composer：
+
+- 大 textarea。
+- Enter 发送。
+- Shift+Enter 换行。
+- 上传按钮。
+- 发送按钮。
+- loading 状态。
+
+实现建议：
+
+```ts
+onKeyDown={(e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    void handleSend(input);
+  }
+}}
+```
+
+## D3. Artifact URL
+
+如果 artifact.url 是相对路径：
+
+```text
+/api/artifacts/xxx.png
+```
+
+前端必须使用 `toBackendUrl(artifact.url)`，确保从 FastAPI 后端加载。
+
+---
+
+# Part E: Session 约束
+
+前端必须保证：
+
+1. 第一次上传返回的 `session_id` 存入 state。
+2. 后续上传继续带同一个 session_id。
+3. 后续 chat 也带同一个 session_id。
+4. New chat 时才清空 session_id 和消息。
+
+如果没有 New Chat 按钮，也可以先不做，但不要在每次发送消息时丢失 session。
+
+---
+
+# Part F: 不需要新增后端大功能
+
+后端已有：
+
+- `POST /api/files/upload`
+- `POST /api/chat`
+- `POST /api/workflows/location/run`
+
+本任务主要修前端体验。
+
+只有当 router 对“初至拾取 / 连续地震监测”识别不准确时，才允许小范围修改：
+
+- `backend/services/router_service.py`
+- `tests/test_router_service.py`
+
+---
+
+# Part G: 测试与验证
+
+## G1. 前端 build
 
 ```bash
 cd frontend
@@ -360,7 +374,7 @@ npm run build
 
 必须通过。
 
-## F2. 后端测试
+## G2. 后端测试
 
 ```bash
 pytest tests -q
@@ -368,9 +382,9 @@ pytest tests -q
 
 必须通过。
 
-## F3. smoke
+## G3. Smoke
 
-后端启动：
+启动后端：
 
 ```bash
 uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
@@ -384,7 +398,7 @@ python scripts/smoke_full_web_agent.py
 python scripts/smoke_deepseek_v4_flash.py
 ```
 
-## F4. 人工网页验收
+## G4. 人工网页验收
 
 打开：
 
@@ -392,40 +406,33 @@ python scripts/smoke_deepseek_v4_flash.py
 http://localhost:3000
 ```
 
-手动测试：
+人工测试：
 
-1. 拖拽上传 `.mseed`。
-2. 点击“文件结构分析”。
-3. 点击“初至拾取 / 震相拾取”。
-4. 点击“地震定位”。
-5. 确认 workflow steps 显示。
-6. 确认 artifacts 能打开。
-7. 粘贴上传一个文件。
-8. 普通问答：`你是谁`，应有 DeepSeek 回复。
+1. 页面打开后是聊天窗口，不是 hero landing page。
+2. 点击附件按钮上传 `.mseed`。
+3. 拖拽 `.mseed` 到页面上传。
+4. 粘贴文件上传。
+5. 上传后消息流出现文件 chip / 上传提示。
+6. 输入：`请分析当前文件结构`。
+7. 输入：`对当前波形做初至拾取`。
+8. 输入：`使用当前数据进行地震定位`。
+9. 检查 route badge、workflow steps、artifacts。
+10. 普通提问：`你是谁`，应由 DeepSeek 回复。
 
 ---
 
-# Part G: README 更新
+# Part H: README 更新
 
-README 增加新版 Web 使用说明：
+README 中说明新版前端支持：
 
-```bash
-export DEEPSEEK_API_KEY=your_key
-uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
-cd frontend
-npm run dev
-```
+- ChatGPT-like 极简聊天界面。
+- 点击上传。
+- 拖拽上传。
+- 粘贴上传。
+- 上传后自然语言触发分析。
+- 后端自动 route 到文件结构、初至拾取、地震定位、连续监测等能力。
 
-说明前端支持：
-
-- 点击上传
-- 拖拽上传
-- 粘贴上传
-- 文件结构分析
-- 初至/震相拾取
-- 地震定位 workflow
-- 连续监测入口
-- artifacts 展示
+不要描述为“点击功能按钮执行工具”。
 
 ---
 
@@ -433,13 +440,15 @@ npm run dev
 
 请输出：
 
-1. 修改了哪些前端文件。
-2. 是否支持点击上传、拖拽上传、粘贴上传。
-3. 上传后 session_id 是否被保存并用于 chat。
-4. 已恢复哪些地震领域快捷入口。
-5. artifact 是否能从前端打开。
-6. workflow steps 是否能显示。
-7. `npm run build` 结果。
-8. `pytest tests -q` 结果。
-9. smoke 脚本结果。
-10. 仍然存在的限制。
+1. 是否移除了 landing hero。
+2. 是否实现 ChatGPT-like 单聊天窗口。
+3. 是否支持点击上传、拖拽上传、粘贴上传。
+4. 上传后 session_id 是否被保存并用于 chat。
+5. 是否没有添加领域功能按钮。
+6. 自然语言是否可以触发地震能力。
+7. artifact 是否能打开。
+8. workflow steps 是否能显示。
+9. `npm run build` 结果。
+10. `pytest tests -q` 结果。
+11. smoke 脚本结果。
+12. 仍然存在的限制。
