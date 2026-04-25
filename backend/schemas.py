@@ -13,6 +13,7 @@ class FileUploadResponse(BaseModel):
     filename: str
     path: str
     file_type: str
+    bound_to_agent: bool = False
 
 
 class ChatRequest(BaseModel):

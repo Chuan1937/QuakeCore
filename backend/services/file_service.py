@@ -11,11 +11,39 @@ from fastapi import UploadFile
 
 FILE_TYPE_BY_SUFFIX = {
     ".mseed": "miniseed",
+    ".miniseed": "miniseed",
     ".sgy": "segy",
     ".segy": "segy",
     ".h5": "hdf5",
+    ".hdf5": "hdf5",
     ".sac": "sac",
+    ".npy": "npy",
+    ".npz": "npz",
 }
+
+
+def bind_uploaded_file_to_agent(path: str, file_type: str) -> bool:
+    if file_type == "segy":
+        from agent.tools import set_current_segy_path
+
+        set_current_segy_path(path)
+        return True
+    if file_type == "miniseed":
+        from agent.tools import set_current_miniseed_path
+
+        set_current_miniseed_path(path)
+        return True
+    if file_type == "hdf5":
+        from agent.tools import set_current_hdf5_path
+
+        set_current_hdf5_path(path)
+        return True
+    if file_type == "sac":
+        from agent.tools import set_current_sac_path
+
+        set_current_sac_path(path)
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -32,10 +60,7 @@ class FileService:
     @staticmethod
     def infer_file_type(filename: str) -> str:
         suffix = Path(filename).suffix.lower()
-        file_type = FILE_TYPE_BY_SUFFIX.get(suffix)
-        if file_type is None:
-            raise ValueError(f"Unsupported file type: {suffix or '<none>'}")
-        return file_type
+        return FILE_TYPE_BY_SUFFIX.get(suffix, "unknown")
 
     def save_upload(self, file: UploadFile) -> UploadedFileInfo:
         original_name = Path(file.filename or "").name
@@ -56,4 +81,3 @@ class FileService:
             path=str(destination),
             file_type=file_type,
         )
-
