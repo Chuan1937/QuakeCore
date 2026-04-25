@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { chatWithAgent, type ChatArtifact, type ChatResponse } from "@/lib/api";
+import { WorkflowSteps } from "@/components/workflow-steps";
+import { chatWithAgent, type ChatArtifact, type ChatResponse, type WorkflowResult } from "@/lib/api";
 
 type Message = {
   role: "user" | "assistant";
@@ -10,6 +11,7 @@ type Message = {
   route?: string;
   artifacts?: ChatArtifact[];
   error?: string | null;
+  workflow?: WorkflowResult | null;
 };
 
 const EXAMPLES = [
@@ -58,6 +60,7 @@ export default function HomePage() {
           route: response.route,
           artifacts: response.artifacts,
           error: response.error,
+          workflow: response.workflow ?? null,
         },
       ]);
     } catch (err) {
@@ -126,6 +129,7 @@ export default function HomePage() {
                   {message.route ? <span>route: {message.route}</span> : null}
                 </header>
                 <p>{message.content}</p>
+                {message.workflow ? <WorkflowSteps workflow={message.workflow} /> : null}
                 {message.error ? <div className="error-pill">{message.error}</div> : null}
                 {message.artifacts?.length ? (
                   <div className="artifacts">

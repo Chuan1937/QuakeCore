@@ -34,4 +34,5 @@ def chat(
             {"type": item.type, "name": item.name, "path": item.path, "url": item.url}
             for item in result.artifacts
         ],
+        "workflow": result.workflow,
     }

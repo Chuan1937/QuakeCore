@@ -5,12 +5,32 @@ export type ChatArtifact = {
   url: string;
 };
 
+export type WorkflowStep = {
+  name: string;
+  status: "ok" | "warning" | "error" | "skipped" | string;
+  required?: boolean;
+  message?: string;
+  error?: string | null;
+  duration_ms?: number;
+};
+
+export type WorkflowResult = {
+  status: "success" | "partial_success" | "failed" | string;
+  summary?: string;
+  message?: string;
+  steps?: WorkflowStep[];
+  location?: Record<string, unknown>;
+  artifacts?: ChatArtifact[];
+  error?: string | null;
+};
+
 export type ChatResponse = {
   session_id: string;
   answer: string;
   error: string | null;
   route: string;
   artifacts: ChatArtifact[];
+  workflow?: WorkflowResult | null;
 };
 
 export type ChatRequest = {

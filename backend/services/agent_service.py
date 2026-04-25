@@ -26,6 +26,7 @@ class ChatResult:
     error: str | None
     route: str
     artifacts: list[ArtifactItem]
+    workflow: dict | None = None
 
 
 class AgentService:
@@ -154,28 +155,32 @@ class AgentService:
                 workflow_result = run_location_workflow(final_session_id)
                 workflow_status = str(workflow_result.get("status", "failed"))
                 workflow_steps = workflow_result.get("steps", [])
-                if workflow_status in {"success", "partial_success"}:
-                    answer = str(workflow_result.get("summary") or workflow_result.get("message") or "")
-                    if workflow_status == "partial_success":
-                        answer = f"{answer}\nWorkflow status: partial_success"
+                if workflow_steps:
+                    if workflow_status in {"success", "partial_success"}:
+                        answer = str(workflow_result.get("summary") or workflow_result.get("message") or "")
+                    else:
+                        answer = str(
+                            workflow_result.get("summary")
+                            or workflow_result.get("message")
+                            or "地震定位工作流执行失败，但已完成部分步骤。请查看步骤详情。"
+                        )
                     return ChatResult(
                         session_id=final_session_id,
                         answer=answer,
-                        error=None,
-                        route=route,
-                        artifacts=self._artifacts_from_payload(
-                            workflow_result.get("artifacts", [])
-                        ),
-                    )
-                if workflow_status == "failed" and workflow_steps:
-                    return ChatResult(
-                        session_id=final_session_id,
-                        answer=str(workflow_result.get("summary") or workflow_result.get("message") or ""),
                         error=workflow_result.get("error"),
                         route=route,
                         artifacts=self._artifacts_from_payload(
                             workflow_result.get("artifacts", [])
                         ),
+                        workflow={
+                            "status": workflow_result.get("status"),
+                            "summary": workflow_result.get("summary"),
+                            "message": workflow_result.get("message"),
+                            "steps": workflow_steps,
+                            "location": workflow_result.get("location", {}),
+                            "artifacts": workflow_result.get("artifacts", []),
+                            "error": workflow_result.get("error"),
+                        },
                     )
 
             session = self._get_or_create_session(final_session_id, final_lang)
@@ -199,6 +204,7 @@ class AgentService:
                 error=normalized.error,
                 route=route,
                 artifacts=artifacts,
+                workflow=None,
             )
         except Exception as exc:
             normalized = normalize_tool_output(exc)
@@ -208,4 +214,5 @@ class AgentService:
                 error=normalized.error,
                 route=route,
                 artifacts=[],
+                workflow=None,
             )

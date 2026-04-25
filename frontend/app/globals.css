@@ -351,6 +351,109 @@ textarea {
   background: rgba(15, 24, 48, 0.9);
 }
 
+.workflow-card {
+  margin-top: 12px;
+  border: 1px solid rgba(153, 179, 255, 0.2);
+  border-radius: 14px;
+  background: rgba(9, 16, 34, 0.72);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.workflow-status {
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.78rem;
+  border: 1px solid rgba(153, 179, 255, 0.22);
+  color: var(--muted);
+}
+
+.workflow-status-success {
+  border-color: rgba(124, 240, 198, 0.35);
+  color: var(--accent);
+}
+
+.workflow-status-partial_success {
+  border-color: rgba(255, 219, 128, 0.36);
+  color: #ffd57d;
+}
+
+.workflow-status-failed {
+  border-color: rgba(255, 142, 142, 0.36);
+  color: var(--danger);
+}
+
+.workflow-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.workflow-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-step {
+  border: 1px solid rgba(153, 179, 255, 0.16);
+  border-radius: 12px;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.workflow-step-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.86rem;
+}
+
+.workflow-step-top code {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.workflow-step-meta {
+  display: flex;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.workflow-step p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.workflow-step-warning {
+  border-color: rgba(255, 219, 128, 0.28);
+}
+
+.workflow-step-error {
+  border-color: rgba(255, 142, 142, 0.34);
+}
+
+.workflow-step-error p {
+  color: #ffb5b5;
+}
+
+.workflow-step .workflow-step-error {
+  color: var(--danger);
+}
+
 .artifacts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

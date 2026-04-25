@@ -31,12 +31,34 @@ class ArtifactResponse(BaseModel):
     url: str
 
 
+class WorkflowStepResponse(BaseModel):
+    name: str
+    status: str
+    required: bool
+    message: str
+    error: str | None = None
+    data: dict = Field(default_factory=dict)
+    artifacts: list[dict] = Field(default_factory=list)
+    duration_ms: int
+
+
+class WorkflowResultResponse(BaseModel):
+    status: str
+    summary: str | None = None
+    message: str | None = None
+    steps: list[WorkflowStepResponse] = Field(default_factory=list)
+    location: dict = Field(default_factory=dict)
+    artifacts: list[dict] = Field(default_factory=list)
+    error: str | None = None
+
+
 class ChatResponse(BaseModel):
     session_id: str
     answer: str
     error: str | None = None
     route: str
     artifacts: list[ArtifactResponse] = Field(default_factory=list)
+    workflow: WorkflowResultResponse | None = None
 
 
 class LlmConfigRequest(BaseModel):

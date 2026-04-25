@@ -145,7 +145,18 @@ def test_agent_service_prefers_location_workflow_when_route_matches(monkeypatch)
         lambda _session_id: {
             "success": True,
             "status": "success",
-            "steps": [],
+            "steps": [
+                {
+                    "name": "locate_uploaded_data_nearseismic",
+                    "status": "ok",
+                    "required": True,
+                    "message": "located",
+                    "error": None,
+                    "data": {"latitude": 1.0},
+                    "artifacts": [],
+                    "duration_ms": 1,
+                }
+            ],
             "location": {"latitude": 1.0},
             "artifacts": [
                 {
@@ -169,6 +180,9 @@ def test_agent_service_prefers_location_workflow_when_route_matches(monkeypatch)
     assert result.answer == "Location workflow completed."
     assert len(result.artifacts) == 1
     assert result.artifacts[0].url == "/api/artifacts/location/workflow_map.png"
+    assert result.workflow is not None
+    assert result.workflow["status"] == "success"
+    assert isinstance(result.workflow["steps"], list)
 
 
 def test_agent_service_returns_failed_workflow_summary_without_llm_fallback(monkeypatch):
@@ -192,3 +206,6 @@ def test_agent_service_returns_failed_workflow_summary_without_llm_fallback(monk
     assert result.route == "earthquake_location"
     assert result.answer == "Workflow failed in location step."
     assert result.error == "location failed"
+    assert result.workflow is not None
+    assert result.workflow["status"] == "failed"
+    assert isinstance(result.workflow["steps"], list)

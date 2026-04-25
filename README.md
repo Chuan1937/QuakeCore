@@ -37,7 +37,7 @@ Open your browser to `http://localhost:8501`.
 ### 3. Run the Backend API
 ```bash
 conda activate quakecore
-uvicorn backend.main:app --reload
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 The API runs on `http://localhost:8000`.
 
@@ -52,6 +52,10 @@ Open your browser to `http://localhost:3000`.
 ### 5. Setup LLM
 - **Local (Ollama)**: Install [Ollama](https://ollama.com/) and pull a model (e.g., `ollama pull qwen2.5:3b`). Configure the model name in the app's sidebar.
 - **Cloud (DeepSeek API)**: Enter your DeepSeek API key and base URL in the app's sidebar settings.
+- Export key for backend/smoke scripts:
+  ```bash
+  export DEEPSEEK_API_KEY=your_key
+  ```
 - Recommended DeepSeek model: `deepseek-v4-flash`.
 - Streamlit and FastAPI both read `DEEPSEEK_API_KEY` from environment when config file key is empty.
 
@@ -86,6 +90,7 @@ PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/s
 PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_chat.py
 PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload_then_chat.py
 PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_location_workflow.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_full_web_agent.py
 ```
 
 Live DeepSeek v4 Flash smoke:
@@ -93,6 +98,17 @@ Live DeepSeek v4 Flash smoke:
 export DEEPSEEK_API_KEY=your_key
 uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 python scripts/smoke_deepseek_v4_flash.py
+```
+
+Pre-merge consolidated checks:
+```bash
+pytest tests -q
+python scripts/smoke_backend.py
+python scripts/smoke_upload.py
+python scripts/smoke_location_workflow.py
+python scripts/smoke_full_web_agent.py
+python scripts/smoke_deepseek_v4_flash.py
+cd frontend && npm run build
 ```
 
 Optional live pytest:
