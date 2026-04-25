@@ -183,11 +183,15 @@ export default function HomePage() {
     setChatLoading(true);
     setError(null);
     const pendingId = newId();
-    setMessages((current) => [
-      ...current,
-      { id: newId(), role: "user", content: text },
-      { id: pendingId, role: "assistant", content: inferPendingText(text), pending: true },
-    ]);
+    let pendingShown = false;
+    setMessages((current) => [...current, { id: newId(), role: "user", content: text }]);
+    const timer = setTimeout(() => {
+      pendingShown = true;
+      setMessages((current) => [
+        ...current,
+        { id: pendingId, role: "assistant", content: inferPendingText(text), pending: true },
+      ]);
+    }, 1000);
 
     try {
       const response: ChatResponse = await chatWithAgent({
@@ -195,33 +199,57 @@ export default function HomePage() {
         session_id: sessionId,
         lang: "zh",
       });
+      clearTimeout(timer);
 
       setSessionId(response.session_id);
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === pendingId
-            ? {
-                ...item,
-                pending: false,
-                content: response.answer || response.error || "No response returned.",
-                route: response.route,
-                artifacts: response.artifacts,
-                error: response.error,
-                workflow: response.workflow ?? null,
-              }
-            : item,
-        ),
-      );
+      if (pendingShown) {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === pendingId
+              ? {
+                  ...item,
+                  pending: false,
+                  content: response.answer || response.error || "No response returned.",
+                  route: response.route,
+                  artifacts: response.artifacts,
+                  error: response.error,
+                  workflow: response.workflow ?? null,
+                }
+              : item,
+          ),
+        );
+      } else {
+        setMessages((current) => [
+          ...current,
+          {
+            id: newId(),
+            role: "assistant",
+            content: response.answer || response.error || "No response returned.",
+            route: response.route,
+            artifacts: response.artifacts,
+            error: response.error,
+            workflow: response.workflow ?? null,
+          },
+        ]);
+      }
     } catch (err) {
+      clearTimeout(timer);
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === pendingId
-            ? { ...item, pending: false, content: "请求失败。", error: message }
-            : item,
-        ),
-      );
+      if (pendingShown) {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === pendingId
+              ? { ...item, pending: false, content: "请求失败。", error: message }
+              : item,
+          ),
+        );
+      } else {
+        setMessages((current) => [
+          ...current,
+          { id: newId(), role: "assistant", content: "请求失败。", error: message },
+        ]);
+      }
     } finally {
       setChatLoading(false);
       setInput("");
@@ -365,74 +393,76 @@ export default function HomePage() {
       <section className="chat-main">
         <div className="chat-main-header">QuakeCore</div>
         <div className="chat-log" aria-live="polite">
-          {messages.length === 0 ? (
-            <div className="chat-empty-state">
-              <h2>今天要分析什么地震数据？</h2>
-              <p>上传 MiniSEED、SAC、SEGY、HDF5，或直接提问。</p>
-            </div>
-          ) : (
-            messages.map((message) => (
-              <article key={message.id} className={`message-row ${message.role}`}>
-                <div className={`message-bubble ${message.role}`}>
-                  {message.role === "assistant" ? (
-                    message.pending ? (
-                      <p className="pending-text">
-                        {message.content}
-                        <span className="dot-wave">
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                      </p>
+          <div className="messages-inner">
+            {messages.length === 0 ? (
+              <div className="chat-empty-state">
+                <h2>今天要分析什么地震数据？</h2>
+                <p>上传 MiniSEED、SAC、SEGY、HDF5，或直接提问。</p>
+              </div>
+            ) : (
+              messages.map((message) => (
+                <article key={message.id} className={`message-row ${message.role}`}>
+                  <div className={`message-bubble ${message.role}`}>
+                    {message.role === "assistant" ? (
+                      message.pending ? (
+                        <p className="pending-text">
+                          {message.content}
+                          <span className="dot-wave">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                        </p>
+                      ) : (
+                        <MarkdownView content={message.content} />
+                      )
                     ) : (
-                      <MarkdownView content={message.content} />
-                    )
-                  ) : (
-                    <p>{message.content}</p>
-                  )}
-                  {message.files?.length ? (
-                    <div className="file-chip-row">
-                      {message.files.map((file) => (
-                        <span key={`${file.name}-${file.fileType || ""}`} className="file-chip">
-                          {file.name}
-                          {file.fileType ? ` · ${file.fileType}` : ""}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {message.workflow ? <WorkflowSteps workflow={message.workflow} /> : null}
-                  {message.error ? <div className="error-pill">{message.error}</div> : null}
-                  {message.route ? <div className="route-meta">{message.route}</div> : null}
-                  {message.artifacts?.length ? (
-                    <div className="artifacts">
-                      {message.artifacts.map((artifact) => (
-                        <div key={artifact.url} className="artifact-card">
-                          {artifact.type === "image" ? (
-                            <a
-                              href={toBackendUrl(artifact.url)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="artifact-preview"
-                            >
-                              <img src={toBackendUrl(artifact.url)} alt={artifact.name} />
-                            </a>
-                          ) : (
-                            <a href={toBackendUrl(artifact.url)} target="_blank" rel="noreferrer">
-                              {artifact.name}
-                            </a>
-                          )}
-                          <div className="artifact-meta">
-                            <strong>{artifact.name}</strong>
-                            <span>{artifact.path}</span>
+                      <p>{message.content}</p>
+                    )}
+                    {message.files?.length ? (
+                      <div className="file-chip-row">
+                        {message.files.map((file) => (
+                          <span key={`${file.name}-${file.fileType || ""}`} className="file-chip">
+                            {file.name}
+                            {file.fileType ? ` · ${file.fileType}` : ""}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {message.workflow ? <WorkflowSteps workflow={message.workflow} /> : null}
+                    {message.error ? <div className="error-pill">{message.error}</div> : null}
+                    {message.route ? <div className="route-meta">{message.route}</div> : null}
+                    {message.artifacts?.length ? (
+                      <div className="artifacts">
+                        {message.artifacts.map((artifact) => (
+                          <div key={artifact.url} className="artifact-card">
+                            {artifact.type === "image" ? (
+                              <a
+                                href={toBackendUrl(artifact.url)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="artifact-preview"
+                              >
+                                <img src={toBackendUrl(artifact.url)} alt={artifact.name} />
+                              </a>
+                            ) : (
+                              <a href={toBackendUrl(artifact.url)} target="_blank" rel="noreferrer">
+                                {artifact.name}
+                              </a>
+                            )}
+                            <div className="artifact-meta">
+                              <strong>{artifact.name}</strong>
+                              <span>{artifact.path}</span>
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </article>
-            ))
-          )}
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
         </div>
 
         <div className="composer-shell">
