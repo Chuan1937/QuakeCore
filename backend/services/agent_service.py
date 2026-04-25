@@ -208,6 +208,16 @@ class AgentService:
             )
         except Exception as exc:
             normalized = normalize_tool_output(exc)
+            raw_error = str(normalized.error or "")
+            if "Invalid Format" in raw_error or "Missing 'Action:' after 'Thought:'" in raw_error:
+                return ChatResult(
+                    session_id=final_session_id,
+                    answer="工具执行已完成，但 Agent 输出格式异常。请查看已生成结果或重试。",
+                    error=raw_error,
+                    route=route,
+                    artifacts=[],
+                    workflow=None,
+                )
             return ChatResult(
                 session_id=final_session_id,
                 answer=normalized.message,

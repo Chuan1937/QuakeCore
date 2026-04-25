@@ -38,3 +38,23 @@ def test_session_file_context_does_not_leak_between_sessions(monkeypatch):
         ("/tmp/a.mseed", "miniseed"),
         ("/tmp/b.segy", "segy"),
     ]
+
+
+def test_agent_service_returns_structured_fallback_on_react_parse_error(monkeypatch):
+    store = SessionStore()
+    service = AgentService(session_store=store)
+
+    class _BrokenAgent:
+        def invoke(self, _payload):
+            raise RuntimeError("Invalid Format: Missing 'Action:' after 'Thought:'")
+
+    def _fake_build_agent_session(session_id: str, lang: str) -> AgentSession:
+        return AgentSession(session_id=session_id, lang=lang, agent=_BrokenAgent())
+
+    monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+
+    result = service.chat("对当前波形做初至拾取", session_id="sid-react", lang="zh")
+
+    assert result.route == "phase_picking"
+    assert result.answer == "工具执行已完成，但 Agent 输出格式异常。请查看已生成结果或重试。"
+    assert "Invalid Format" in (result.error or "")

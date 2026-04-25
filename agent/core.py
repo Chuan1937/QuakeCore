@@ -194,6 +194,10 @@ Important rules:
 - After a run_continuous_monitoring tool call returns success or error JSON, immediately produce Final Answer and do not start another Thought/Action cycle.
 - If the user mentions a specific place, campus, landmark, or institution, treat it as a place-centered request and prefer that place's center point over a broad region name.
 - For monitoring requests, break the initial reasoning into multiple explicit Thought sentences instead of one short line: (1) what location the user means, (2) how the time window is interpreted, (3) whether the job is large, (4) what the safest next action is.
+- 你必须严格遵守 ReAct 格式。
+- 如果需要调用工具，只能输出 Thought / Action / Action Input 三段。
+- 如果已经可以给最终结果，必须输出 Final Answer: 开头。
+- 不要在 Thought 后直接输出最终答案，不要混合 Final Answer 与 Action。
 
 **Phase Picking Rules**:
 - By default, phase picking uses deep learning methods (EQTransformer and PhaseNet) only. Do NOT specify the `methods` parameter unless the user explicitly requests a specific method.
@@ -268,6 +272,10 @@ Important rules:
 - 对监测请求，在第一次工具调用前写更长的 Thought：先复述请求，再识别区域/目录，估算负载，说明主要风险因素，并描述执行过程中的进度信息。
 - 当 run_continuous_monitoring 返回 success 或 error 的 JSON 后，立即给出 Final Answer，不要再继续新的 Thought/Action 循环。
 - 对监测请求，初始推理不要只写一句话，要拆成多句 Thought：1) 用户说的是哪个地点，2) 时间窗怎么理解，3) 任务是否过大，4) 下一步最稳妥的动作是什么。
+- 你必须严格遵守 ReAct 格式。
+- 如果需要调用工具，只能输出 Thought / Action / Action Input 三段。
+- 如果已经可以给最终结果，必须输出 Final Answer: 开头。
+- 不要在 Thought 后直接输出最终答案，不要混合 Final Answer 与 Action。
 
 **震相拾取规则**:
 - 默认使用深度学习方法（EQTransformer 和 PhaseNet）进行震相拾取，不需要指定 `methods` 参数。
@@ -317,5 +325,6 @@ Thought:{agent_scratchpad}'''
         verbose=True,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
-        max_iterations=30,
+        max_iterations=6,
+        early_stopping_method="generate",
     )
