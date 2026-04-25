@@ -6,7 +6,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
-from agent.tools import (
+from agent.tools_facade import (
     get_loaded_context, load_local_data, download_seismic_data,
     get_file_structure,
     read_file_trace,
@@ -95,6 +95,7 @@ def get_agent_executor(
     base_url: Optional[str] = None,
     lang: str = "en",
     streaming: bool = False,
+    skill_context: str = "",
 ):
     """Create a LangChain ReAct agent with configurable LLM backends."""
 
@@ -142,10 +143,27 @@ def get_agent_executor(
         plot_location_map,
     ]
 
+    safe_skill_context = (skill_context or "").replace("{", "{{").replace("}", "}}").strip()
+    if safe_skill_context:
+        if lang == "en":
+            skill_context_block = (
+                "Skill context (injected from skills/*.md):\n"
+                f"{safe_skill_context}\n\n"
+            )
+        else:
+            skill_context_block = (
+                "技能上下文（来自 skills/*.md 注入）：\n"
+                f"{safe_skill_context}\n\n"
+            )
+    else:
+        skill_context_block = ""
+
     if lang == "en":
         template = '''You are QuakeCore, an intelligent seismic data analysis assistant. Answer the user's question in English. You have access to the following tools:
 
 {tools}
+
+''' + skill_context_block + '''
 
 Important rules:
 - Final Answer MUST be in English (file paths, table contents, and method names may remain as-is).
@@ -218,6 +236,8 @@ Thought:{agent_scratchpad}'''
         template = '''请尽力用中文回答用户问题。你可以使用以下工具：
 
 {tools}
+
+''' + skill_context_block + '''
 
 Important rules:
 - Final Answer 必须使用中文（文件路径、表格内容、方法名可保留原样）。

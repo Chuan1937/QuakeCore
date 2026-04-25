@@ -6,6 +6,8 @@ QuakeCore is an AI-based seismic data processing agent framework. It allows user
 - **Multi-Format Support**: Reads SEGY, MiniSEED, SAC, HDF5, NumPy arrays.
 - **Smart Phase Picking**: Built-in STA/LTA, AIC, and other traditional picking algorithms.
 - **Web UI**: A GPT-like chat interface built with Streamlit.
+- **API Backend**: FastAPI routes for chat, uploads, config, skills, and artifacts.
+- **Frontend**: A Next.js + TypeScript chat/settings/skills UI.
 - **Local/Cloud AI Support**: Integrates with local Ollama or cloud-based DeepSeek APIs.
 
 ## Quick Start
@@ -21,15 +23,33 @@ conda activate quakecore
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Install backend API dependencies
+pip install -r requirements-backend.txt
 ```
 
-### 2. Run the App
+### 2. Run the Streamlit App
 ```bash
 streamlit run app.py
 ```
 Open your browser to `http://localhost:8501`.
 
-### 3. Setup LLM
+### 3. Run the Backend API
+```bash
+conda activate quakecore
+uvicorn backend.main:app --reload
+```
+The API runs on `http://localhost:8000`.
+
+### 4. Run the Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open your browser to `http://localhost:3000`.
+
+### 5. Setup LLM
 - **Local (Ollama)**: Install [Ollama](https://ollama.com/) and pull a model (e.g., `ollama pull qwen2.5:3b`). Configure the model name in the app's sidebar.
 - **Cloud (DeepSeek API)**: Enter your DeepSeek API key and base URL in the app's sidebar settings.
 
@@ -42,3 +62,17 @@ Open your browser to `http://localhost:8501`.
    - *"Perform phase picking on the loaded waveform."*
    - *"Convert this data to HDF5 format."*
 
+## Validation
+
+Backend:
+```bash
+conda run -n quakecore python -m pytest tests/test_backend_health.py tests/test_backend_files.py tests/test_backend_chat_schema.py tests/test_backend_artifacts_route.py tests/test_backend_config.py tests/test_backend_skills.py -q
+```
+
+Frontend:
+```bash
+cd frontend
+npm run build
+```
+
+No Docker is used in this repository.
