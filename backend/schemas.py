@@ -21,6 +21,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     lang: Literal["en", "zh"] = "en"
+    language: Literal["en", "zh"] | None = None
 
 
 class ArtifactResponse(BaseModel):
@@ -68,3 +69,7 @@ class SkillDetailResponse(BaseModel):
     name: str
     path: str
     content: str
+
+
+class LocationWorkflowRunRequest(BaseModel):
+    session_id: str | None = None

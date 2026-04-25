@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,18 +53,26 @@ class ConfigService:
 
     def get_llm_config(self) -> dict:
         if not self.llm_config_path.exists():
-            return dict(DEFAULT_LLM_CONFIG)
+            config = dict(DEFAULT_LLM_CONFIG)
+            config["api_key"] = os.getenv("DEEPSEEK_API_KEY", "")
+            return config
         try:
             with self.llm_config_path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
         except Exception:
-            return dict(DEFAULT_LLM_CONFIG)
+            config = dict(DEFAULT_LLM_CONFIG)
+            config["api_key"] = os.getenv("DEEPSEEK_API_KEY", "")
+            return config
 
         config = dict(DEFAULT_LLM_CONFIG)
         if isinstance(data, dict):
             for key in ("provider", "model_name", "api_key", "base_url"):
                 if key in data:
                     config[key] = data[key]
+        if config.get("provider") == "deepseek" and not config.get("api_key"):
+            config["api_key"] = os.getenv("DEEPSEEK_API_KEY", "")
+        if config.get("provider") == "deepseek" and not config.get("base_url"):
+            config["base_url"] = "https://api.deepseek.com"
         return config
 
     def save_llm_config(self, config: LlmConfig | dict) -> dict:
@@ -78,4 +87,3 @@ class ConfigService:
         with self.llm_config_path.open("w", encoding="utf-8") as handle:
             json.dump(normalized, handle, ensure_ascii=False, indent=2)
         return normalized
-

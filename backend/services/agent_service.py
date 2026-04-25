@@ -44,13 +44,19 @@ class AgentService:
 
     def _build_agent_session(self, session_id: str, lang: str) -> AgentSession:
         llm_config = self._config_service.get_llm_config()
+        provider = llm_config.get("provider", "deepseek")
+        api_key = llm_config.get("api_key") or os.getenv("DEEPSEEK_API_KEY")
+        base_url = llm_config.get("base_url")
+        model_name = llm_config.get("model_name", "deepseek-v4-flash")
+        if provider == "deepseek" and not api_key:
+            raise ValueError("DEEPSEEK_API_KEY is required for provider=deepseek.")
         skill_context = self._skills_prompt_service.build_skill_context()
         set_current_lang(lang)
         agent = get_agent_executor(
-            provider=llm_config.get("provider", "deepseek"),
-            model_name=llm_config.get("model_name", "deepseek-v4-flash"),
-            api_key=llm_config.get("api_key"),
-            base_url=llm_config.get("base_url"),
+            provider=provider,
+            model_name=model_name,
+            api_key=api_key,
+            base_url=base_url,
             lang=lang,
             skill_context=skill_context,
         )
@@ -146,11 +152,26 @@ class AgentService:
         try:
             if route == "earthquake_location":
                 workflow_result = run_location_workflow(final_session_id)
-                if workflow_result.get("success"):
+                workflow_status = str(workflow_result.get("status", "failed"))
+                workflow_steps = workflow_result.get("steps", [])
+                if workflow_status in {"success", "partial_success"}:
+                    answer = str(workflow_result.get("summary") or workflow_result.get("message") or "")
+                    if workflow_status == "partial_success":
+                        answer = f"{answer}\nWorkflow status: partial_success"
                     return ChatResult(
                         session_id=final_session_id,
-                        answer=str(workflow_result.get("message", "")),
+                        answer=answer,
                         error=None,
+                        route=route,
+                        artifacts=self._artifacts_from_payload(
+                            workflow_result.get("artifacts", [])
+                        ),
+                    )
+                if workflow_status == "failed" and workflow_steps:
+                    return ChatResult(
+                        session_id=final_session_id,
+                        answer=str(workflow_result.get("summary") or workflow_result.get("message") or ""),
+                        error=workflow_result.get("error"),
                         route=route,
                         artifacts=self._artifacts_from_payload(
                             workflow_result.get("artifacts", [])

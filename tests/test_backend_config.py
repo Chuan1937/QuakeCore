@@ -40,3 +40,13 @@ def test_config_llm_round_trip_persists_to_disk(tmp_path, monkeypatch):
     assert get_response.status_code == 200
     assert get_response.json()["model_name"] == "qwen2.5:7b"
 
+
+def test_config_service_falls_back_to_env_api_key_when_empty(tmp_path, monkeypatch):
+    service = ConfigService(tmp_path)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "env-key")
+
+    config = service.get_llm_config()
+
+    assert config["provider"] == "deepseek"
+    assert config["model_name"] == "deepseek-v4-flash"
+    assert config["api_key"] == "env-key"

@@ -12,9 +12,9 @@ import {
 
 const EMPTY_CONFIG: LlmConfig = {
   provider: "deepseek",
-  model_name: "",
+  model_name: "deepseek-v4-flash",
   api_key: "",
-  base_url: "",
+  base_url: "https://api.deepseek.com",
 };
 
 export default function SettingsPage() {

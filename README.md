@@ -52,6 +52,8 @@ Open your browser to `http://localhost:3000`.
 ### 5. Setup LLM
 - **Local (Ollama)**: Install [Ollama](https://ollama.com/) and pull a model (e.g., `ollama pull qwen2.5:3b`). Configure the model name in the app's sidebar.
 - **Cloud (DeepSeek API)**: Enter your DeepSeek API key and base URL in the app's sidebar settings.
+- Recommended DeepSeek model: `deepseek-v4-flash`.
+- Streamlit and FastAPI both read `DEEPSEEK_API_KEY` from environment when config file key is empty.
 
 ## Usage
 1. Configure your LLM settings in the sidebar.
@@ -83,6 +85,19 @@ PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/s
 PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload.py
 PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_chat.py
 PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload_then_chat.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_location_workflow.py
+```
+
+Live DeepSeek v4 Flash smoke:
+```bash
+export DEEPSEEK_API_KEY=your_key
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+python scripts/smoke_deepseek_v4_flash.py
+```
+
+Optional live pytest:
+```bash
+pytest tests/test_deepseek_live.py -q
 ```
 
 ## Security Notes
@@ -90,5 +105,6 @@ PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/s
 - Artifact download route enforces path containment under `data/` and blocks path traversal.
 - Upload endpoint accepts unknown extensions as `unknown`; unknown files are not bound to agent current-file state.
 - Chat artifact metadata includes `type`, `name`, `path`, and `url` for explicit frontend rendering.
+- Do not commit real API keys or `.env` files to the repository.
 
 No Docker is used in this repository.

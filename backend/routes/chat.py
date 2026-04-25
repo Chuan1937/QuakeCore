@@ -19,10 +19,11 @@ def chat(
     payload: ChatRequest,
     agent_service: AgentService = Depends(get_agent_service),
 ):
+    resolved_lang = payload.language or payload.lang
     result = agent_service.chat(
         message=payload.message,
         session_id=payload.session_id,
-        lang=payload.lang,
+        lang=resolved_lang,
     )
     return {
         "session_id": result.session_id,
