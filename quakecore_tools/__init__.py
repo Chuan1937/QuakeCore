@@ -1,4 +1,4 @@
-"""Incremental extraction facade for agent.tools imports."""
+"""Grouped, backward-compatible tool exports for QuakeCore."""
 
 from quakecore_tools.conversion_tools import (
     compress_hdf5_to_zfp,
