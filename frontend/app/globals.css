@@ -280,6 +280,37 @@ textarea {
   padding: 18px;
 }
 
+.chat-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 14px;
+}
+
+.chat-panel {
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  min-height: calc(100vh - 170px);
+}
+
+.chat-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 8px;
+}
+
+.nav-action {
+  color: var(--text);
+  border: 1px solid rgba(153, 179, 255, 0.16);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
 .examples {
   display: flex;
   flex-wrap: wrap;
@@ -349,6 +380,30 @@ textarea {
 
 .bubble.assistant {
   background: rgba(15, 24, 48, 0.9);
+}
+
+.route-pill {
+  border-radius: 999px;
+  border: 1px solid rgba(153, 179, 255, 0.24);
+  padding: 4px 8px;
+  font-size: 0.76rem;
+}
+
+.file-chip-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 240, 198, 0.28);
+  background: rgba(124, 240, 198, 0.12);
+  padding: 5px 10px;
+  font-size: 0.82rem;
 }
 
 .workflow-card {
@@ -524,6 +579,28 @@ textarea {
   gap: 12px;
 }
 
+.chat-composer {
+  grid-template-columns: auto 1fr auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.upload-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 240, 198, 0.3);
+  background: rgba(124, 240, 198, 0.12);
+  color: var(--text);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .composer textarea {
   width: 100%;
   border-radius: var(--radius);
@@ -539,6 +616,29 @@ textarea {
 .composer textarea:focus {
   border-color: rgba(124, 240, 198, 0.42);
   box-shadow: 0 0 0 4px rgba(124, 240, 198, 0.08);
+}
+
+.send-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  color: #062017;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.send-btn:disabled,
+.upload-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer-error {
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 0.88rem;
 }
 
 .composer-actions {
@@ -562,6 +662,19 @@ textarea {
 .composer-actions button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 12, 24, 0.72);
+  border: 2px dashed rgba(124, 240, 198, 0.4);
+  color: var(--text);
+  font-size: 1.2rem;
+  z-index: 999;
 }
 
 @media (max-width: 900px) {
@@ -598,6 +711,15 @@ textarea {
     border-radius: 20px;
     align-items: start;
     flex-direction: column;
+  }
+
+  .chat-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .upload-btn,
+  .send-btn {
+    width: 100%;
   }
 
   .form-grid {

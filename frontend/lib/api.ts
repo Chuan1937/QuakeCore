@@ -39,6 +39,14 @@ export type ChatRequest = {
   lang?: "en" | "zh";
 };
 
+export type FileUploadResponse = {
+  session_id: string;
+  filename: string;
+  path: string;
+  file_type: string;
+  bound_to_agent: boolean;
+};
+
 export type LlmConfig = {
   provider: "deepseek" | "ollama";
   model_name: string;
@@ -95,6 +103,28 @@ export async function chatWithAgent(payload: ChatRequest): Promise<ChatResponse>
   }
 
   return (await response.json()) as ChatResponse;
+}
+
+export async function uploadFile(
+  file: File,
+  sessionId?: string | null,
+): Promise<FileUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (sessionId) {
+    formData.append("session_id", sessionId);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/files/upload`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`);
+  }
+
+  return (await response.json()) as FileUploadResponse;
 }
 
 export async function getConfigDefaults(): Promise<ConfigDefaults> {

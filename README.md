@@ -7,7 +7,7 @@ QuakeCore is an AI-based seismic data processing agent framework. It allows user
 - **Smart Phase Picking**: Built-in STA/LTA, AIC, and other traditional picking algorithms.
 - **Web UI**: A GPT-like chat interface built with Streamlit.
 - **API Backend**: FastAPI routes for chat, uploads, config, skills, and artifacts.
-- **Frontend**: A Next.js + TypeScript chat/settings/skills UI.
+- **Frontend**: A ChatGPT-like Next.js chat UI with integrated click upload, drag-and-drop upload, and paste upload.
 - **Local/Cloud AI Support**: Integrates with local Ollama or cloud-based DeepSeek APIs.
 
 ## Quick Start
@@ -68,6 +68,15 @@ Open your browser to `http://localhost:3000`.
    - *"What is the sampling rate of this file?"*
    - *"Perform phase picking on the loaded waveform."*
    - *"Convert this data to HDF5 format."*
+4. In the new frontend chat page, you can upload files with:
+   - Click upload (`+` button in composer)
+   - Drag-and-drop to the chat page
+   - Paste file(s) from clipboard
+5. After upload, trigger capabilities with natural language directly:
+   - *"请分析当前文件结构"*
+   - *"对当前波形做初至拾取"*
+   - *"使用当前数据进行地震定位"*
+   - *"帮我做连续地震监测"*
 
 ## Validation
 
