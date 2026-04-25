@@ -15,7 +15,7 @@ from backend.services.langgraph_runtime import LangGraphRuntime
 from backend.services.router_service import ArtifactItem, RouterService
 from backend.services.session_store import AgentSession, SessionStore, get_session_store
 from backend.services.skills_prompt_service import SkillsPromptService
-from backend.services.tool_result import ToolResult
+from backend.services.tool_result import NormalizedToolResult, normalize_tool_output
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,34 @@ class AgentService:
             # Keep backward compatibility: file-context injection must never block chat.
             return
 
+    def _build_chat_artifacts(self, normalized: NormalizedToolResult) -> list[ArtifactItem]:
+        structured: list[ArtifactItem] = []
+        for artifact in normalized.artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            url = str(artifact.get("url", "")).strip()
+            if not url:
+                continue
+            artifact_type = str(artifact.get("type", "image"))
+            path = str(artifact.get("path", "")).strip()
+            name = str(artifact.get("name", "")).strip()
+            if not path and url.startswith("/api/artifacts/"):
+                path = url[len("/api/artifacts/"):]
+            if not name:
+                name = Path(path or url).name
+            structured.append(
+                ArtifactItem(
+                    type=artifact_type,
+                    name=name,
+                    path=path or name or url,
+                    url=url,
+                )
+            )
+
+        if structured:
+            return structured
+        return self._router_service.extract_artifacts(normalized.message)
+
     def chat(self, message: str, session_id: str | None = None, lang: str | None = "en") -> ChatResult:
         final_session_id = session_id or uuid4().hex
         final_lang = self._normalize_lang(lang)
@@ -94,30 +122,30 @@ class AgentService:
             set_current_lang(final_lang)
             self._inject_session_file_context(final_session_id)
             if self._langgraph_runtime.enabled:
-                tool_result = self._langgraph_runtime.invoke(
+                raw_result = self._langgraph_runtime.invoke(
                     session_id=final_session_id,
                     message=message,
                     lang=final_lang,
                 )
             else:
-                response = session.agent.invoke({"input": message})
-                tool_result = ToolResult.from_response(response)
+                raw_result = session.agent.invoke({"input": message})
 
-            answer = tool_result.output
-            artifacts = self._router_service.extract_artifacts(answer)
+            normalized = normalize_tool_output(raw_result)
+            answer = normalized.message
+            artifacts = self._build_chat_artifacts(normalized)
             return ChatResult(
                 session_id=final_session_id,
                 answer=answer,
-                error=tool_result.error,
+                error=normalized.error,
                 route=route,
                 artifacts=artifacts,
             )
         except Exception as exc:
-            tool_error = ToolResult.from_error(exc)
+            normalized = normalize_tool_output(exc)
             return ChatResult(
                 session_id=final_session_id,
-                answer=tool_error.output,
-                error=tool_error.error,
+                answer=normalized.message,
+                error=normalized.error,
                 route=route,
                 artifacts=[],
             )
