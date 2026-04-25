@@ -1,15 +1,15 @@
 :root {
-  color-scheme: dark;
-  --bg: #0b1020;
-  --bg-soft: #121936;
-  --panel: rgba(17, 25, 54, 0.82);
-  --panel-border: rgba(153, 179, 255, 0.16);
-  --text: #eef2ff;
-  --muted: #9aa7d4;
-  --accent: #7cf0c6;
-  --accent-strong: #5ae0b5;
-  --danger: #ff8e8e;
-  --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --bg-soft: #ffffff;
+  --panel: #ffffff;
+  --panel-border: #e5e7eb;
+  --text: #111827;
+  --muted: #6b7280;
+  --accent: #111827;
+  --accent-strong: #1f2937;
+  --danger: #dc2626;
+  --shadow: 0 4px 20px rgba(17, 24, 39, 0.05);
   --radius: 20px;
   --radius-sm: 14px;
   --font-sans: "Inter", "Segoe UI", Arial, sans-serif;
@@ -23,10 +23,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background:
-    radial-gradient(circle at top left, rgba(124, 240, 198, 0.16), transparent 28%),
-    radial-gradient(circle at top right, rgba(133, 149, 255, 0.16), transparent 24%),
-    linear-gradient(180deg, #08101f 0%, #0b1020 55%, #08101a 100%);
+  background: #f7f7f8;
   color: var(--text);
   font-family: var(--font-sans);
 }
@@ -287,27 +284,38 @@ textarea {
   gap: 14px;
 }
 
-.chat-panel {
-  display: grid;
-  grid-template-rows: auto 1fr auto auto;
-  min-height: calc(100vh - 170px);
+.minimal-chat {
+  width: min(980px, calc(100% - 28px));
+  padding-top: 20px;
+  padding-bottom: 20px;
 }
 
-.chat-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 0.82rem;
-  margin-bottom: 8px;
+.minimal-chat .top-nav {
+  margin-bottom: 10px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.chat-panel {
+  display: grid;
+  grid-template-rows: 1fr auto auto;
+  min-height: calc(100vh - 110px);
+  padding: 14px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: none;
 }
 
 .nav-action {
-  color: var(--text);
-  border: 1px solid rgba(153, 179, 255, 0.16);
+  color: #111827;
+  border: 1px solid #e5e7eb;
   border-radius: 999px;
   padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.03);
+  background: #ffffff;
   cursor: pointer;
 }
 
@@ -337,25 +345,28 @@ textarea {
 .chat-log {
   display: grid;
   gap: 12px;
-  padding: 8px 2px 18px;
+  padding: 6px 2px 16px;
+  overflow: auto;
 }
 
 .empty-state {
-  border: 1px dashed rgba(153, 179, 255, 0.22);
+  border: 1px dashed #d1d5db;
   border-radius: var(--radius);
   padding: 28px;
-  color: var(--muted);
+  color: #6b7280;
+  background: #fafafa;
 }
 
 .empty-state h2 {
   margin: 0 0 8px;
-  color: var(--text);
+  color: #111827;
 }
 
 .bubble {
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  border: 1px solid rgba(153, 179, 255, 0.14);
+  border-radius: 14px;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  max-width: 92%;
 }
 
 .bubble header {
@@ -363,7 +374,7 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  color: var(--muted);
+  color: #6b7280;
   margin-bottom: 10px;
   font-size: 0.88rem;
 }
@@ -372,21 +383,25 @@ textarea {
   margin: 0;
   white-space: pre-wrap;
   line-height: 1.65;
+  color: #111827;
 }
 
 .bubble.user {
-  background: rgba(122, 136, 255, 0.12);
+  margin-left: auto;
+  background: #f3f4f6;
 }
 
 .bubble.assistant {
-  background: rgba(15, 24, 48, 0.9);
+  margin-right: auto;
+  background: #ffffff;
 }
 
 .route-pill {
   border-radius: 999px;
-  border: 1px solid rgba(153, 179, 255, 0.24);
+  border: 1px solid #e5e7eb;
   padding: 4px 8px;
   font-size: 0.76rem;
+  color: #6b7280;
 }
 
 .file-chip-row {
@@ -400,10 +415,11 @@ textarea {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  border: 1px solid rgba(124, 240, 198, 0.28);
-  background: rgba(124, 240, 198, 0.12);
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
   padding: 5px 10px;
   font-size: 0.82rem;
+  color: #374151;
 }
 
 .workflow-card {
@@ -583,6 +599,8 @@ textarea {
   grid-template-columns: auto 1fr auto;
   align-items: end;
   gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
 }
 
 .hidden-file-input {
@@ -593,9 +611,9 @@ textarea {
   width: 42px;
   height: 42px;
   border-radius: 999px;
-  border: 1px solid rgba(124, 240, 198, 0.3);
-  background: rgba(124, 240, 198, 0.12);
-  color: var(--text);
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #374151;
   font-size: 1.4rem;
   line-height: 1;
   cursor: pointer;
@@ -603,27 +621,27 @@ textarea {
 
 .composer textarea {
   width: 100%;
-  border-radius: var(--radius);
-  border: 1px solid rgba(153, 179, 255, 0.18);
-  background: rgba(5, 10, 25, 0.88);
-  color: var(--text);
-  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #111827;
+  padding: 14px 16px;
   resize: vertical;
-  min-height: 120px;
+  min-height: 96px;
   outline: none;
 }
 
 .composer textarea:focus {
-  border-color: rgba(124, 240, 198, 0.42);
-  box-shadow: 0 0 0 4px rgba(124, 240, 198, 0.08);
+  border-color: #9ca3af;
+  box-shadow: 0 0 0 4px rgba(107, 114, 128, 0.08);
 }
 
 .send-btn {
   border: none;
   border-radius: 999px;
   padding: 12px 18px;
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
-  color: #062017;
+  background: #111827;
+  color: #ffffff;
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
@@ -636,9 +654,28 @@ textarea {
 }
 
 .composer-error {
-  margin-top: 8px;
   color: var(--danger);
   font-size: 0.88rem;
+}
+
+.composer-footnote {
+  margin-top: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #6b7280;
+  font-size: 0.78rem;
+}
+
+.chat-empty {
+  text-align: center;
+  max-width: 760px;
+  margin: auto;
+}
+
+.chat-empty h2 {
+  font-size: 1.7rem;
+  margin-bottom: 12px;
 }
 
 .composer-actions {
@@ -670,11 +707,127 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(7, 12, 24, 0.72);
-  border: 2px dashed rgba(124, 240, 198, 0.4);
-  color: var(--text);
+  background: rgba(17, 24, 39, 0.4);
+  border: 2px dashed #111827;
+  color: #111827;
   font-size: 1.2rem;
   z-index: 999;
+}
+
+.minimal-chat .brand-mark {
+  color: #111827;
+  letter-spacing: 0.01em;
+}
+
+.minimal-chat .nav-links a {
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.gpt-like {
+  background: #f7f7f8;
+}
+
+.gpt-like .gpt-top-nav {
+  padding: 10px 12px;
+}
+
+.gpt-like .gpt-nav-links {
+  gap: 6px;
+}
+
+.gpt-like .gpt-nav-links a,
+.gpt-like .gpt-nav-links .nav-action {
+  font-size: 0.82rem;
+  padding: 6px 10px;
+}
+
+.gpt-like .gpt-chat-panel {
+  padding: 0;
+  border: none;
+  background: transparent;
+  min-height: calc(100vh - 86px);
+}
+
+.gpt-like .gpt-chat-log {
+  padding: 12px 0 150px;
+  gap: 16px;
+}
+
+.gpt-like .gpt-empty {
+  min-height: calc(100vh - 280px);
+}
+
+.gpt-like .gpt-bubble {
+  max-width: 760px;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+}
+
+.gpt-like .gpt-bubble.assistant {
+  margin-right: auto;
+  background: #ffffff;
+}
+
+.gpt-like .gpt-bubble.user {
+  margin-left: auto;
+  background: #f3f4f6;
+}
+
+.gpt-like .gpt-route {
+  margin-top: 8px;
+  color: #9ca3af;
+  font-size: 0.72rem;
+}
+
+.gpt-like .gpt-composer-wrap {
+  position: sticky;
+  bottom: 0;
+  padding: 10px 0 12px;
+  background: linear-gradient(
+    to top,
+    rgba(247, 247, 248, 1) 68%,
+    rgba(247, 247, 248, 0.7) 84%,
+    rgba(247, 247, 248, 0)
+  );
+}
+
+.gpt-like .gpt-composer {
+  border: 1px solid #d1d5db;
+  border-radius: 16px;
+  padding: 8px;
+  background: #ffffff;
+  gap: 8px;
+  border-top: 1px solid #d1d5db;
+}
+
+.gpt-like .gpt-composer textarea {
+  border: none;
+  box-shadow: none;
+  resize: none;
+  min-height: 56px;
+  padding: 8px 8px;
+}
+
+.gpt-like .gpt-composer textarea:focus {
+  border: none;
+  box-shadow: none;
+}
+
+.gpt-like .gpt-upload-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.gpt-like .gpt-send-btn {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #111827;
 }
 
 @media (max-width: 900px) {

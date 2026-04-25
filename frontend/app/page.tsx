@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { WorkflowSteps } from "@/components/workflow-steps";
 import {
   chatWithAgent,
@@ -25,13 +25,6 @@ type Message = {
 const UPLOAD_ACCEPT =
   ".mseed,.miniseed,.sac,.sgy,.segy,.h5,.hdf5,.npy,.npz,.csv,.txt";
 
-const EXAMPLE_TEXT = [
-  "请分析当前文件结构",
-  "对当前波形做初至拾取",
-  "使用当前数据进行地震定位",
-  "帮我做连续地震监测",
-];
-
 export default function HomePage() {
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -44,11 +37,6 @@ export default function HomePage() {
   const dragCounter = useRef(0);
 
   const canSend = input.trim().length > 0 && !chatLoading && !uploading;
-
-  const conversationCount = useMemo(
-    () => messages.filter((message) => message.role === "user").length,
-    [messages],
-  );
 
   const handleUploadFiles = useCallback(async (inputFiles: File[] | FileList) => {
     const files = Array.from(inputFiles);
@@ -173,7 +161,7 @@ export default function HomePage() {
 
   return (
     <main
-      className={`shell chat-shell ${dragging ? "dragging" : ""}`}
+      className={`shell chat-shell minimal-chat gpt-like ${dragging ? "dragging" : ""}`}
       onDragEnter={(event) => {
         if (!event.dataTransfer.types.includes("Files")) {
           return;
@@ -205,36 +193,23 @@ export default function HomePage() {
         }
       }}
     >
-      <nav className="top-nav" aria-label="Primary">
+      <nav className="top-nav gpt-top-nav" aria-label="Primary">
         <div className="brand-mark">QuakeCore</div>
-        <div className="nav-links">
+        <div className="nav-links gpt-nav-links">
           <Link href="/settings">Settings</Link>
           <Link href="/skills">Skills</Link>
           <button type="button" className="nav-action" onClick={handleNewChat}>
-            New Chat
+            New chat
           </button>
         </div>
       </nav>
-      <section className="panel chat-panel">
-        <div className="chat-meta">
-          <span>session: {sessionId ?? "new"}</span>
-          <span>{conversationCount} 条用户消息</span>
-        </div>
-
-        <div className="chat-log" aria-live="polite">
+      <section className="panel chat-panel gpt-chat-panel">
+        <div className="chat-log gpt-chat-log" aria-live="polite">
           {messages.length === 0 ? (
-            <div className="empty-state">
-              <h2>今天要分析什么地震数据？</h2>
-              <p>上传 MiniSEED、SAC、SEGY、HDF5，或直接提问。</p>
-              <p>例如：{EXAMPLE_TEXT.join(" / ")}</p>
-            </div>
+            <div className="gpt-empty" />
           ) : (
             messages.map((message, index) => (
-              <article key={`${message.role}-${index}`} className={`bubble ${message.role}`}>
-                <header>
-                  <strong>{message.role === "user" ? "你" : "QuakeCore"}</strong>
-                  {message.route ? <span className="route-pill">route: {message.route}</span> : null}
-                </header>
+              <article key={`${message.role}-${index}`} className={`bubble gpt-bubble ${message.role}`}>
                 <p>{message.content}</p>
                 {message.files?.length ? (
                   <div className="file-chip-row">
@@ -248,6 +223,9 @@ export default function HomePage() {
                 ) : null}
                 {message.workflow ? <WorkflowSteps workflow={message.workflow} /> : null}
                 {message.error ? <div className="error-pill">{message.error}</div> : null}
+                {message.route && message.role === "assistant" ? (
+                  <div className="gpt-route">route: {message.route}</div>
+                ) : null}
                 {message.artifacts?.length ? (
                   <div className="artifacts">
                     {message.artifacts.map((artifact) => (
@@ -279,53 +257,55 @@ export default function HomePage() {
           )}
         </div>
 
-        <form
-          className="composer chat-composer"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleSend(input);
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept={UPLOAD_ACCEPT}
-            className="hidden-file-input"
-            onChange={(event) => {
-              if (event.target.files?.length) {
-                void handleUploadFiles(event.target.files);
-              }
-              event.target.value = "";
+        <div className="gpt-composer-wrap">
+          <form
+            className="composer chat-composer gpt-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSend(input);
             }}
-          />
-          <button
-            type="button"
-            className="upload-btn"
-            onClick={() => fileInputRef.current?.click()}
-            aria-label="上传附件"
-            title="上传附件"
-            disabled={uploading}
           >
-            +
-          </button>
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="输入消息..."
-            rows={3}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void handleSend(input);
-              }
-            }}
-          />
-          <button type="submit" disabled={!canSend} className="send-btn">
-            {chatLoading ? "发送中..." : uploading ? "上传中..." : "Send"}
-          </button>
-        </form>
-        {error ? <div className="composer-error">{error}</div> : null}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={UPLOAD_ACCEPT}
+              className="hidden-file-input"
+              onChange={(event) => {
+                if (event.target.files?.length) {
+                  void handleUploadFiles(event.target.files);
+                }
+                event.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="upload-btn gpt-upload-btn"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="上传附件"
+              title="上传附件"
+              disabled={uploading}
+            >
+              +
+            </button>
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Message QuakeCore"
+              rows={2}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleSend(input);
+                }
+              }}
+            />
+            <button type="submit" disabled={!canSend} className="send-btn gpt-send-btn">
+              {chatLoading ? "..." : uploading ? "..." : "Send"}
+            </button>
+          </form>
+          {error ? <div className="composer-error">{error}</div> : null}
+        </div>
       </section>
       {dragging ? <div className="drop-overlay">释放以上传地震数据文件</div> : null}
     </main>
