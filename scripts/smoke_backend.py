@@ -1,11 +1,28 @@
 """Minimal smoke test for the FastAPI backend."""
 
+import os
 import sys
 
 import requests
 
 
 def main() -> int:
+    if os.getenv("QUAKECORE_SMOKE_INPROCESS") == "1":
+        try:
+            from fastapi.testclient import TestClient
+
+            from backend.main import app
+        except Exception as exc:  # pragma: no cover - smoke fallback
+            print(f"In-process smoke setup failed: {exc}", file=sys.stderr)
+            return 1
+
+        response = TestClient(app).get("/health")
+        if response.status_code != 200 or response.json() != {"status": "ok"}:
+            print(f"Unexpected payload from /health: {response.text}", file=sys.stderr)
+            return 1
+        print("Backend health smoke check passed (in-process).")
+        return 0
+
     url = "http://127.0.0.1:8000/health"
     try:
         response = requests.get(url, timeout=5)

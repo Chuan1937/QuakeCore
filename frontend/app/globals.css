@@ -352,10 +352,45 @@ textarea {
 }
 
 .artifacts {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
   margin-top: 12px;
+}
+
+.artifact-card {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-preview {
+  display: block;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(124, 240, 198, 0.24);
+  background: rgba(124, 240, 198, 0.06);
+}
+
+.artifact-preview img {
+  display: block;
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+}
+
+.artifact-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.artifact-meta strong {
+  font-size: 0.92rem;
+}
+
+.artifact-meta span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  word-break: break-all;
 }
 
 .artifacts a,

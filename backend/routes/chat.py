@@ -29,5 +29,8 @@ def chat(
         "answer": result.answer,
         "error": result.error,
         "route": result.route,
-        "artifacts": [{"type": item.type, "url": item.url} for item in result.artifacts],
+        "artifacts": [
+            {"type": item.type, "name": item.name, "path": item.path, "url": item.url}
+            for item in result.artifacts
+        ],
     }

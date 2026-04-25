@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
@@ -24,6 +24,8 @@ class ChatRequest(BaseModel):
 
 class ArtifactResponse(BaseModel):
     type: str
+    name: str
+    path: str
     url: str
 
 
@@ -32,7 +34,7 @@ class ChatResponse(BaseModel):
     answer: str
     error: str | None = None
     route: str
-    artifacts: list[ArtifactResponse] = []
+    artifacts: list[ArtifactResponse] = Field(default_factory=list)
 
 
 class LlmConfigRequest(BaseModel):

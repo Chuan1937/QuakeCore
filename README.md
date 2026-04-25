@@ -67,6 +67,8 @@ Open your browser to `http://localhost:3000`.
 Backend:
 ```bash
 conda run -n quakecore python -m pytest tests/test_backend_health.py tests/test_backend_files.py tests/test_backend_chat_schema.py tests/test_backend_artifacts_route.py tests/test_backend_config.py tests/test_backend_skills.py -q
+conda run -n quakecore python -m pytest tests/test_router_service.py -q
+conda run -n quakecore python -m pytest tests -q
 ```
 
 Frontend:
@@ -74,5 +76,19 @@ Frontend:
 cd frontend
 npm run build
 ```
+
+Smoke scripts (in-process mode, no local socket dependency):
+```bash
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_backend.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_chat.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload_then_chat.py
+```
+
+## Security Notes
+
+- Artifact download route enforces path containment under `data/` and blocks path traversal.
+- Upload endpoint accepts unknown extensions as `unknown`; unknown files are not bound to agent current-file state.
+- Chat artifact metadata includes `type`, `name`, `path`, and `url` for explicit frontend rendering.
 
 No Docker is used in this repository.

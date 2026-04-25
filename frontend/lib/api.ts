@@ -1,5 +1,7 @@
 export type ChatArtifact = {
   type: string;
+  name: string;
+  path: string;
   url: string;
 };
 

@@ -130,9 +130,21 @@ export default function HomePage() {
                 {message.artifacts?.length ? (
                   <div className="artifacts">
                     {message.artifacts.map((artifact) => (
-                      <a key={artifact.url} href={artifact.url} target="_blank" rel="noreferrer">
-                        {artifact.type}
-                      </a>
+                      <div key={artifact.url} className="artifact-card">
+                        {artifact.type === "image" ? (
+                          <a href={artifact.url} target="_blank" rel="noreferrer" className="artifact-preview">
+                            <img src={artifact.url} alt={artifact.name} />
+                          </a>
+                        ) : (
+                          <a href={artifact.url} target="_blank" rel="noreferrer">
+                            {artifact.name}
+                          </a>
+                        )}
+                        <div className="artifact-meta">
+                          <strong>{artifact.name}</strong>
+                          <span>{artifact.path}</span>
+                        </div>
+                      </div>
                     ))}
                   </div>
                 ) : null}

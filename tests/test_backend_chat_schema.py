@@ -20,7 +20,14 @@ class FakeAgentService:
             answer=f"echo:{message}\n![img](data/plot.png)",
             error=None,
             route="file_structure",
-            artifacts=[ArtifactItem(type="image", url="/api/artifacts/plot.png")],
+            artifacts=[
+                ArtifactItem(
+                    type="image",
+                    name="plot.png",
+                    path="plot.png",
+                    url="/api/artifacts/plot.png",
+                )
+            ],
         )
 
 
@@ -38,7 +45,14 @@ def test_chat_endpoint_returns_schema(monkeypatch):
     assert payload["session_id"] == "s1"
     assert payload["error"] is None
     assert payload["route"] == "file_structure"
-    assert payload["artifacts"] == [{"type": "image", "url": "/api/artifacts/plot.png"}]
+    assert payload["artifacts"] == [
+        {
+            "type": "image",
+            "name": "plot.png",
+            "path": "plot.png",
+            "url": "/api/artifacts/plot.png",
+        }
+    ]
 
 
 def test_chat_endpoint_error_field_when_agent_fails(monkeypatch):
