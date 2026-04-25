@@ -16,6 +16,7 @@ from backend.services.router_service import ArtifactItem, RouterService
 from backend.services.session_store import AgentSession, SessionStore, get_session_store
 from backend.services.skills_prompt_service import SkillsPromptService
 from backend.services.tool_result import NormalizedToolResult, normalize_tool_output
+from backend.workflows.location_workflow import run_location_workflow
 
 
 @dataclass(frozen=True)
@@ -112,12 +113,50 @@ class AgentService:
             return structured
         return self._router_service.extract_artifacts(normalized.message)
 
+    def _artifacts_from_payload(self, payload: list[dict]) -> list[ArtifactItem]:
+        structured: list[ArtifactItem] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url", "")).strip()
+            if not url:
+                continue
+            item_type = str(item.get("type", "image")).strip() or "image"
+            path = str(item.get("path", "")).strip()
+            name = str(item.get("name", "")).strip()
+            if not path and url.startswith("/api/artifacts/"):
+                path = url[len("/api/artifacts/"):]
+            if not name:
+                name = Path(path or url).name
+            structured.append(
+                ArtifactItem(
+                    type=item_type,
+                    url=url,
+                    name=name,
+                    path=path or name or url,
+                )
+            )
+        return structured
+
     def chat(self, message: str, session_id: str | None = None, lang: str | None = "en") -> ChatResult:
         final_session_id = session_id or uuid4().hex
         final_lang = self._normalize_lang(lang)
         route = self._router_service.route_intent(message)
 
         try:
+            if route == "earthquake_location":
+                workflow_result = run_location_workflow(final_session_id)
+                if workflow_result.get("success"):
+                    return ChatResult(
+                        session_id=final_session_id,
+                        answer=str(workflow_result.get("message", "")),
+                        error=None,
+                        route=route,
+                        artifacts=self._artifacts_from_payload(
+                            workflow_result.get("artifacts", [])
+                        ),
+                    )
+
             session = self._get_or_create_session(final_session_id, final_lang)
             set_current_lang(final_lang)
             self._inject_session_file_context(final_session_id)
