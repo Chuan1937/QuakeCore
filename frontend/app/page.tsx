@@ -415,11 +415,11 @@ export default function HomePage() {
                   {message.role === "user" ? (
                     <div className="user-bubble">
                       {message.attachments?.length ? (
-                        <div className="mb-2 flex flex-wrap gap-2">
+                        <div className="msg-attach-row">
                           {message.attachments.map((file) => (
-                            <div key={file.id} className="attachment-card">
-                              <span className="font-medium">{file.name}</span>
-                              {file.fileKind ? <span className="text-xs text-gray-500"> · {file.fileKind}</span> : null}
+                            <div key={file.id} className="msg-attach-card">
+                              <span className="msg-attach-name">{file.name}</span>
+                              {file.fileKind ? <span className="msg-attach-kind">{file.fileKind}</span> : null}
                             </div>
                           ))}
                         </div>

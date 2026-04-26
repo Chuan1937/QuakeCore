@@ -1409,6 +1409,34 @@ textarea {
   font-size: 13px;
 }
 
+.msg-attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.msg-attach-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.msg-attach-name {
+  font-weight: 500;
+  color: #111827;
+}
+
+.msg-attach-kind {
+  color: #6b7280;
+  font-size: 12px;
+}
+
 @media (max-width: 1024px) {
   .app-shell {
     grid-template-columns: 1fr;
