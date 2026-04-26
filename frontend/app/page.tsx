@@ -95,32 +95,87 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
   const displayName = getArtifactDisplayName(artifact);
   const rawPath = artifact.path || artifact.name || "";
 
+  async function handleDownload() {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error("下载失败");
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = displayName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  async function handleCopy() {
+    if (artifact.type === "image") {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error("复制失败");
+      }
+
+      const blob = await response.blob();
+
+      if (
+        typeof ClipboardItem !== "undefined" &&
+        navigator.clipboard &&
+        blob.type.startsWith("image/")
+      ) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            [blob.type]: blob,
+          }),
+        ]);
+        return;
+      }
+    }
+
+    await navigator.clipboard.writeText(url);
+  }
+
   return (
     <div className="artifact-message-card">
       {artifact.type === "image" ? (
-        <a href={url} target="_blank" rel="noreferrer" className="artifact-image-link">
+        <button
+          type="button"
+          className="artifact-image-link"
+          onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+          title="查看大图"
+        >
           <img src={url} alt={displayName} />
-        </a>
+        </button>
       ) : null}
+
       <div className="artifact-card-footer">
         <div className="artifact-card-title">{displayName}</div>
-        {rawPath ? <div className="artifact-card-path">{stripUuidPrefix(basename(rawPath))}</div> : null}
+
+        {rawPath ? (
+          <div className="artifact-card-path">
+            {stripUuidPrefix(basename(rawPath))}
+          </div>
+        ) : null}
+
         <div className="artifact-card-actions">
-          <a href={url} download>
+          <button type="button" onClick={() => void handleDownload()}>
             下载
-          </a>
-          <a href={url} target="_blank" rel="noreferrer">
-            打开
-          </a>
+          </button>
+
           <button
             type="button"
-            onClick={() => {
-              if (typeof navigator !== "undefined" && navigator.clipboard) {
-                void navigator.clipboard.writeText(url);
-              }
-            }}
+            onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
           >
-            复制链接
+            查看
+          </button>
+
+          <button type="button" onClick={() => void handleCopy()}>
+            复制
           </button>
         </div>
       </div>

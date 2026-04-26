@@ -52,6 +52,64 @@ DEFAULT_LOCATION_DIR = "data/location"
 PLOT_FONT_FAMILY = "Times New Roman"
 PLOT_FONT_FALLBACK = ["DejaVu Sans", "Arial", "Helvetica", "sans-serif"]
 
+
+def _build_artifact_response(
+    result: dict,
+    message: Union[str, None] = None,
+    output_path: Union[str, None] = None,
+    input_path: Union[str, None] = None,
+) -> str:
+    """Wrap conversion result dict into structured format with artifacts and return JSON."""
+    result = dict(result)
+    plot_path = result.pop("plot_path", None)
+    saved_to = result.pop("saved_to", None) or output_path
+
+    if not message:
+        input_basename = os.path.basename(input_path) if input_path else ""
+        output_basename = os.path.basename(saved_to) if saved_to else ""
+        message = f'文件 "{input_basename}" 已成功转换为 {output_basename}'
+        if "trace_count" in result:
+            message += f"，共包含 {result["trace_count"]} 条迹"
+
+    response = {"success": True, "message": message}
+    artifacts = []
+
+    if saved_to:
+        rel = saved_to.replace("\\", "/")
+        if rel.startswith("./"):
+            rel = rel[2:]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            artifacts.append({
+                "type": "file",
+                "name": os.path.basename(saved_to),
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+            })
+
+    if plot_path:
+        rel = plot_path.replace("\\", "/")
+        if rel.startswith("./"):
+            rel = rel[2:]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            artifacts.append({
+                "type": "image",
+                "name": os.path.basename(plot_path),
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+            })
+
+    response["artifacts"] = artifacts
+    if result:
+        response["data"] = result
+
+    return json.dumps(response, indent=2, ensure_ascii=False)
+
 def configure_plot_fonts():
     """Configure matplotlib to use Times New Roman with fallbacks."""
     try:
@@ -641,8 +699,8 @@ def convert_segy_to_numpy(params: Union[str, dict, None] = None):
                 summary["plot_path"] = plot_result
         except Exception as e:
             summary["plot_error"] = str(e)
+    return _build_artifact_response(summary, input_path=CURRENT_SEGY_PATH, output_path=output_path)
 
-    return json.dumps(summary, indent=2)
 
 # tool to convert SEGY to Excel
 # 将 SEGY 转换为 Excel 的工具
@@ -696,8 +754,9 @@ def convert_segy_to_excel(params: Union[str, dict, None] = None):
                         result["plot_path"] = plot_result
         except Exception as e:
             result["plot_error"] = str(e)
-        return json.dumps(result, indent=2)
+        return _build_artifact_response(result, input_path=CURRENT_SEGY_PATH, output_path=output_path)
     return result
+
 
 # tool to convert SEGY to HDF5
 # 将 SEGY 转换为 HDF5 的工具
@@ -755,8 +814,9 @@ def convert_segy_to_hdf5(params: Union[str, dict, None] = None):
                     result["plot_path"] = plot_result
         except Exception as e:
             result["plot_error"] = str(e)
-        return json.dumps(result, indent=2)
+        return _build_artifact_response(result, input_path=CURRENT_SEGY_PATH, output_path=output_path)
     return result
+
 
 # 读取 MiniSEED 基本结构信息的工具
 @tool
@@ -1094,8 +1154,8 @@ def convert_hdf5_to_numpy(params: Union[str, dict, None] = None):
                 result["plot_path"] = plot_result
     except Exception as e:
         result["plot_error"] = str(e)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
-    return json.dumps(result, indent=2)
 
 # 工具：HDF5 转 Excel
 @tool
@@ -1117,8 +1177,7 @@ def convert_hdf5_to_excel(params: Union[str, dict, None] = None):
     handler = HDF5Handler(path)
     result = handler.to_excel(output_path=output_path, start_trace=start_trace, count=count, dataset=parsed.get("dataset"))
     if isinstance(result, dict):
-        result["saved_to"] = result.get("output_path", output_path)
-        return json.dumps(result, indent=2)
+        return _build_artifact_response(result, input_path=path, output_path=output_path)
     return result
 
 # 工具：HDF5 ZFP 压缩
@@ -1288,7 +1347,7 @@ def convert_miniseed_to_numpy(params: Union[str, dict, None] = None):
     except Exception as e:
         result["plot_error"] = str(e)
 
-    return json.dumps(result, indent=2)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
 # 将 MiniSEED 写入 HDF5
 @tool
@@ -1332,7 +1391,7 @@ def convert_miniseed_to_hdf5(params: Union[str, dict, None] = None):
     except Exception as e:
         result["plot_error"] = str(e)
 
-    return json.dumps(result, indent=2)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
 # 将 MiniSEED 导出为 SAC（每轨迹一个文件）
 @tool
@@ -1378,7 +1437,7 @@ def convert_miniseed_to_sac(params: Union[str, dict, None] = None):
     except Exception as e:
         result["plot_error"] = str(e)
 
-    return json.dumps(result, indent=2)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
 # 读取 SAC 结构信息
 @tool
@@ -1509,7 +1568,7 @@ def convert_sac_to_numpy(params: Union[str, dict, None] = None):
     except Exception as e:
         result["plot_error"] = str(e)
 
-    return json.dumps(result, indent=2)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
 # 将 SAC 转换为 HDF5
 @tool
@@ -1553,7 +1612,7 @@ def convert_sac_to_hdf5(params: Union[str, dict, None] = None):
     except Exception as e:
         result["plot_error"] = str(e)
 
-    return json.dumps(result, indent=2)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
 # 将 SAC 转换为 MiniSEED
 @tool
@@ -1594,7 +1653,7 @@ def convert_sac_to_miniseed(params: Union[str, dict, None] = None):
     except Exception as e:
         result["plot_error"] = str(e)
 
-    return json.dumps(result, indent=2)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
 # 将 SAC 转换为 Excel
 @tool
@@ -1635,7 +1694,7 @@ def convert_sac_to_excel(params: Union[str, dict, None] = None):
     except Exception as e:
         result["plot_error"] = str(e)
 
-    return json.dumps(result, indent=2)
+    return _build_artifact_response(result, input_path=path, output_path=output_path)
 
 
 @tool
