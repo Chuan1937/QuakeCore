@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,29 @@ def _extract_markdown_artifacts(text: str) -> list[dict[str, Any]]:
     ]
 
 
+_IMAGE_LINE_RE = re.compile(
+    r"^\s*.*?(波形图如下所示|结果图如下所示|图如下所示).*?$|^\s*!\[[^\]]*]\([^)]+\)\s*$",
+    re.M,
+)
+
+
+def _strip_artifact_markdown(message: str) -> str:
+    if not message:
+        return message
+    cleaned = _IMAGE_LINE_RE.sub("", message)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _to_data_relative_path(value: str) -> str:
+    normalized = str(value or "").replace("\\", "/").strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized.startswith("data/"):
+        normalized = normalized[5:]
+    return normalized.lstrip("/")
+
+
 def _normalize_artifact_payload(item: Any) -> dict[str, Any] | None:
     if isinstance(item, str):
         stripped = item.strip()
@@ -64,42 +88,25 @@ def _normalize_artifact_payload(item: Any) -> dict[str, Any] | None:
     url = str(item.get("url", "")).strip() or None
 
     if path:
-        normalized_path = path.replace("\\", "/")
-        if normalized_path.startswith("./"):
-            normalized_path = normalized_path[2:]
-        if normalized_path.startswith("data/"):
-            normalized_path = normalized_path[5:]
-        path = normalized_path.lstrip("/")
+        path = _to_data_relative_path(path)
 
     if url:
-        if url.startswith("./"):
-            url = url[2:]
-        if url.startswith("data/"):
-            path = path or url[5:].lstrip("/")
-            url = f"/api/artifacts/{url[5:].lstrip('/')}"
-        elif not url.startswith(("http://", "https://", "/api/artifacts/")):
-            normalized_path = url.replace("\\", "/")
-            if normalized_path.startswith("./"):
-                normalized_path = normalized_path[2:]
-            if normalized_path.startswith("data/"):
-                normalized_path = normalized_path[5:]
-            normalized_path = normalized_path.lstrip("/")
-            path = path or normalized_path
-            url = f"/api/artifacts/{normalized_path}"
-
-    if not path and url and url.startswith("/api/artifacts/"):
-        path = url[len("/api/artifacts/"):]
-
-    if not name and path:
-        name = Path(path).name
-    if not name and url:
-        name = Path(url).name
+        if url.startswith("/api/artifacts/"):
+            path = path or url[len("/api/artifacts/"):]
+        elif not url.startswith(("http://", "https://")):
+            path = path or _to_data_relative_path(url)
+            url = f"/api/artifacts/{path}" if path else url
 
     if not url and path:
         url = f"/api/artifacts/{path}"
 
     if not url:
         return None
+
+    if not name and path:
+        name = Path(path).name
+    if not name and url:
+        name = Path(url).name
 
     return {
         "type": artifact_type,
@@ -140,6 +147,9 @@ def _normalize_from_dict(payload: dict[str, Any], raw: str | None = None) -> Nor
     artifacts = _normalize_artifacts(payload.get("artifacts"))
     if not artifacts:
         artifacts = _extract_markdown_artifacts(message)
+
+    if artifacts:
+        message = _strip_artifact_markdown(message)
 
     error_value = payload.get("error")
     error = str(error_value) if error_value not in (None, "") else None
@@ -209,9 +219,10 @@ def normalize_tool_output(output: Any) -> NormalizedToolResult:
                 return normalized
 
         artifacts = _extract_markdown_artifacts(output)
+        message = _strip_artifact_markdown(output) if artifacts else output
         return NormalizedToolResult(
             success=True,
-            message=output,
+            message=message,
             data={},
             artifacts=artifacts,
             raw=output,
