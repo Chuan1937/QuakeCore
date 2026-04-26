@@ -16,6 +16,14 @@ import {
   type WorkflowResult,
 } from "@/lib/api";
 
+type ChatAttachment = {
+  id: string;
+  name: string;
+  fileKind?: string;
+  status: "uploading" | "uploaded" | "failed";
+  error?: string;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -26,6 +34,7 @@ type Message = {
   workflow?: WorkflowResult | null;
   files?: Array<{ name: string; fileType?: string }>;
   pending?: boolean;
+  attachments?: ChatAttachment[];
 };
 
 type Thread = {
@@ -76,10 +85,11 @@ export default function HomePage() {
   const [modelOpen, setModelOpen] = useState(false);
   const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragCounter = useRef(0);
 
-  const canSend = input.trim().length > 0 && !chatLoading && !uploading;
+  const canSend = (input.trim().length > 0 || pendingAttachments.length > 0) && !chatLoading && !uploading;
 
   useEffect(() => {
     async function loadConfig() {
@@ -119,52 +129,39 @@ export default function HomePage() {
   const handleUploadFiles = useCallback(
     async (inputFiles: File[] | FileList) => {
       const files = Array.from(inputFiles);
-      if (files.length === 0) {
-        return;
-      }
+      if (files.length === 0) return;
 
       setUploading(true);
       setError(null);
       let currentSession = sessionId;
 
-      for (const file of files) {
-        setMessages((current) => [
-          ...current,
-          {
-            id: newId(),
-            role: "user",
-            content: `上传了 ${file.name}`,
-            files: [{ name: file.name }],
-          },
-        ]);
+      const attachments: ChatAttachment[] = files.map((f) => ({
+        id: newId(),
+        name: f.name,
+        status: "uploading" as const,
+      }));
 
+      setPendingAttachments((prev) => [...prev, ...attachments]);
+
+      for (const [i, file] of files.entries()) {
         try {
-          const uploaded = await uploadFile(file, currentSession);
-          currentSession = uploaded.session_id;
-          setMessages((current) => [
-            ...current,
-            {
-              id: newId(),
-              role: "assistant",
-              content: uploaded.bound_to_agent
-                ? `已接收 ${uploaded.filename}，识别为 ${uploaded.file_type}，已绑定到当前会话。你可以直接问我：分析文件结构、初至拾取或地震定位。`
-                : "已接收文件，但该类型暂未自动绑定为当前地震数据。",
-              route: "file_upload",
-              files: [{ name: uploaded.filename, fileType: uploaded.file_type }],
-            },
-          ]);
+          const result = await uploadFile(file, currentSession);
+          currentSession = result.session_id;
+          setPendingAttachments((prev) =>
+            prev.map((a) =>
+              a.id === attachments[i].id
+                ? { ...a, status: "uploaded", fileKind: result.file_type }
+                : a,
+            ),
+          );
         } catch (err) {
-          const message = err instanceof Error ? err.message : "上传失败。";
-          setError(message);
-          setMessages((current) => [
-            ...current,
-            {
-              id: newId(),
-              role: "assistant",
-              content: "文件上传失败。",
-              error: message,
-            },
-          ]);
+          setPendingAttachments((prev) =>
+            prev.map((a) =>
+              a.id === attachments[i].id
+                ? { ...a, status: "failed", error: err instanceof Error ? err.message : "上传失败" }
+                : a,
+            ),
+          );
         }
       }
 
@@ -176,15 +173,31 @@ export default function HomePage() {
 
   async function handleSend(messageText: string) {
     const text = messageText.trim();
-    if (!text || chatLoading || uploading) {
+    const hasAttachments = pendingAttachments.filter((a) => a.status === "uploaded").length > 0;
+    if ((!text && !hasAttachments) || chatLoading || uploading) {
       return;
     }
+
+    const userAttachments: ChatAttachment[] = pendingAttachments.filter(
+      (a) => a.status === "uploaded",
+    );
 
     setChatLoading(true);
     setError(null);
     const pendingId = newId();
     let pendingShown = false;
-    setMessages((current) => [...current, { id: newId(), role: "user", content: text }]);
+    setMessages((current) => [
+      ...current,
+      { id: newId(), role: "user", content: text, attachments: userAttachments },
+    ]);
+    setPendingAttachments([]);
+    setInput("");
+
+    if (!text) {
+      setChatLoading(false);
+      return;
+    }
+
     const timer = setTimeout(() => {
       pendingShown = true;
       setMessages((current) => [
@@ -252,7 +265,6 @@ export default function HomePage() {
       }
     } finally {
       setChatLoading(false);
-      setInput("");
     }
   }
 
@@ -402,7 +414,17 @@ export default function HomePage() {
                 <article key={message.id} className={`message-row ${message.role}`}>
                   {message.role === "user" ? (
                     <div className="user-bubble">
-                      <p>{message.content}</p>
+                      {message.attachments?.length ? (
+                        <div className="mb-2 flex flex-wrap gap-2">
+                          {message.attachments.map((file) => (
+                            <div key={file.id} className="attachment-card">
+                              <span className="font-medium">{file.name}</span>
+                              {file.fileKind ? <span className="text-xs text-gray-500"> · {file.fileKind}</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {message.content ? <p>{message.content}</p> : null}
                       {message.files?.length ? (
                         <div className="file-chip-row">
                           {message.files.map((file) => (
@@ -476,6 +498,28 @@ export default function HomePage() {
         </div>
 
         <div className="composer-shell">
+          {pendingAttachments.length > 0 ? (
+            <div className="attachment-preview-row">
+              {pendingAttachments.map((file) => (
+                <div key={file.id} className="attachment-chip">
+                  <span className="attachment-chip-name">{file.name}</span>
+                  {file.fileKind ? <span className="attachment-chip-kind">{file.fileKind}</span> : null}
+                  {file.status === "uploading" ? <span className="attachment-chip-status">上传中…</span> : null}
+                  {file.status === "failed" ? <span className="attachment-chip-status failed">失败</span> : null}
+                  <button
+                    type="button"
+                    className="attachment-chip-remove"
+                    onClick={() =>
+                      setPendingAttachments((prev) => prev.filter((x) => x.id !== file.id))
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <form
             className="chat-composer"
             onSubmit={(event) => {
