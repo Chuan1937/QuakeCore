@@ -1213,7 +1213,9 @@ textarea {
 
 .composer-shell {
   flex-shrink: 0;
-  padding: 12px 24px 20px;
+  width: min(920px, calc(100% - 48px));
+  margin: 0 auto 18px;
+  padding: 12px 0 20px;
   background: linear-gradient(
     to top,
     rgba(247, 247, 248, 1) 72%,
@@ -1223,32 +1225,38 @@ textarea {
 }
 
 .chat-composer {
-  max-width: 760px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 36px 1fr 36px;
-  align-items: center;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   border: 1px solid #d1d5db;
-  border-radius: 18px;
+  border-radius: 24px;
   background: #ffffff;
-  padding: 8px;
+  padding: 10px;
 }
 
 .hidden-file-input {
   display: none;
 }
 
+.composer-input-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
 .upload-btn {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  min-height: 34px;
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  min-height: 42px;
   border-radius: 999px;
   border: 1px solid #d1d5db;
   background: #ffffff;
-  color: #374151;
-  font-size: 1.35rem;
+  color: #111827;
+  font-size: 24px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
@@ -1259,16 +1267,16 @@ textarea {
 
 .chat-composer textarea {
   width: 100%;
-  height: 36px;
-  min-height: 36px;
+  min-height: 40px;
   max-height: 160px;
-  padding: 7px 8px;
+  padding: 8px 6px;
   border: none;
   outline: none;
   resize: none;
   overflow: hidden;
   background: transparent;
   color: #111827;
+  font-size: 16px;
   font: inherit;
   line-height: 1.5;
   -ms-overflow-style: none;
@@ -1279,25 +1287,27 @@ textarea {
   display: none;
 }
 
+.chat-composer textarea:focus {
+  border: none;
+  box-shadow: none;
+}
+
 .send-btn {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  min-height: 34px;
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  min-height: 42px;
   border-radius: 999px;
   border: none;
-  background: #9ca3af;
+  background: #111827;
   color: #ffffff;
   cursor: pointer;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1rem;
-}
-
-.send-btn:not(:disabled) {
-  background: #111827;
+  font-size: 22px;
+  line-height: 1;
 }
 
 .send-btn:disabled,
@@ -1307,8 +1317,7 @@ textarea {
 }
 
 .composer-error {
-  max-width: 760px;
-  margin: 8px auto 0;
+  margin: 8px 0 0;
   color: #dc2626;
   font-size: 0.84rem;
 }
@@ -1349,39 +1358,43 @@ textarea {
 }
 
 .attachment-preview-row {
+  width: 100%;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 0 24px 6px;
+  padding: 0 4px 2px 4px;
+  margin: 0;
 }
 
 .attachment-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  max-width: 100%;
   border: 1px solid #d1d5db;
   border-radius: 999px;
   background: #ffffff;
-  padding: 5px 10px;
-  font-size: 13px;
+  padding: 6px 10px;
+  color: #111827;
+  font-size: 14px;
 }
 
 .attachment-chip-name {
-  max-width: 180px;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #111827;
+  font-weight: 500;
 }
 
 .attachment-chip-kind {
   color: #9ca3af;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .attachment-chip-status {
-  color: #6b7280;
-  font-size: 12px;
+  color: #9ca3af;
+  font-size: 13px;
 }
 
 .attachment-chip-status.failed {
@@ -1390,12 +1403,12 @@ textarea {
 
 .attachment-chip-remove {
   border: none;
-  background: none;
+  background: transparent;
   color: #9ca3af;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1;
-  padding: 0 2px;
+  padding: 0;
 }
 
 .attachment-card {

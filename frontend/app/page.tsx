@@ -498,28 +498,6 @@ export default function HomePage() {
         </div>
 
         <div className="composer-shell">
-          {pendingAttachments.length > 0 ? (
-            <div className="attachment-preview-row">
-              {pendingAttachments.map((file) => (
-                <div key={file.id} className="attachment-chip">
-                  <span className="attachment-chip-name">{file.name}</span>
-                  {file.fileKind ? <span className="attachment-chip-kind">{file.fileKind}</span> : null}
-                  {file.status === "uploading" ? <span className="attachment-chip-status">上传中…</span> : null}
-                  {file.status === "failed" ? <span className="attachment-chip-status failed">失败</span> : null}
-                  <button
-                    type="button"
-                    className="attachment-chip-remove"
-                    onClick={() =>
-                      setPendingAttachments((prev) => prev.filter((x) => x.id !== file.id))
-                    }
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
           <form
             className="chat-composer"
             onSubmit={(event) => {
@@ -540,31 +518,56 @@ export default function HomePage() {
                 event.target.value = "";
               }}
             />
-            <button
-              type="button"
-              className="upload-btn"
-              onClick={() => fileInputRef.current?.click()}
-              aria-label="上传附件"
-              title="上传附件"
-              disabled={uploading}
-            >
-              +
-            </button>
-            <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="Message QuakeCore"
-              rows={2}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void handleSend(input);
-                }
-              }}
-            />
-            <button type="submit" disabled={!canSend} className="send-btn">
-              {chatLoading ? "…" : "↑"}
-            </button>
+
+            {pendingAttachments.length > 0 ? (
+              <div className="attachment-preview-row">
+                {pendingAttachments.map((file) => (
+                  <div key={file.id} className="attachment-chip">
+                    <span className="attachment-chip-name">{file.name}</span>
+                    {file.fileKind ? <span className="attachment-chip-kind">{file.fileKind}</span> : null}
+                    {file.status === "uploading" ? <span className="attachment-chip-status">上传中…</span> : null}
+                    {file.status === "failed" ? <span className="attachment-chip-status failed">失败</span> : null}
+                    <button
+                      type="button"
+                      className="attachment-chip-remove"
+                      onClick={() =>
+                        setPendingAttachments((prev) => prev.filter((x) => x.id !== file.id))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="composer-input-row">
+              <button
+                type="button"
+                className="upload-btn"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="上传附件"
+                title="上传附件"
+                disabled={uploading}
+              >
+                +
+              </button>
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="Message QuakeCore"
+                rows={1}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleSend(input);
+                  }
+                }}
+              />
+              <button type="submit" disabled={!canSend} className="send-btn">
+                {chatLoading ? "…" : "↑"}
+              </button>
+            </div>
           </form>
           {error ? <div className="composer-error">{error}</div> : null}
         </div>
