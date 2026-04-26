@@ -381,7 +381,6 @@ export default function HomePage() {
         </div>
 
         <div className="sidebar-bottom">
-          <Link href="/settings">Settings</Link>
           <Link href="/skills">Skills</Link>
           <small>
             当前后端：
