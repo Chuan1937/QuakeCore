@@ -245,6 +245,7 @@ textarea {
   display: grid;
   gap: 14px;
   line-height: 1.7;
+  overflow-x: auto;
 }
 
 .markdown-body h1,
@@ -1200,6 +1201,15 @@ textarea {
   background: #ffffff;
 }
 
+.artifact-file-placeholder {
+  padding: 18px 12px;
+  font-size: 14px;
+  color: #374151;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  word-break: break-all;
+}
+
 .artifact-card-footer {
   padding: 10px 12px;
   display: grid;
@@ -1400,18 +1410,24 @@ textarea {
 }
 
 .markdown-body table {
-  width: 100%;
+  width: max-content;
+  max-width: 100%;
   border-collapse: collapse;
   display: block;
   overflow-x: auto;
+  white-space: nowrap;
 }
 
 .markdown-body th,
 .markdown-body td {
   border: 1px solid #e5e7eb;
-  padding: 6px 8px;
+  padding: 8px 10px;
   text-align: left;
-  white-space: nowrap;
+}
+
+.markdown-body th {
+  background: #f9fafb;
+  font-weight: 700;
 }
 
 .markdown-image {

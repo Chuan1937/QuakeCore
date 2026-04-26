@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -160,6 +161,40 @@ class AgentService:
             )
         return structured
 
+    def _artifacts_from_intermediate_steps(self, raw_result: object) -> list[ArtifactItem]:
+        artifacts: list[ArtifactItem] = []
+        if not isinstance(raw_result, dict):
+            return artifacts
+
+        for step in raw_result.get("intermediate_steps", []) or []:
+            if not isinstance(step, (list, tuple)) or len(step) != 2:
+                continue
+            _, observation = step
+            payload = None
+            if isinstance(observation, dict):
+                payload = observation
+            elif isinstance(observation, str):
+                try:
+                    payload = json.loads(observation)
+                except Exception:
+                    payload = None
+
+            if not isinstance(payload, dict):
+                continue
+            items = payload.get("artifacts")
+            if isinstance(items, list):
+                artifacts.extend(self._artifacts_from_payload(items))
+
+        seen: set[str] = set()
+        unique: list[ArtifactItem] = []
+        for item in artifacts:
+            key = item.url
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique
+
     def chat(
         self,
         message: str,
@@ -218,7 +253,8 @@ class AgentService:
 
             normalized = normalize_tool_output(raw_result)
             answer = normalized.message
-            artifacts = self._build_chat_artifacts(normalized)
+            tool_artifacts = self._artifacts_from_intermediate_steps(raw_result)
+            artifacts = tool_artifacts or self._build_chat_artifacts(normalized)
             return ChatResult(
                 session_id=final_session_id,
                 answer=answer,

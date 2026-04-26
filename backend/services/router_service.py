@@ -124,19 +124,27 @@ class RouterService:
 
     def extract_artifacts(self, answer: str) -> list[ArtifactItem]:
         artifacts: list[ArtifactItem] = []
+        data_root = Path("data")
         for match in self._IMAGE_PATTERN.findall(str(answer or "")):
             source = match.strip().strip("'\"")
             if not source:
                 continue
-            if source.startswith(("http://", "https://", "/api/artifacts/")):
+            if source.startswith(("http://", "https://")):
                 continue
-            normalized = source.replace("\\", "/")
+            normalized = source.replace("\\", "/").strip()
+            if normalized.startswith("/api/artifacts/"):
+                normalized = normalized[len("/api/artifacts/"):]
             if normalized.startswith("./"):
                 normalized = normalized[2:]
+            if "/data/" in normalized:
+                normalized = normalized.split("/data/", 1)[1]
             if normalized.startswith("data/"):
                 normalized = normalized[5:]
             normalized = normalized.lstrip("/")
             if not normalized:
+                continue
+            resolved = self.resolve_artifact_path(data_root, normalized)
+            if resolved is None or not resolved.is_file():
                 continue
             name = Path(normalized).name
             artifacts.append(
