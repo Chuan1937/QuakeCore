@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -195,6 +196,26 @@ class AgentService:
             unique.append(item)
         return unique
 
+    def _clean_public_answer(self, answer: str, route: str) -> str:
+        if route != "continuous_monitoring":
+            return answer
+
+        text = answer or ""
+        text = re.sub(
+            r"\*\*官方目录对比\*\*：[\s\S]*?(?=\n\*\*主要活动区域\*\*|\n\*\*最佳定位事件|\n三视图：|$)",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"\*\*最佳定位事件（经目录校正后）\*\*：.*?(?=\n|$)",
+            "",
+            text,
+        )
+        text = text.replace("经目录校正后", "")
+        text = re.sub(r"三视图：\s*!\[[^\]]*\]\([^)]+\)", "", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
     def chat(
         self,
         message: str,
@@ -255,6 +276,7 @@ class AgentService:
             answer = normalized.message
             tool_artifacts = self._artifacts_from_intermediate_steps(raw_result)
             artifacts = tool_artifacts or self._build_chat_artifacts(normalized)
+            answer = self._clean_public_answer(answer, route)
             return ChatResult(
                 session_id=final_session_id,
                 answer=answer,

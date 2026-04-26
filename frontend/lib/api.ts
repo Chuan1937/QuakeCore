@@ -24,6 +24,45 @@ export type WorkflowResult = {
   error?: string | null;
 };
 
+export type ContinuousJobStartResponse = {
+  job_id: string;
+  session_id: string;
+  status: "running" | string;
+};
+
+export type ContinuousJobProgressResponse = {
+  job_id: string;
+  session_id?: string | null;
+  status: "running" | "completed" | "failed" | string;
+  step?: string;
+  percent?: number;
+  logs?: Array<{
+    stage?: string;
+    message?: string;
+    downloaded?: number;
+    failed?: number;
+    total?: number;
+    timestamp?: string;
+  }>;
+  error?: string | null;
+};
+
+export type ContinuousJobResultResponse = {
+  job_id: string;
+  session_id?: string | null;
+  status: "running" | "completed" | "failed" | string;
+  result?: {
+    success?: boolean;
+    message?: string;
+    artifacts?: ChatArtifact[];
+    data?: Record<string, unknown>;
+    error?: string | null;
+  };
+  step?: string;
+  percent?: number;
+  error?: string | null;
+};
+
 export type ChatResponse = {
   session_id: string;
   answer: string;
@@ -215,4 +254,50 @@ export async function getSkill(name: string): Promise<SkillDetail> {
   }
 
   return (await response.json()) as SkillDetail;
+}
+
+export async function startContinuousWorkflow(payload: {
+  message: string;
+  session_id?: string | null;
+  lang?: "en" | "zh";
+  params?: Record<string, unknown>;
+}): Promise<ContinuousJobStartResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/workflows/continuous/start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `Request failed with status ${response.status}`);
+  }
+  return (await response.json()) as ContinuousJobStartResponse;
+}
+
+export async function getContinuousWorkflowProgress(
+  jobId: string,
+): Promise<ContinuousJobProgressResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/workflows/continuous/${encodeURIComponent(jobId)}/progress`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `Request failed with status ${response.status}`);
+  }
+  return (await response.json()) as ContinuousJobProgressResponse;
+}
+
+export async function getContinuousWorkflowResult(
+  jobId: string,
+): Promise<ContinuousJobResultResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/workflows/continuous/${encodeURIComponent(jobId)}/result`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `Request failed with status ${response.status}`);
+  }
+  return (await response.json()) as ContinuousJobResultResponse;
 }

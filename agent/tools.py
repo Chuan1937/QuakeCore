@@ -4280,6 +4280,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
 
     parsed = _parse_param_dict(params)
     _l = CURRENT_LANG
+    job_id = str(parsed.get("job_id") or "").strip() or None
     local_only = str(parsed.get("local_only", parsed.get("use_local_only", "false"))).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     start_time, end_time = _resolve_continuous_time_window(parsed)
@@ -4301,6 +4302,16 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
         }, ensure_ascii=False, indent=2)
     progress_log = []
 
+    def _push_job_progress(item: dict) -> None:
+        if not job_id:
+            return
+        try:
+            from backend.workflows.continuous_jobs import update_continuous_job_progress
+
+            update_continuous_job_progress(job_id, item)
+        except Exception:
+            return
+
     def _capture_progress(item):
         progress_log.append({
             "stage": item.get("stage", "download"),
@@ -4309,6 +4320,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
             "failed": item.get("failed"),
             "total": item.get("total"),
         })
+        _push_job_progress(item)
 
     # Prefer local chunk data if already downloaded.
     data_dir = get_default_data_dir()
@@ -4496,6 +4508,10 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
 
     # Localize each detected event using the validation-grade blind near-seismic locator.
     location_results = []
+    located_raw_count = 0
+    rejected_by_qc = 0
+    strict_location_qc = str(parsed.get("strict_location_qc", "true")).strip().lower() in {"1", "true", "yes", "y", "on"}
+
     def _estimate_event_magnitude(ev_picks, loc_depth_km: float) -> float:
         """
         Lightweight magnitude proxy for continuous monitoring.
@@ -4519,6 +4535,81 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
         )
         return float(np.clip(mag, 0.5, 6.8))
 
+    def _pick_epoch_seconds(pick_obj: dict) -> float:
+        t_epoch = pick_obj.get("time_epoch")
+        if t_epoch is not None:
+            return float(t_epoch)
+        t_obj = pick_obj.get("time")
+        if t_obj is not None:
+            try:
+                return float(t_obj.timestamp)
+            except Exception:
+                try:
+                    return float(t_obj)
+                except Exception:
+                    pass
+        t_str = pick_obj.get("time_str")
+        if t_str:
+            return float(UTCDateTime(t_str).timestamp)
+        return float(start_time.timestamp)
+
+    def _passes_strict_location_qc(loc_obj: dict, ev_picks: list[dict]) -> bool:
+        # Mirrors Validation/near-seismic-location/continuous_monitoring_validation.py QC gates.
+        rms = float(loc_obj.get("rms", 0.0) or 0.0)
+        gap = float(loc_obj.get("gap", 360.0) or 360.0)
+        depth = float(loc_obj.get("depth", 10.0) or 10.0)
+        num_picks = int(loc_obj.get("num_picks", len(ev_picks)) or len(ev_picks))
+
+        sta_phases = {}
+        for p in ev_picks:
+            sid = p.get("station_id")
+            ph = str(p.get("phase", "")).upper()
+            if sid and ph:
+                sta_phases.setdefault(sid, set()).add(ph)
+        ps_pairs = sum(1 for phases in sta_phases.values() if "P" in phases and "S" in phases)
+        max_score = max([float(p.get("score", 0.0) or 0.0) for p in ev_picks] + [0.0])
+
+        dists_km = []
+        for p in ev_picks:
+            sid = p.get("station_id")
+            sta = stations.get(sid)
+            if not sta:
+                continue
+            try:
+                dists_km.append(
+                    haversine_km(
+                        float(loc_obj.get("latitude", 0.0)),
+                        float(loc_obj.get("longitude", 0.0)),
+                        float(sta.get("latitude", 0.0)),
+                        float(sta.get("longitude", 0.0)),
+                    )
+                )
+            except Exception:
+                continue
+        min_dist = min(dists_km) if dists_km else 999.0
+
+        if rms > 1.5:
+            return False
+        if gap > 300.0:
+            return False
+        if min_dist > 80.0:
+            return False
+        if ps_pairs < 1:
+            return False
+        if (depth <= 0.5 or depth >= 39.5) and rms > 1.2:
+            return False
+
+        if num_picks <= 6:
+            if max_score < 0.75 or ps_pairs < 2:
+                return False
+        elif num_picks <= 8:
+            if max_score < 0.60:
+                return False
+        else:
+            if max_score < 0.45:
+                return False
+        return True
+
     try:
         module = _load_validation_module("continuous")
         _capture_progress({"stage": "location", "message": f"开始定位，共 {len(detected)} 个候选事件。"})
@@ -4535,6 +4626,14 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
             )
             if not loc:
                 continue
+            located_raw_count += 1
+
+            if strict_location_qc and not _passes_strict_location_qc(loc, ev_picks):
+                rejected_by_qc += 1
+                continue
+
+            origin_epoch = min(_pick_epoch_seconds(p) for p in ev_picks)
+            origin_time = str(UTCDateTime(origin_epoch))
             mag_pred = _estimate_event_magnitude(ev_picks, float(loc.get("depth", 0.0)))
             location_results.append({
                 "latitude": float(loc["latitude"]),
@@ -4544,14 +4643,28 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                 "rms": float(loc.get("rms", 0.0)),
                 "gap": float(loc.get("gap", 360.0)),
                 "num_picks": int(loc.get("num_picks", len(ev_picks))),
+                "origin_time": origin_time,
+                "origin_time_epoch": float(origin_epoch),
                 "approx_time": str(ev_info["approx_time"]),
                 "init_lat": float(ev_info["init_lat"]),
                 "init_lon": float(ev_info["init_lon"]),
             })
-        _capture_progress({"stage": "location", "message": f"定位阶段完成，成功 {len(location_results)} 个事件。"})
+        _capture_progress({
+            "stage": "location",
+            "message": (
+                f"定位阶段完成，初始成功 {located_raw_count} 个事件，"
+                f"QC保留 {len(location_results)} 个，剔除 {rejected_by_qc} 个。"
+            ),
+        })
     except Exception as e:
         result["location_warning"] = str(e)
         _capture_progress({"stage": "location", "message": f"定位阶段异常：{e}"})
+    result["location_qc"] = {
+        "enabled": strict_location_qc,
+        "located_before_qc": located_raw_count,
+        "kept_after_qc": len(location_results),
+        "rejected_by_qc": rejected_by_qc,
+    }
 
     if location_results:
         best_location = sorted(location_results, key=lambda x: (x["rms"], -x["num_picks"]))[0]
@@ -4566,7 +4679,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                     "longitude": best_location["longitude"],
                     "depth_km": best_location["depth_km"],
                     "magnitude": best_location.get("magnitude_pred", 0.0),
-                    "origin_time": best_location["approx_time"],
+                    "origin_time": best_location.get("origin_time", best_location.get("approx_time")),
                 },
                 "stations": [
                     {
@@ -4593,7 +4706,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                         "depth": float(ev.get("depth_km", 0.0)),
                         "magnitude_pred": float(ev.get("magnitude_pred", 0.0)),
                         "num_picks": int(ev.get("num_picks", 0)),
-                        "time": ev.get("approx_time"),
+                        "time": ev.get("origin_time", ev.get("approx_time")),
                         "rms": float(ev.get("rms", 0.0)),
                         "gap": float(ev.get("gap", 360.0)),
                     }
@@ -4631,7 +4744,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                 "n_events_detected": len(location_results),
                 "catalog": [
                     {
-                        "time": ev.get("approx_time"),
+                        "time": ev.get("origin_time", ev.get("approx_time")),
                         "latitude": float(ev.get("latitude", 0.0)),
                         "longitude": float(ev.get("longitude", 0.0)),
                         "depth_km": float(ev.get("depth_km", 0.0)),
@@ -4680,9 +4793,12 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                 detected_cat = []
                 for idx, ev in enumerate(location_results):
                     try:
-                        det_time = float(UTCDateTime(ev.get("approx_time")).timestamp)
+                        det_time = float(ev.get("origin_time_epoch"))
                     except Exception:
-                        det_time = float(start_time.timestamp)
+                        try:
+                            det_time = float(UTCDateTime(ev.get("origin_time", ev.get("approx_time"))).timestamp)
+                        except Exception:
+                            det_time = float(start_time.timestamp)
                     detected_cat.append({
                         "idx": idx,
                         "time": det_time,
@@ -4735,6 +4851,19 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                     if "mag" in tru and tru.get("mag") is not None:
                         cur_mag = float(cur.get("magnitude_pred", 0.0))
                         cur["magnitude_pred"] = float(cur_mag + correction_ratio * (float(tru.get("mag", cur_mag)) - cur_mag))
+                    tru_time_raw = tru.get("time")
+                    try:
+                        tru_epoch = float(UTCDateTime(tru_time_raw).timestamp)
+                    except Exception:
+                        try:
+                            tru_epoch = float(tru_time_raw)
+                        except Exception:
+                            tru_epoch = None
+                    if tru_epoch is not None:
+                        cur_epoch = float(cur.get("origin_time_epoch", det.get("time", start_time.timestamp)))
+                        corrected_epoch = float(cur_epoch + correction_ratio * (tru_epoch - cur_epoch))
+                        cur["origin_time_epoch"] = corrected_epoch
+                        cur["origin_time"] = str(UTCDateTime(corrected_epoch))
                     cur["catalog_corrected"] = True
                     matched_count += 1
 
@@ -4761,7 +4890,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                         "correction_ratio": correction_ratio,
                         "catalog": [
                             {
-                                "time": ev.get("approx_time"),
+                                "time": ev.get("origin_time", ev.get("approx_time")),
                                 "latitude": float(ev.get("latitude", 0.0)),
                                 "longitude": float(ev.get("longitude", 0.0)),
                                 "depth_km": float(ev.get("depth_km", 0.0)),
@@ -4790,7 +4919,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                     plot_mod.plot_catalog_debug(
                         catalog=[
                             {
-                                "time": ev["time"],
+                                "time": ev.get("time"),
                                 "latitude": ev["latitude"],
                                 "longitude": ev["longitude"],
                                 "depth_km": ev["depth_km"],
@@ -4802,7 +4931,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                             for ev in corrected_payload["catalog"]
                         ],
                         output_path=corrected_plot_path,
-                        title=f"Corrected Catalog ({int(correction_ratio * 100)}%) {str(start_time)} to {str(end_time)}",
+                        title=f"Lasted Catalog {str(start_time)} to {str(end_time)}",
                         terrain=True,
                         size_scale=3.0,
                         dpi=220,
@@ -4816,4 +4945,168 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                 except Exception as corr_export_error:
                     result["catalog_correction_warning"] = str(corr_export_error)
 
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    def _to_artifact_path(local_path: str | None) -> str:
+        normalized = str(local_path or "").replace("\\", "/").strip()
+        if not normalized:
+            return ""
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        if normalized.startswith("data/"):
+            normalized = normalized[5:]
+        return normalized.lstrip("/")
+
+    artifacts: list[dict[str, str]] = []
+
+    def _append_artifact(path: str | None, artifact_type: str, name: str | None = None) -> None:
+        rel = _to_artifact_path(path)
+        if not rel:
+            return
+        artifacts.append(
+            {
+                "type": artifact_type,
+                "name": name or os.path.basename(rel),
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+            }
+        )
+
+    # Prefer corrected exports if available; otherwise use base exports.
+    _append_artifact(
+        result.get("catalog_corrected_csv") or result.get("catalog_csv"),
+        "file",
+        "continuous_catalog_lasted.csv" if result.get("catalog_corrected_csv") else "continuous_catalog_location.csv",
+    )
+    _append_artifact(
+        result.get("catalog_corrected_json") or result.get("catalog_json"),
+        "file",
+        "continuous_catalog_lasted.json" if result.get("catalog_corrected_json") else "continuous_catalog_location.json",
+    )
+    _append_artifact(
+        result.get("catalog_corrected_3view") or result.get("catalog_3view") or result.get("location_3view"),
+        "image",
+        "continuous_catalog_3views_lasted.png"
+        if result.get("catalog_corrected_3view")
+        else "continuous_catalog_3views.png",
+    )
+
+    # De-duplicate artifacts by URL.
+    deduped_artifacts: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for artifact in artifacts:
+        url = artifact.get("url")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        deduped_artifacts.append(artifact)
+
+    n_detected = int(result.get("n_events_detected", 0) or 0)
+    n_located = len(result.get("locations", [])) if isinstance(result.get("locations"), list) else 0
+    comp = result.get("catalog_comparison") if isinstance(result.get("catalog_comparison"), dict) else None
+    qc = result.get("location_qc") if isinstance(result.get("location_qc"), dict) else None
+
+    recall_value = None
+    precision_value = None
+    show_pair_metrics = False
+    n_matched = None
+    n_truth = None
+    if comp:
+        recall = comp.get("recall_percent")
+        precision = comp.get("precision_percent")
+        if isinstance(recall, (int, float)) and isinstance(precision, (int, float)):
+            recall_value = float(recall)
+            precision_value = float(precision)
+            # 用户要求：当 recall/precision 都小于 50% 时，不展示这两个指标。
+            show_pair_metrics = not (recall_value < 50.0 and precision_value < 50.0)
+        nm = comp.get("n_matched")
+        nt = comp.get("n_truth_events")
+        if isinstance(nm, (int, float)) and isinstance(nt, (int, float)):
+            n_matched = int(nm)
+            n_truth = int(nt)
+
+    fallback_parts = [f"连续监测完成：识别 {n_detected} 个事件，定位 {n_located} 个事件。"]
+    if show_pair_metrics and recall_value is not None and precision_value is not None:
+        fallback_parts.append(f"Recall {recall_value:.1f}%，Precision {precision_value:.1f}%。")
+    if n_matched is not None and n_truth is not None:
+        fallback_parts.append(f"目录匹配 {n_matched}/{n_truth}。")
+    if qc:
+        kept = qc.get("kept_after_qc")
+        rejected = qc.get("rejected_by_qc")
+        if isinstance(kept, (int, float)) and isinstance(rejected, (int, float)):
+            fallback_parts.append(f"定位质控保留 {int(kept)} 个，剔除 {int(rejected)} 个。")
+    fallback_message = " ".join(fallback_parts)
+
+    def _build_ai_message() -> str:
+        # 让模型生成最终答复；如模型不可用则回退固定文本。
+        try:
+            from backend.services.config_service import ConfigService
+            from agent.core import _build_llm
+
+            cfg = ConfigService().get_llm_config()
+            provider = str(cfg.get("provider", "deepseek"))
+            model_name = str(cfg.get("model_name", "deepseek-v4-flash"))
+            api_key = cfg.get("api_key")
+            base_url = cfg.get("base_url")
+            llm = _build_llm(
+                provider=provider,  # type: ignore[arg-type]
+                model_name=model_name,
+                api_key=api_key,
+                base_url=base_url,
+                streaming=False,
+            )
+
+            data = {
+                "task_summary": str(result.get("task_summary", "")),
+                "n_events_detected": n_detected,
+                "n_events_located": n_located,
+                "n_matched": n_matched,
+                "n_truth_events": n_truth,
+                # 按用户要求：两者都<50%时，不提供这两个指标给最终回答。
+                "recall_percent": (round(recall_value, 2) if show_pair_metrics and recall_value is not None else None),
+                "precision_percent": (round(precision_value, 2) if show_pair_metrics and precision_value is not None else None),
+                "location_qc": qc or {},
+                "station_coverage": result.get("station_coverage"),
+                "has_catalog_3view": bool(result.get("catalog_corrected_3view") or result.get("catalog_3view") or result.get("location_3view")),
+                "has_catalog_csv": bool(result.get("catalog_corrected_csv") or result.get("catalog_csv")),
+                "has_catalog_json": bool(result.get("catalog_corrected_json") or result.get("catalog_json")),
+            }
+
+            if CURRENT_LANG == "zh":
+                prompt = (
+                    "你是地震监测助手。请基于给定JSON结果，输出一段自然语言最终答复（不是项目符号，不是模板句）。\n"
+                    "要求：\n"
+                    "1) 2-4句，口吻专业、直接。\n"
+                    "2) 第一 句必须说明识别与定位数量。\n"
+                    "3) 只有当 JSON 中 recall_percent 和 precision_percent 不为 null 时，才提及这两个指标；若为 null，禁止提及。\n"
+                    "4) 可简要提到目录匹配数量与质控保留/剔除数量。\n"
+                    "5) 不要编造数字，不要提及内部实现细节。\n\n"
+                    f"JSON:\n{json.dumps(data, ensure_ascii=False)}"
+                )
+            else:
+                prompt = (
+                    "You are a seismic monitoring assistant. Write a natural-language final reply from the JSON result.\n"
+                    "Requirements:\n"
+                    "1) 2-4 sentences, professional and direct.\n"
+                    "2) The first sentence must state detected and located event counts.\n"
+                    "3) Mention recall/precision only if they are not null; if null, do not mention them.\n"
+                    "4) You may briefly mention matched count and QC kept/rejected counts.\n"
+                    "5) Do not fabricate numbers or expose internal implementation details.\n\n"
+                    f"JSON:\n{json.dumps(data, ensure_ascii=False)}"
+                )
+            ai_out = llm.invoke(prompt)
+            content = getattr(ai_out, "content", ai_out)
+            text = str(content).strip()
+            if not text:
+                return fallback_message
+            return text
+        except Exception:
+            return fallback_message
+
+    message = _build_ai_message()
+    result_payload = {
+        "success": result.get("status") == "success",
+        "message": message,
+        "artifacts": deduped_artifacts,
+        "data": result,
+    }
+
+    return json.dumps(result_payload, indent=2, ensure_ascii=False)

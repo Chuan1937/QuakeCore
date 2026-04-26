@@ -6,12 +6,16 @@ import { MarkdownView } from "@/components/markdown-view";
 import { WorkflowSteps } from "@/components/workflow-steps";
 import {
   chatWithAgent,
+  getContinuousWorkflowProgress,
+  getContinuousWorkflowResult,
   getLlmConfig,
   saveLlmConfig,
+  startContinuousWorkflow,
   toBackendUrl,
   uploadFile,
   type ChatArtifact,
   type ChatResponse,
+  type ContinuousJobProgressResponse,
   type LlmConfig,
   type WorkflowResult,
 } from "@/lib/api";
@@ -36,6 +40,11 @@ type Message = {
   files?: Array<{ name: string; fileType?: string }>;
   pending?: boolean;
   attachments?: ChatAttachment[];
+  progress?: {
+    percent: number;
+    step: string;
+    status: string;
+  };
 };
 
 type Thread = {
@@ -73,6 +82,16 @@ function inferPendingText(text: string): string {
     return "正在准备连续地震监测任务…";
   }
   return "正在思考…";
+}
+
+function isContinuousMonitoringRequest(text: string): boolean {
+  const source = text.toLowerCase();
+  return (
+    source.includes("连续") ||
+    source.includes("监测") ||
+    source.includes("continuous monitoring") ||
+    source.includes("continuous")
+  );
 }
 
 function basename(path: string): string {
@@ -303,6 +322,78 @@ export default function HomePage() {
     [sessionId],
   );
 
+  function applyContinuousProgress(
+    pendingId: string,
+    progress: ContinuousJobProgressResponse,
+  ) {
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === pendingId
+          ? {
+              ...item,
+              pending: progress.status === "running",
+              route: "continuous_monitoring",
+              content: "连续地震监测进行中",
+              progress: {
+                percent: Number(progress.percent ?? 0),
+                step: String(progress.step || "处理中"),
+                status: String(progress.status || "running"),
+              },
+            }
+          : item,
+      ),
+    );
+  }
+
+  async function runContinuousWorkflow(
+    text: string,
+    pendingId: string,
+    sessionHint: string | null,
+  ) {
+    const started = await startContinuousWorkflow({
+      message: text,
+      session_id: sessionHint,
+      lang: "zh",
+    });
+    setSessionId(started.session_id);
+    const jobId = started.job_id;
+
+    let progress = await getContinuousWorkflowProgress(jobId);
+    applyContinuousProgress(pendingId, progress);
+
+    while (progress.status === "running") {
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      progress = await getContinuousWorkflowProgress(jobId);
+      applyContinuousProgress(pendingId, progress);
+    }
+
+    const result = await getContinuousWorkflowResult(jobId);
+    if (result.status === "running") {
+      return;
+    }
+
+    const payload = result.result || {};
+    const answer = String(payload.message || result.error || "连续监测完成。");
+    const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+    const errorText = String(payload.error || result.error || "");
+
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === pendingId
+          ? {
+              ...item,
+              pending: false,
+              route: "continuous_monitoring",
+              content: answer,
+              artifacts,
+              error: errorText || null,
+              progress: undefined,
+            }
+          : item,
+      ),
+    );
+  }
+
   async function handleSend(messageText: string) {
     const text = messageText.trim();
     const hasAttachments = pendingAttachments.filter((a) => a.status === "uploaded").length > 0;
@@ -327,6 +418,42 @@ export default function HomePage() {
 
     if (!text) {
       setChatLoading(false);
+      return;
+    }
+
+    if (isContinuousMonitoringRequest(text)) {
+      const pendingId = newId();
+      setMessages((current) => [
+        ...current,
+        {
+          id: pendingId,
+          role: "assistant",
+          content: "连续地震监测进行中",
+          route: "continuous_monitoring",
+          pending: true,
+          progress: { percent: 2, step: "任务准备中", status: "running" },
+        },
+      ]);
+      try {
+        await runContinuousWorkflow(text, pendingId, sessionId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "连续监测任务失败。";
+        setError(message);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === pendingId
+              ? {
+                  ...item,
+                  pending: false,
+                  content: "连续监测任务失败。",
+                  error: message,
+                }
+              : item,
+          ),
+        );
+      } finally {
+        setChatLoading(false);
+      }
       return;
     }
 
@@ -576,16 +703,26 @@ export default function HomePage() {
                       ) : null}
                     </div>
                   ) : message.pending ? (
-                    <div className="assistant-message">
-                      <span className="pending-text">
-                        {message.content}
-                        <span className="dot-wave">
-                          <i />
-                          <i />
-                          <i />
+                    message.route === "continuous_monitoring" && message.progress ? (
+                      <div className="assistant-message progress-card">
+                        <div>连续地震监测进行中</div>
+                        <div className="progress-bar">
+                          <div style={{ width: `${Math.max(0, Math.min(100, message.progress.percent))}%` }} />
+                        </div>
+                        <div>{message.progress.step}</div>
+                      </div>
+                    ) : (
+                      <div className="assistant-message">
+                        <span className="pending-text">
+                          {message.content}
+                          <span className="dot-wave">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
                         </span>
-                      </span>
-                    </div>
+                      </div>
+                    )
                   ) : (
                     <div className="assistant-stack">
                       {message.content || message.files?.length || message.error || message.route ? (
