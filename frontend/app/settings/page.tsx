@@ -11,24 +11,34 @@ import {
   type LlmConfig,
 } from "@/lib/api";
 
-const EMPTY_DEEPSEEK = {
-  provider: "deepseek" as const,
-  model_name: "deepseek-v4-flash",
-  api_key: "",
-  base_url: "https://api.deepseek.com",
+type ModelConfig = {
+  backend: "deepseek" | "ollama";
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+};
+
+const DEEPSEEK_DEFAULTS: ModelConfig = {
+  backend: "deepseek",
+  model: "deepseek-v4-flash",
+  apiKey: "",
+  baseUrl: "https://api.deepseek.com",
+};
+
+const OLLAMA_DEFAULTS: ModelConfig = {
+  backend: "ollama",
+  model: "",
+  apiKey: "",
+  baseUrl: "http://localhost:11434",
 };
 
 export default function SettingsPage() {
   const router = useRouter();
-  const [backend, setBackend] = useState<"deepseek" | "ollama">("deepseek");
-  const [model, setModel] = useState("deepseek-v4-flash");
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
+  const [config, setConfig] = useState<ModelConfig>(DEEPSEEK_DEFAULTS);
   const [defaults, setDefaults] = useState<ConfigDefaults | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaMessage, setOllamaMessage] = useState("");
   const [detecting, setDetecting] = useState(false);
@@ -45,19 +55,21 @@ export default function SettingsPage() {
         if (!mounted) return;
 
         setDefaults(defaultsData);
-        const provider = configData.provider;
-        setBackend(provider);
-        setModel(configData.model_name);
 
-        if (provider === "ollama") {
-          const url = configData.base_url || "http://localhost:11434";
-          setOllamaUrl(url);
-          setBaseUrl(url);
-          setApiKey("");
+        if (configData.provider === "ollama") {
+          setConfig({
+            backend: "ollama",
+            model: configData.model_name,
+            apiKey: "",
+            baseUrl: configData.base_url || "http://localhost:11434",
+          });
         } else {
-          setApiKey(configData.api_key ?? "");
-          setBaseUrl(configData.base_url || "https://api.deepseek.com");
-          setOllamaUrl("http://localhost:11434");
+          setConfig({
+            backend: "deepseek",
+            model: configData.model_name || "deepseek-v4-flash",
+            apiKey: configData.api_key ?? "",
+            baseUrl: configData.base_url || "https://api.deepseek.com",
+          });
         }
       } catch (error) {
         if (!mounted) return;
@@ -72,22 +84,10 @@ export default function SettingsPage() {
   }, []);
 
   function handleBackendChange(value: "deepseek" | "ollama") {
-    setBackend(value);
+    setConfig(value === "deepseek" ? { ...DEEPSEEK_DEFAULTS } : { ...OLLAMA_DEFAULTS });
+    setOllamaModels([]);
+    setOllamaMessage("");
     setMessage("");
-
-    if (value === "deepseek") {
-      setModel("deepseek-v4-flash");
-      setBaseUrl("https://api.deepseek.com");
-      setApiKey("");
-      setOllamaModels([]);
-      setOllamaMessage("");
-    } else {
-      setModel("");
-      setBaseUrl(ollamaUrl);
-      setApiKey("");
-      setOllamaModels([]);
-      setOllamaMessage("");
-    }
   }
 
   async function detectOllamaModels() {
@@ -95,12 +95,12 @@ export default function SettingsPage() {
     setOllamaMessage("正在检测本地 Ollama 模型...");
 
     try {
-      const data = await getOllamaModels(ollamaUrl);
+      const data = await getOllamaModels(config.baseUrl);
       setOllamaModels(data.models || []);
       setOllamaMessage(data.message || "");
 
       if (data.models?.length > 0) {
-        setModel(data.models[0]);
+        setConfig((current) => ({ ...current, model: data.models[0] }));
       }
     } catch {
       setOllamaModels([]);
@@ -110,11 +110,6 @@ export default function SettingsPage() {
     }
   }
 
-  function updateOllamaUrl(url: string) {
-    setOllamaUrl(url);
-    setBaseUrl(url);
-  }
-
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
@@ -122,10 +117,10 @@ export default function SettingsPage() {
 
     try {
       await saveLlmConfig({
-        provider: backend,
-        model_name: model,
-        api_key: backend === "deepseek" ? (apiKey || null) : null,
-        base_url: backend === "deepseek" ? baseUrl : ollamaUrl,
+        provider: config.backend,
+        model_name: config.model,
+        api_key: config.backend === "deepseek" ? (config.apiKey || null) : null,
+        base_url: config.baseUrl,
       });
       router.push("/");
     } catch (error) {
@@ -157,7 +152,7 @@ export default function SettingsPage() {
           <label>
             <span>后端</span>
             <select
-              value={backend}
+              value={config.backend}
               onChange={(event) =>
                 handleBackendChange(event.target.value as "deepseek" | "ollama")
               }
@@ -170,13 +165,15 @@ export default function SettingsPage() {
             </select>
           </label>
 
-          {backend === "deepseek" && (
+          {config.backend === "deepseek" && (
             <>
               <label>
                 <span>模型</span>
                 <input
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
+                  value={config.model}
+                  onChange={(event) =>
+                    setConfig((current) => ({ ...current, model: event.target.value }))
+                  }
                   placeholder="deepseek-v4-flash"
                 />
               </label>
@@ -185,8 +182,10 @@ export default function SettingsPage() {
                 <span>API Key</span>
                 <input
                   type="password"
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
+                  value={config.apiKey}
+                  onChange={(event) =>
+                    setConfig((current) => ({ ...current, apiKey: event.target.value }))
+                  }
                   placeholder="可留空，默认读取 DEEPSEEK_API_KEY"
                 />
               </label>
@@ -194,21 +193,25 @@ export default function SettingsPage() {
               <label>
                 <span>Base URL</span>
                 <input
-                  value={baseUrl}
-                  onChange={(event) => setBaseUrl(event.target.value)}
+                  value={config.baseUrl}
+                  onChange={(event) =>
+                    setConfig((current) => ({ ...current, baseUrl: event.target.value }))
+                  }
                   placeholder="https://api.deepseek.com"
                 />
               </label>
             </>
           )}
 
-          {backend === "ollama" && (
+          {config.backend === "ollama" && (
             <>
               <label>
                 <span>Ollama 地址</span>
                 <input
-                  value={ollamaUrl}
-                  onChange={(event) => updateOllamaUrl(event.target.value)}
+                  value={config.baseUrl}
+                  onChange={(event) =>
+                    setConfig((current) => ({ ...current, baseUrl: event.target.value }))
+                  }
                   placeholder="http://localhost:11434"
                 />
               </label>
@@ -226,8 +229,10 @@ export default function SettingsPage() {
                 <span>本地模型</span>
                 {ollamaModels.length > 0 ? (
                   <select
-                    value={model}
-                    onChange={(event) => setModel(event.target.value)}
+                    value={config.model}
+                    onChange={(event) =>
+                      setConfig((current) => ({ ...current, model: event.target.value }))
+                    }
                   >
                     {ollamaModels.map((name) => (
                       <option key={name} value={name}>

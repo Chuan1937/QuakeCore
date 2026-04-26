@@ -284,11 +284,10 @@ export default function HomePage() {
     if (!llmConfig) {
       return;
     }
-    const updated: LlmConfig = {
-      ...llmConfig,
-      provider,
-      model_name: provider === "deepseek" ? "deepseek-v4-flash" : llmConfig.model_name || "qwen2.5:3b",
-    };
+    const updated: LlmConfig =
+      provider === "deepseek"
+        ? { provider: "deepseek", model_name: "deepseek-v4-flash", api_key: llmConfig.api_key, base_url: "https://api.deepseek.com" }
+        : { provider: "ollama", model_name: "", api_key: null, base_url: "http://localhost:11434" };
     try {
       const saved = await saveLlmConfig(updated);
       setLlmConfig(saved);
@@ -341,12 +340,12 @@ export default function HomePage() {
             <div className="model-menu">
               <p className="model-menu-title">模型 / 后端</p>
               <button type="button" className="model-option" onClick={() => void switchProvider("deepseek")}>
-                ● DeepSeek API
-                <span>model: deepseek-v4-flash</span>
+                {llmConfig?.provider === "deepseek" ? "●" : "○"} DeepSeek API
+                <span>model: {llmConfig?.provider === "deepseek" ? llmConfig.model_name : "-"}</span>
               </button>
               <button type="button" className="model-option" onClick={() => void switchProvider("ollama")}>
-                ○ Ollama 本地
-                <span>model: qwen2.5:3b</span>
+                {llmConfig?.provider === "ollama" ? "●" : "○"} Ollama 本地
+                <span>model: {llmConfig?.provider === "ollama" ? llmConfig.model_name : "-"}</span>
               </button>
               <Link href="/settings" className="model-settings-link">
                 打开 Settings
