@@ -402,63 +402,75 @@ export default function HomePage() {
             ) : (
               messages.map((message) => (
                 <article key={message.id} className={`message-row ${message.role}`}>
-                  <div className={`message-bubble ${message.role}`}>
-                    {message.role === "assistant" ? (
-                      message.pending ? (
-                        <p className="pending-text">
-                          {message.content}
-                          <span className="dot-wave">
-                            <i />
-                            <i />
-                            <i />
-                          </span>
-                        </p>
-                      ) : (
-                        <MarkdownView content={message.content} />
-                      )
-                    ) : (
+                  {message.role === "user" ? (
+                    <div className="user-bubble">
                       <p>{message.content}</p>
-                    )}
-                    {message.files?.length ? (
-                      <div className="file-chip-row">
-                        {message.files.map((file) => (
-                          <span key={`${file.name}-${file.fileType || ""}`} className="file-chip">
-                            {file.name}
-                            {file.fileType ? ` · ${file.fileType}` : ""}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    {message.workflow ? <WorkflowSteps workflow={message.workflow} /> : null}
-                    {message.error ? <div className="error-pill">{message.error}</div> : null}
-                    {message.route ? <div className="route-meta">{message.route}</div> : null}
-                    {message.artifacts?.length ? (
-                      <div className="artifacts">
-                        {message.artifacts.map((artifact) => (
-                          <div key={artifact.url} className="artifact-card">
-                            {artifact.type === "image" ? (
-                              <a
-                                href={toBackendUrl(artifact.url)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="artifact-preview"
-                              >
-                                <img src={toBackendUrl(artifact.url)} alt={artifact.name} />
-                              </a>
-                            ) : (
-                              <a href={toBackendUrl(artifact.url)} target="_blank" rel="noreferrer">
-                                {artifact.name}
-                              </a>
-                            )}
-                            <div className="artifact-meta">
-                              <strong>{artifact.name}</strong>
-                              <span>{artifact.path}</span>
+                      {message.files?.length ? (
+                        <div className="file-chip-row">
+                          {message.files.map((file) => (
+                            <span key={`${file.name}-${file.fileType || ""}`} className="file-chip">
+                              {file.name}
+                              {file.fileType ? ` · ${file.fileType}` : ""}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : message.pending ? (
+                    <div className="assistant-message">
+                      <span className="pending-text">
+                        {message.content}
+                        <span className="dot-wave">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="assistant-message">
+                      <MarkdownView content={message.content} />
+                      {message.files?.length ? (
+                        <div className="file-chip-row">
+                          {message.files.map((file) => (
+                            <span key={`${file.name}-${file.fileType || ""}`} className="file-chip">
+                              {file.name}
+                              {file.fileType ? ` · ${file.fileType}` : ""}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {message.workflow ? <WorkflowSteps workflow={message.workflow} /> : null}
+                      {message.error ? <div className="error-pill">{message.error}</div> : null}
+                      {message.route ? <div className="route-meta">{message.route}</div> : null}
+                      {message.artifacts?.length ? (
+                        <div className="artifacts">
+                          {message.artifacts.map((artifact) => (
+                            <div key={artifact.url} className="artifact-card">
+                              {artifact.type === "image" ? (
+                                <a
+                                  href={toBackendUrl(artifact.url)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="artifact-preview"
+                                >
+                                  <img src={toBackendUrl(artifact.url)} alt={artifact.name} />
+                                </a>
+                              ) : (
+                                <a href={toBackendUrl(artifact.url)} target="_blank" rel="noreferrer">
+                                  {artifact.name}
+                                </a>
+                              )}
+                              <div className="artifact-meta">
+                                <strong>{artifact.name}</strong>
+                                <span>{artifact.path}</span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                 </article>
               ))
             )}
