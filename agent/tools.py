@@ -1872,15 +1872,18 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
                 if current is None or (current.get("normalized_score") is None) or (score > current.get("normalized_score")):
                     best_by_trace[trace_index][phase] = m
         
-        # Format as a Markdown output (language-aware)
+        # Build text summary output (language-aware). Keep message text-only;
+        # artifact links are returned in structured `artifacts`.
         _l = CURRENT_LANG
         lines = []
-        lines.append(f"![{'拾取结果图' if _l == 'zh' else 'Picking Results'}]({plot_path})")
-        lines.append("")
-
-        lines.append(f"{'初至拾取已完成，图表已保存至' if _l == 'zh' else 'Phase picking completed, plot saved to'}：`{plot_path}`")
+        lines.append(f"{'初至拾取已完成。' if _l == 'zh' else 'Phase picking completed.'}")
+        lines.append(
+            f"{'图表已保存至' if _l == 'zh' else 'Plot saved to'}：`{plot_path}`"
+        )
         if csv_path:
-            lines.append(f"{'拾取结果CSV已保存至' if _l == 'zh' else 'Picks CSV saved to'}：`{csv_path}`")
+            lines.append(
+                f"{'拾取结果CSV已保存至' if _l == 'zh' else 'Picks CSV saved to'}：`{csv_path}`"
+            )
         for trace_index in sorted(best_by_trace.keys()):
             best_p = best_by_trace[trace_index].get("P")
             best_s = best_by_trace[trace_index].get("S")
@@ -1935,8 +1938,51 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
                 method_display = METHOD_DISPLAY[_l].get(method_key, method_key)
                 lines.append(f"| {phase} | {method_display} | {m['sample_index']} | {score} | {m['absolute_time']} |")
             lines.append("")
+        message = "\n".join(lines).strip()
 
-        return "\n".join(lines)
+        def _to_artifact_path(local_path: str | None) -> str:
+            normalized = str(local_path or "").replace("\\", "/").strip()
+            if not normalized:
+                return ""
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
+            if normalized.startswith("data/"):
+                normalized = normalized[5:]
+            return normalized.lstrip("/")
+
+        artifacts: list[dict[str, str]] = []
+        plot_rel = _to_artifact_path(plot_path)
+        if plot_rel:
+            artifacts.append(
+                {
+                    "type": "image",
+                    "name": os.path.basename(plot_path),
+                    "path": plot_rel,
+                    "url": f"/api/artifacts/{plot_rel}",
+                }
+            )
+        if csv_path:
+            csv_rel = _to_artifact_path(csv_path)
+            if csv_rel:
+                artifacts.append(
+                    {
+                        "type": "file",
+                        "name": os.path.basename(csv_path),
+                        "path": csv_rel,
+                        "url": f"/api/artifacts/{csv_rel}",
+                    }
+                )
+
+        return {
+            "success": True,
+            "message": message,
+            "artifacts": artifacts,
+            "data": {
+                "plot_path": plot_rel,
+                "csv_path": _to_artifact_path(csv_path) if csv_path else None,
+                "trace_count": len(summary),
+            },
+        }
     except Exception as e:
         return f"Error picking phases: {str(e)}"
 
@@ -2124,13 +2170,10 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
             configure_plot_fonts()
             plot_waveform_with_picks(best_item["traces"], best_item["picks"], plot_path)
 
-        # Build output (language-aware)
+        # Build output (language-aware). Keep message text-only;
+        # artifact links are returned in structured `artifacts`.
         _l = CURRENT_LANG
         lines = []
-
-        if plot_path:
-            lines.append(f"![{'拾取结果图' if _l == 'zh' else 'Picking Results'}]({plot_path})")
-            lines.append("")
 
         lines.append(f"**{'初至拾取完成' if _l == 'zh' else 'Phase picking completed'}**")
         lines.append(f"- {'处理文件数' if _l == 'zh' else 'Files processed'}: {len(CURRENT_MINISEED_PATHS)}")
@@ -2160,8 +2203,53 @@ def pick_all_miniseed_files(params: Union[str, dict, None] = None):
         else:
             lines.append("Picks saved. Use `locate_earthquake` for hypocenter determination.")
             lines.append("Use `add_station_coordinates` to add station coordinates.")
+        message = "\n".join(lines).strip()
 
-        return "\n".join(lines)
+        def _to_artifact_path(local_path: str | None) -> str:
+            normalized = str(local_path or "").replace("\\", "/").strip()
+            if not normalized:
+                return ""
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
+            if normalized.startswith("data/"):
+                normalized = normalized[5:]
+            return normalized.lstrip("/")
+
+        artifacts: list[dict[str, str]] = []
+        plot_rel = _to_artifact_path(plot_path)
+        if plot_rel:
+            artifacts.append(
+                {
+                    "type": "image",
+                    "name": os.path.basename(plot_path),
+                    "path": plot_rel,
+                    "url": f"/api/artifacts/{plot_rel}",
+                }
+            )
+        if csv_path:
+            csv_rel = _to_artifact_path(csv_path)
+            if csv_rel:
+                artifacts.append(
+                    {
+                        "type": "file",
+                        "name": os.path.basename(csv_path),
+                        "path": csv_rel,
+                        "url": f"/api/artifacts/{csv_rel}",
+                    }
+                )
+
+        return {
+            "success": True,
+            "message": message,
+            "artifacts": artifacts,
+            "data": {
+                "files_processed": len(CURRENT_MINISEED_PATHS),
+                "total_picks": len(all_picks),
+                "total_traces": len(all_traces),
+                "plot_path": plot_rel,
+                "csv_path": _to_artifact_path(csv_path) if csv_path else None,
+            },
+        }
 
     except Exception as e:
         _l = CURRENT_LANG

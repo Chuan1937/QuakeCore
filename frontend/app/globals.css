@@ -1174,6 +1174,7 @@ textarea {
 }
 
 .artifact-message-card {
+  position: relative;
   width: 100%;
   border: 1px solid #e5e7eb;
   background: #ffffff;
@@ -1189,8 +1190,6 @@ textarea {
   margin: 0;
   background: transparent;
   cursor: zoom-in;
-  text-align: left;
-  border-bottom: 1px solid #e5e7eb;
 }
 
 .artifact-image-link img {
@@ -1201,13 +1200,19 @@ textarea {
   background: #ffffff;
 }
 
-.artifact-file-placeholder {
-  padding: 18px 12px;
-  font-size: 14px;
-  color: #374151;
-  background: #f9fafb;
+.artifact-file-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px;
   border-bottom: 1px solid #e5e7eb;
-  word-break: break-all;
+  color: #111827;
+  background: #ffffff;
+  font-weight: 600;
+}
+
+.artifact-file-icon {
+  font-size: 20px;
 }
 
 .artifact-card-footer {
@@ -1235,8 +1240,7 @@ textarea {
   flex-wrap: wrap;
 }
 
-.artifact-card-actions button,
-.artifact-card-actions a {
+.artifact-card-actions button {
   border: 1px solid #d1d5db;
   border-radius: 999px;
   background: #ffffff;
@@ -1244,12 +1248,22 @@ textarea {
   padding: 6px 12px;
   font-size: 14px;
   cursor: pointer;
-  text-decoration: none;
 }
 
-.artifact-card-actions button:hover,
-.artifact-card-actions a:hover {
+.artifact-card-actions button:hover {
   background: #f3f4f6;
+}
+
+.copy-toast {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 12px;
+  box-shadow: 0 6px 18px rgba(17, 24, 39, 0.18);
 }
 
 .pending-text {

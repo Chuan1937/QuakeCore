@@ -94,6 +94,7 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
   const url = toBackendUrl(artifact.url);
   const displayName = getArtifactDisplayName(artifact);
   const rawPath = artifact.path || artifact.name || "";
+  const [copied, setCopied] = useState(false);
 
   async function handleDownload() {
     const response = await fetch(url);
@@ -135,19 +136,25 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
               [blob.type]: blob,
             }),
           ]);
-          return;
+        } else {
+          await navigator.clipboard.writeText(url);
         }
+      } else {
+        await navigator.clipboard.writeText(url);
       }
 
-      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
     } catch {
       alert("复制失败");
     }
   }
 
+  const isImage = artifact.type === "image";
+
   return (
     <div className="artifact-message-card">
-      {artifact.type === "image" ? (
+      {isImage ? (
         <button
           type="button"
           className="artifact-image-link"
@@ -157,7 +164,10 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
           <img src={url} alt={displayName} />
         </button>
       ) : (
-        <div className="artifact-file-placeholder">{displayName}</div>
+        <div className="artifact-file-box">
+          <span className="artifact-file-icon">📄</span>
+          <span>{displayName}</span>
+        </div>
       )}
 
       <div className="artifact-card-footer">
@@ -174,17 +184,23 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
             下载
           </button>
 
-          <button
-            type="button"
-            onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
-          >
-            查看
-          </button>
+          {isImage ? (
+            <>
+              <button
+                type="button"
+                onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+              >
+                查看
+              </button>
 
-          <button type="button" onClick={() => void handleCopy()}>
-            复制
-          </button>
+              <button type="button" onClick={() => void handleCopy()}>
+                复制
+              </button>
+            </>
+          ) : null}
         </div>
+
+        {copied ? <div className="copy-toast">复制成功</div> : null}
       </div>
     </div>
   );
