@@ -62,16 +62,17 @@ class FileService:
         suffix = Path(filename).suffix.lower()
         return FILE_TYPE_BY_SUFFIX.get(suffix, "unknown")
 
-    def save_upload(self, file: UploadFile) -> UploadedFileInfo:
+    def save_upload(self, file: UploadFile, session_id: str) -> UploadedFileInfo:
         original_name = Path(file.filename or "").name
         if not original_name:
             raise ValueError("Filename is required")
 
         file_type = self.infer_file_type(original_name)
-        self.upload_dir.mkdir(parents=True, exist_ok=True)
+        session_upload_dir = self.upload_dir / session_id
+        session_upload_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = f"{uuid4().hex}_{original_name}"
-        destination = self.upload_dir / safe_name
+        destination = session_upload_dir / safe_name
 
         with destination.open("wb") as handle:
             handle.write(file.file.read())

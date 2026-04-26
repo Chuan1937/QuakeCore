@@ -26,12 +26,13 @@ def upload_file(
     file_service: FileService = Depends(get_file_service),
     session_store: SessionStore = Depends(get_files_session_store),
 ):
+    final_session_id = session_id or uuid4().hex
+
     try:
-        uploaded = file_service.save_upload(file)
+        uploaded = file_service.save_upload(file, final_session_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    final_session_id = session_id or uuid4().hex
     session_store.add_file(final_session_id, uploaded.path)
     session_store.set_current_file(final_session_id, uploaded.path)
 

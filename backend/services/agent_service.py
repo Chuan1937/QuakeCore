@@ -80,11 +80,26 @@ class AgentService:
             session.skill_context = built.skill_context
         return session
 
-    def _inject_session_file_context(self, session_id: str) -> None:
-        current_file = self._sessions.get_current_file(session_id)
-        if not current_file:
+    def _inject_session_file_context(
+        self,
+        session_id: str,
+        attachments: list[str] | None = None,
+    ) -> None:
+        uploaded_files = [item for item in (attachments or self._sessions.get_uploaded_files(session_id)) if item]
+        try:
+            from agent.tools import set_current_uploaded_files
+
+            set_current_uploaded_files(uploaded_files)
+        except Exception:
+            # Keep backward compatibility: file-context injection must never block chat.
+            pass
+
+        if not uploaded_files:
+            self._sessions.set_current_file(session_id, None)
             return
 
+        current_file = uploaded_files[-1]
+        self._sessions.set_current_file(session_id, current_file)
         file_type = FileService.infer_file_type(Path(current_file).name)
         try:
             bind_uploaded_file_to_agent(current_file, file_type)
@@ -145,12 +160,19 @@ class AgentService:
             )
         return structured
 
-    def chat(self, message: str, session_id: str | None = None, lang: str | None = "en") -> ChatResult:
+    def chat(
+        self,
+        message: str,
+        session_id: str | None = None,
+        lang: str | None = "en",
+        attachments: list[str] | None = None,
+    ) -> ChatResult:
         final_session_id = session_id or uuid4().hex
         final_lang = self._normalize_lang(lang)
         route = self._router_service.route_intent(message)
 
         try:
+            self._inject_session_file_context(final_session_id, attachments)
             if route == "earthquake_location":
                 workflow_result = run_location_workflow(final_session_id)
                 workflow_status = str(workflow_result.get("status", "failed"))
@@ -185,7 +207,6 @@ class AgentService:
 
             session = self._get_or_create_session(final_session_id, final_lang)
             set_current_lang(final_lang)
-            self._inject_session_file_context(final_session_id)
             if self._langgraph_runtime.enabled:
                 raw_result = self._langgraph_runtime.invoke(
                     session_id=final_session_id,

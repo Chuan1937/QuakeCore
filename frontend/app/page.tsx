@@ -19,6 +19,7 @@ import {
 type ChatAttachment = {
   id: string;
   name: string;
+  path?: string;
   fileKind?: string;
   status: "uploading" | "uploaded" | "failed";
   error?: string;
@@ -72,6 +73,59 @@ function inferPendingText(text: string): string {
     return "正在准备连续地震监测任务…";
   }
   return "正在思考…";
+}
+
+function basename(path: string): string {
+  const cleaned = String(path || "").replace(/\\/g, "/");
+  const parts = cleaned.split("/");
+  return parts[parts.length - 1] || cleaned;
+}
+
+function stripUuidPrefix(name: string): string {
+  return name.replace(/^[a-f0-9]{16,}_/i, "");
+}
+
+function getArtifactDisplayName(artifact: ChatArtifact): string {
+  const candidate = basename(artifact.name || artifact.path || artifact.url);
+  return stripUuidPrefix(candidate);
+}
+
+function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
+  const url = toBackendUrl(artifact.url);
+  const displayName = getArtifactDisplayName(artifact);
+  const rawPath = artifact.path || artifact.name || "";
+
+  return (
+    <div className="artifact-message-card">
+      {artifact.type === "image" ? (
+        <a href={url} target="_blank" rel="noreferrer" className="artifact-image-link">
+          <img src={url} alt={displayName} />
+        </a>
+      ) : null}
+      <div className="artifact-card-footer">
+        <div className="artifact-card-title">{displayName}</div>
+        {rawPath ? <div className="artifact-card-path">{stripUuidPrefix(basename(rawPath))}</div> : null}
+        <div className="artifact-card-actions">
+          <a href={url} download>
+            下载
+          </a>
+          <a href={url} target="_blank" rel="noreferrer">
+            打开
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof navigator !== "undefined" && navigator.clipboard) {
+                void navigator.clipboard.writeText(url);
+              }
+            }}
+          >
+            复制链接
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function HomePage() {
@@ -150,7 +204,7 @@ export default function HomePage() {
           setPendingAttachments((prev) =>
             prev.map((a) =>
               a.id === attachments[i].id
-                ? { ...a, status: "uploaded", fileKind: result.file_type }
+                ? { ...a, status: "uploaded", fileKind: result.file_type, path: result.path }
                 : a,
             ),
           );
@@ -211,6 +265,13 @@ export default function HomePage() {
         message: text,
         session_id: sessionId,
         lang: "zh",
+        attachments: userAttachments
+          .filter((a): a is ChatAttachment & { path: string } => Boolean(a.path))
+          .map((a) => ({
+            name: a.name,
+            path: a.path,
+            file_type: a.fileKind,
+          })),
       });
       clearTimeout(timer);
 
@@ -448,47 +509,34 @@ export default function HomePage() {
                       </span>
                     </div>
                   ) : (
-                    <div className="assistant-message">
-                      <MarkdownView content={message.content} />
-                      {message.files?.length ? (
-                        <div className="file-chip-row">
-                          {message.files.map((file) => (
-                            <span key={`${file.name}-${file.fileType || ""}`} className="file-chip">
-                              {file.name}
-                              {file.fileType ? ` · ${file.fileType}` : ""}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {message.workflow ? <WorkflowSteps workflow={message.workflow} /> : null}
-                      {message.error ? <div className="error-pill">{message.error}</div> : null}
-                      {message.route ? <div className="route-meta">{message.route}</div> : null}
-                      {message.artifacts?.length ? (
-                        <div className="artifacts">
-                          {message.artifacts.map((artifact) => (
-                            <div key={artifact.url} className="artifact-card">
-                              {artifact.type === "image" ? (
-                                <a
-                                  href={toBackendUrl(artifact.url)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="artifact-preview"
-                                >
-                                  <img src={toBackendUrl(artifact.url)} alt={artifact.name} />
-                                </a>
-                              ) : (
-                                <a href={toBackendUrl(artifact.url)} target="_blank" rel="noreferrer">
-                                  {artifact.name}
-                                </a>
-                              )}
-                              <div className="artifact-meta">
-                                <strong>{artifact.name}</strong>
-                                <span>{artifact.path}</span>
-                              </div>
+                    <div className="assistant-stack">
+                      {message.content || message.files?.length || message.error || message.route ? (
+                        <div className="assistant-message">
+                          {message.content ? <MarkdownView content={message.content} /> : null}
+                          {message.files?.length ? (
+                            <div className="file-chip-row">
+                              {message.files.map((file) => (
+                                <span key={`${file.name}-${file.fileType || ""}`} className="file-chip">
+                                  {file.name}
+                                  {file.fileType ? ` · ${file.fileType}` : ""}
+                                </span>
+                              ))}
                             </div>
-                          ))}
+                          ) : null}
+                          {message.error ? <div className="error-pill">{message.error}</div> : null}
+                          {message.route ? <div className="route-meta">{message.route}</div> : null}
                         </div>
                       ) : null}
+
+                      {message.workflow ? (
+                        <div className="assistant-message">
+                          <WorkflowSteps workflow={message.workflow} />
+                        </div>
+                      ) : null}
+
+                      {message.artifacts?.map((artifact) => (
+                        <ArtifactMessageCard key={artifact.url} artifact={artifact} />
+                      ))}
                     </div>
                   )}
                 </article>

@@ -1165,6 +1165,76 @@ textarea {
   margin: 0 0 10px;
 }
 
+.assistant-stack {
+  width: 100%;
+  max-width: 760px;
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-message-card {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.artifact-image-link {
+  display: block;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.artifact-image-link img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.artifact-card-footer {
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  word-break: break-all;
+}
+
+.artifact-card-path {
+  font-size: 12px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.artifact-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.artifact-card-actions a,
+.artifact-card-actions button {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  text-decoration: none;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #111827;
+}
+
+.artifact-card-actions button {
+  cursor: pointer;
+}
+
 .pending-text {
   display: inline-flex;
   align-items: center;

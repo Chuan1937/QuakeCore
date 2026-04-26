@@ -74,6 +74,23 @@ class SessionStore:
             session.touch()
             return session.current_file
 
+    def get_uploaded_files(self, session_id: str) -> list[str]:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return []
+            session.touch()
+            return list(session.uploaded_files)
+
+    def clear_files(self, session_id: str) -> None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return
+            session.uploaded_files.clear()
+            session.current_file = None
+            session.touch()
+
 
 _session_store = SessionStore()
 

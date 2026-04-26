@@ -17,11 +17,18 @@ class FileUploadResponse(BaseModel):
     bound_to_agent: bool = False
 
 
+class ChatAttachmentRequest(BaseModel):
+    name: str
+    path: str
+    file_type: str | None = None
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     lang: Literal["en", "zh"] = "en"
     language: Literal["en", "zh"] | None = None
+    attachments: list[ChatAttachmentRequest] | None = None
 
 
 class ArtifactResponse(BaseModel):

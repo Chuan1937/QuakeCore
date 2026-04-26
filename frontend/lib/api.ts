@@ -37,6 +37,11 @@ export type ChatRequest = {
   message: string;
   session_id?: string | null;
   lang?: "en" | "zh";
+  attachments?: Array<{
+    name: string;
+    path: string;
+    file_type?: string;
+  }>;
 };
 
 export type FileUploadResponse = {

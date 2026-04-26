@@ -24,6 +24,7 @@ def chat(
         message=payload.message,
         session_id=payload.session_id,
         lang=resolved_lang,
+        attachments=[item.path for item in payload.attachments or [] if item.path],
     )
     return {
         "session_id": result.session_id,

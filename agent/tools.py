@@ -33,6 +33,7 @@ CURRENT_MINISEED_PATH = None
 CURRENT_MINISEED_PATHS = []  # Support multiple MiniSEED files for multi-station location
 CURRENT_HDF5_PATH = None
 CURRENT_SAC_PATH = None
+CURRENT_UPLOADED_FILES = []
 CURRENT_LANG = "en"  # Current UI language, set from app.py
 _VALIDATION_MODULE_CACHE = {}
 
@@ -96,6 +97,45 @@ def clear_miniseed_paths():
     global CURRENT_MINISEED_PATHS, CURRENT_MINISEED_PATH
     CURRENT_MINISEED_PATHS = []
     CURRENT_MINISEED_PATH = None
+
+
+def set_current_uploaded_files(paths):
+    """
+    Replace current uploaded-file context and rebuild per-type current pointers.
+    """
+    global CURRENT_UPLOADED_FILES, CURRENT_SEGY_PATH, CURRENT_MINISEED_PATH
+    global CURRENT_MINISEED_PATHS, CURRENT_HDF5_PATH, CURRENT_SAC_PATH
+
+    normalized = []
+    for raw_path in paths or []:
+        path = str(raw_path or "").strip()
+        if path and path not in normalized:
+            normalized.append(path)
+
+    CURRENT_UPLOADED_FILES = normalized
+    CURRENT_SEGY_PATH = None
+    CURRENT_MINISEED_PATH = None
+    CURRENT_MINISEED_PATHS = []
+    CURRENT_HDF5_PATH = None
+    CURRENT_SAC_PATH = None
+
+    for path in normalized:
+        lowered = path.lower()
+        if lowered.endswith(".mseed") or lowered.endswith(".miniseed"):
+            CURRENT_MINISEED_PATHS.append(path)
+        elif lowered.endswith(".segy") or lowered.endswith(".sgy"):
+            CURRENT_SEGY_PATH = path
+        elif lowered.endswith(".h5") or lowered.endswith(".hdf5"):
+            CURRENT_HDF5_PATH = path
+        elif lowered.endswith(".sac"):
+            CURRENT_SAC_PATH = path
+
+    if CURRENT_MINISEED_PATHS:
+        CURRENT_MINISEED_PATH = CURRENT_MINISEED_PATHS[-1]
+
+
+def get_current_uploaded_files():
+    return list(CURRENT_UPLOADED_FILES)
 
 # 设置当前 HDF5 文件路径的辅助函数
 def set_current_hdf5_path(path):
