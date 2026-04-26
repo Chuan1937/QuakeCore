@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation";
 import {
   getConfigDefaults,
   getLlmConfig,
+  getOllamaModels,
   saveLlmConfig,
   type ConfigDefaults,
   type LlmConfig,
 } from "@/lib/api";
 
-const EMPTY_CONFIG: LlmConfig = {
-  provider: "deepseek",
+const EMPTY_DEEPSEEK = {
+  provider: "deepseek" as const,
   model_name: "deepseek-v4-flash",
   api_key: "",
   base_url: "https://api.deepseek.com",
@@ -19,10 +20,18 @@ const EMPTY_CONFIG: LlmConfig = {
 
 export default function SettingsPage() {
   const router = useRouter();
-  const [config, setConfig] = useState<LlmConfig>(EMPTY_CONFIG);
+  const [backend, setBackend] = useState<"deepseek" | "ollama">("deepseek");
+  const [model, setModel] = useState("deepseek-v4-flash");
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
   const [defaults, setDefaults] = useState<ConfigDefaults | null>(null);
-  const [message, setMessage] = useState<string>("");
+  const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaMessage, setOllamaMessage] = useState("");
+  const [detecting, setDetecting] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -36,12 +45,20 @@ export default function SettingsPage() {
         if (!mounted) return;
 
         setDefaults(defaultsData);
-        setConfig({
-          provider: configData.provider,
-          model_name: configData.model_name,
-          api_key: configData.api_key ?? "",
-          base_url: configData.base_url ?? "",
-        });
+        const provider = configData.provider;
+        setBackend(provider);
+        setModel(configData.model_name);
+
+        if (provider === "ollama") {
+          const url = configData.base_url || "http://localhost:11434";
+          setOllamaUrl(url);
+          setBaseUrl(url);
+          setApiKey("");
+        } else {
+          setApiKey(configData.api_key ?? "");
+          setBaseUrl(configData.base_url || "https://api.deepseek.com");
+          setOllamaUrl("http://localhost:11434");
+        }
       } catch (error) {
         if (!mounted) return;
         setMessage(error instanceof Error ? error.message : "加载设置失败。");
@@ -54,6 +71,50 @@ export default function SettingsPage() {
     };
   }, []);
 
+  function handleBackendChange(value: "deepseek" | "ollama") {
+    setBackend(value);
+    setMessage("");
+
+    if (value === "deepseek") {
+      setModel("deepseek-v4-flash");
+      setBaseUrl("https://api.deepseek.com");
+      setApiKey("");
+      setOllamaModels([]);
+      setOllamaMessage("");
+    } else {
+      setModel("");
+      setBaseUrl(ollamaUrl);
+      setApiKey("");
+      setOllamaModels([]);
+      setOllamaMessage("");
+    }
+  }
+
+  async function detectOllamaModels() {
+    setDetecting(true);
+    setOllamaMessage("正在检测本地 Ollama 模型...");
+
+    try {
+      const data = await getOllamaModels(ollamaUrl);
+      setOllamaModels(data.models || []);
+      setOllamaMessage(data.message || "");
+
+      if (data.models?.length > 0) {
+        setModel(data.models[0]);
+      }
+    } catch {
+      setOllamaModels([]);
+      setOllamaMessage("检测 Ollama 失败，请确认后端服务正常");
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  function updateOllamaUrl(url: string) {
+    setOllamaUrl(url);
+    setBaseUrl(url);
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
@@ -61,10 +122,10 @@ export default function SettingsPage() {
 
     try {
       await saveLlmConfig({
-        provider: config.provider,
-        model_name: config.model_name,
-        api_key: config.api_key || null,
-        base_url: config.base_url || null,
+        provider: backend,
+        model_name: model,
+        api_key: backend === "deepseek" ? (apiKey || null) : null,
+        base_url: backend === "deepseek" ? baseUrl : ollamaUrl,
       });
       router.push("/");
     } catch (error) {
@@ -96,72 +157,92 @@ export default function SettingsPage() {
           <label>
             <span>后端</span>
             <select
-              value={config.provider}
+              value={backend}
               onChange={(event) =>
-                setConfig((current) => ({
-                  ...current,
-                  provider: event.target.value as LlmConfig["provider"],
-                  model_name:
-                    event.target.value === "deepseek"
-                      ? "deepseek-v4-flash"
-                      : current.model_name || "qwen2.5:3b",
-                  base_url:
-                    event.target.value === "deepseek"
-                      ? "https://api.deepseek.com"
-                      : current.base_url,
-                }))
+                handleBackendChange(event.target.value as "deepseek" | "ollama")
               }
             >
-              {(defaults?.providers ?? ["deepseek", "ollama"]).map((provider) => (
-                <option key={provider} value={provider}>
-                  {provider === "deepseek" ? "DeepSeek API" : "Ollama 本地"}
+              {(defaults?.providers ?? ["deepseek", "ollama"]).map((p) => (
+                <option key={p} value={p}>
+                  {p === "deepseek" ? "DeepSeek API" : "Ollama 本地"}
                 </option>
               ))}
             </select>
           </label>
 
-          <label>
-            <span>模型</span>
-            <input
-              value={config.model_name}
-              onChange={(event) =>
-                setConfig((current) => ({
-                  ...current,
-                  model_name: event.target.value,
-                }))
-              }
-              placeholder="deepseek-v4-flash"
-            />
-          </label>
+          {backend === "deepseek" && (
+            <>
+              <label>
+                <span>模型</span>
+                <input
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  placeholder="deepseek-v4-flash"
+                />
+              </label>
 
-          <label>
-            <span>API Key</span>
-            <input
-              type="password"
-              value={config.api_key ?? ""}
-              onChange={(event) =>
-                setConfig((current) => ({
-                  ...current,
-                  api_key: event.target.value,
-                }))
-              }
-              placeholder="可留空，默认读取 DEEPSEEK_API_KEY"
-            />
-          </label>
+              <label>
+                <span>API Key</span>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder="可留空，默认读取 DEEPSEEK_API_KEY"
+                />
+              </label>
 
-          <label>
-            <span>Base URL</span>
-            <input
-              value={config.base_url ?? ""}
-              onChange={(event) =>
-                setConfig((current) => ({
-                  ...current,
-                  base_url: event.target.value,
-                }))
-              }
-              placeholder="https://api.deepseek.com"
-            />
-          </label>
+              <label>
+                <span>Base URL</span>
+                <input
+                  value={baseUrl}
+                  onChange={(event) => setBaseUrl(event.target.value)}
+                  placeholder="https://api.deepseek.com"
+                />
+              </label>
+            </>
+          )}
+
+          {backend === "ollama" && (
+            <>
+              <label>
+                <span>Ollama 地址</span>
+                <input
+                  value={ollamaUrl}
+                  onChange={(event) => updateOllamaUrl(event.target.value)}
+                  placeholder="http://localhost:11434"
+                />
+              </label>
+
+              <button
+                type="button"
+                className="settings-detect-btn"
+                onClick={detectOllamaModels}
+                disabled={detecting}
+              >
+                {detecting ? "检测中..." : "检测本地模型"}
+              </button>
+
+              <label>
+                <span>本地模型</span>
+                {ollamaModels.length > 0 ? (
+                  <select
+                    value={model}
+                    onChange={(event) => setModel(event.target.value)}
+                  >
+                    {ollamaModels.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="settings-ollama-empty">
+                    {ollamaMessage || "未检测到 Ollama 模型"}
+                  </p>
+                )}
+              </label>
+            </>
+          )}
 
           {message ? <p className="settings-message">{message}</p> : null}
 

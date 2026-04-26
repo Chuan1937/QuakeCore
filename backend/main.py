@@ -9,6 +9,7 @@ from backend.routes.chat import router as chat_router
 from backend.routes.files import router as files_router
 from backend.routes.health import router as health_router
 from backend.routes.skills import router as skills_router
+from backend.routes.ollama import router as ollama_router
 from backend.routes.workflows import router as workflows_router
 
 app = FastAPI(title="QuakeCore Backend")
@@ -30,4 +31,5 @@ app.include_router(chat_router)
 app.include_router(artifacts_router)
 app.include_router(config_router)
 app.include_router(skills_router)
+app.include_router(ollama_router)
 app.include_router(workflows_router)

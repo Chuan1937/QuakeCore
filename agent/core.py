@@ -71,18 +71,11 @@ def _build_llm(
             streaming=streaming,
         )
 
-    # # Default to Ollama LLM
-    # # 默认使用 Ollama LLM
-    # return ChatOllama(model=model_name, temperature=0)
-
-    # Default to DeepSeek API
-    # 默认使用 DeepSeek API
-    return ChatOpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url="https://api.deepseek.com",
+    return ChatOllama(
         model=model_name,
+        base_url=base_url or "http://localhost:11434",
         temperature=0,
-        streaming=streaming,
+        num_predict=4096,
     )
 
 

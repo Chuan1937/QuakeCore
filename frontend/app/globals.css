@@ -1458,3 +1458,28 @@ textarea {
   color: #dc2626;
   font-size: 13px;
 }
+
+.settings-detect-btn {
+  height: 38px;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.settings-detect-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-ollama-empty {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 13px;
+}

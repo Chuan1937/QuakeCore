@@ -180,6 +180,25 @@ export async function listSkills(): Promise<{ skills: SkillSummary[] }> {
   return (await response.json()) as { skills: SkillSummary[] };
 }
 
+export type OllamaModelsResponse = {
+  ok: boolean;
+  models: string[];
+  message: string;
+};
+
+export async function getOllamaModels(baseUrl: string): Promise<OllamaModelsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`,
+    { cache: "no-store" },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as OllamaModelsResponse;
+}
+
 export async function getSkill(name: string): Promise<SkillDetail> {
   const response = await fetch(`${API_BASE_URL}/api/skills/${encodeURIComponent(name)}`, {
     cache: "no-store",
