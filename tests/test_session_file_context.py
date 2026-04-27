@@ -71,10 +71,14 @@ def test_session_store_runtime_results_roundtrip():
     store = SessionStore()
     store.set_runtime_result("sid", "last_catalog_csv", "location/a.csv")
     store.update_runtime_results("sid", {"last_catalog_json": "location/a.json"})
+    store.update_runtime_results("sid", {"files": {"A.mseed": {"picks_csv": "picks/a.csv"}}})
+    store.update_runtime_results("sid", {"files": {"B.mseed": {"picks_csv": "picks/b.csv"}}})
 
     payload = store.get_runtime_results("sid")
     assert payload["last_catalog_csv"] == "location/a.csv"
     assert payload["last_catalog_json"] == "location/a.json"
+    assert payload["files"]["A.mseed"]["picks_csv"] == "picks/a.csv"
+    assert payload["files"]["B.mseed"]["picks_csv"] == "picks/b.csv"
 
 
 def test_agent_service_injects_runtime_context_and_updates_runtime(monkeypatch):
@@ -253,6 +257,8 @@ def test_agent_service_bootstraps_pick_for_picks_analysis_without_runtime_csv(mo
     assert runtime.get("last_picks_csv") == "picks/demo.csv"
     assert runtime.get("last_picks_image") == "picks/demo.png"
     assert runtime.get("last_picks_source_file") == "tmp/demo.mseed"
+    assert runtime.get("active_file") == "demo.mseed"
+    assert runtime.get("files", {}).get("demo.mseed", {}).get("picks_csv") == "picks/demo.csv"
 
 
 def test_agent_service_bootstraps_pick_when_picks_source_mismatch(monkeypatch):
@@ -323,6 +329,35 @@ def test_agent_service_bootstraps_pick_when_picks_source_mismatch(monkeypatch):
     runtime = store.get_runtime_results("sid-mismatch")
     assert runtime.get("last_picks_csv") == "picks/new.csv"
     assert runtime.get("last_picks_source_file") == "tmp/new.mseed"
+
+
+def test_agent_service_apply_file_reference_from_message_activates_file_record():
+    store = SessionStore()
+    store.add_file("sid-ref", "/tmp/CI.IDO.mseed")
+    store.add_file("sid-ref", "/tmp/CI.SMR.mseed")
+    store.set_current_file("sid-ref", "/tmp/CI.SMR.mseed")
+    store.update_runtime_results(
+        "sid-ref",
+        {
+            "files": {
+                "CI.IDO.mseed": {
+                    "source_file": "tmp/CI.IDO.mseed",
+                    "picks_csv": "picks/ido.csv",
+                    "picks_image": "picks/ido.png",
+                }
+            }
+        },
+    )
+    service = AgentService(session_store=store)
+
+    service._apply_file_reference_from_message("sid-ref", "分析一下这个文件的拾取情况 CI.IDO.mseed")
+
+    runtime = store.get_runtime_results("sid-ref")
+    assert runtime.get("active_file") == "CI.IDO.mseed"
+    assert runtime.get("last_picks_csv") == "picks/ido.csv"
+    assert runtime.get("last_picks_image") == "picks/ido.png"
+    assert runtime.get("last_miniseed_file") == "tmp/CI.IDO.mseed"
+    assert store.get_current_file("sid-ref") == "tmp/CI.IDO.mseed"
 
 
 def test_agent_service_file_structure_fast_path(monkeypatch):

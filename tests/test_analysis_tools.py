@@ -239,3 +239,38 @@ set_message('runtime file helper ok')
     assert payload["success"] is True
     assert payload["message"] == "runtime file helper ok"
     assert payload["data"]["path"] == "uploads/demo.mseed"
+
+
+def test_analysis_sandbox_code_mode_visible_artifact_and_file_record_helpers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("QUAKECORE_ANALYSIS_ALLOW_CODE", "1")
+
+    raw = run_analysis_sandbox.invoke(
+        {
+            "params": {
+                "allow_code": True,
+                "runtime_results": {
+                    "active_file": "CI.IDO.mseed",
+                    "files": {
+                        "CI.IDO.mseed": {"picks_csv": "picks/ido.csv"},
+                    },
+                    "last_visible_artifacts": [
+                        {"type": "image", "path": "analysis/a.png"},
+                        {"type": "image", "path": "analysis/b.png"},
+                    ],
+                },
+                "code": """
+set_data('img2', get_visible_artifact(2, 'image'))
+set_data('active', get_active_file_record().get('picks_csv', ''))
+set_data('ido', get_file_record('CI.IDO.mseed').get('picks_csv', ''))
+set_message('helper set ok')
+""",
+            }
+        }
+    )
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    assert payload["message"] == "helper set ok"
+    assert payload["data"]["img2"] == "analysis/b.png"
+    assert payload["data"]["active"] == "picks/ido.csv"
+    assert payload["data"]["ido"] == "picks/ido.csv"

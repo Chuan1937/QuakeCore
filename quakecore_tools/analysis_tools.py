@@ -348,6 +348,120 @@ def _run_restricted_code(
                 return str(uploaded[-1] or "").strip()
         return ""
 
+    def get_visible_artifact(index: int, artifact_type: str = "") -> str:
+        items = runtime_payload.get("last_visible_artifacts") or runtime_payload.get("last_artifacts") or []
+        if not isinstance(items, list):
+            return ""
+        normalized: list[dict[str, Any]] = [item for item in items if isinstance(item, dict)]
+        wanted = str(artifact_type or "").strip().lower()
+        if wanted:
+            normalized = [item for item in normalized if str(item.get("type") or "").strip().lower() == wanted]
+        idx = max(0, int(index) - 1)
+        if idx >= len(normalized):
+            return ""
+        target = normalized[idx]
+        return str(target.get("path") or target.get("url") or "").strip()
+
+    def get_active_file_record() -> dict[str, Any]:
+        files_payload = runtime_payload.get("files")
+        active_file = str(runtime_payload.get("active_file") or "").strip()
+        if not isinstance(files_payload, dict) or not active_file:
+            return {}
+        record = files_payload.get(active_file)
+        return dict(record) if isinstance(record, dict) else {}
+
+    def get_file_record(name: str) -> dict[str, Any]:
+        target = str(name or "").strip().lower()
+        files_payload = runtime_payload.get("files")
+        if not target or not isinstance(files_payload, dict):
+            return {}
+        for key, value in files_payload.items():
+            if str(key).strip().lower() == target and isinstance(value, dict):
+                return dict(value)
+        return {}
+
+    def plot_trace_picks(trace_index: int, picks_key: str = "last_picks_csv", waveform_key: str = "last_miniseed_file") -> dict[str, Any]:
+        picks_ref = str(runtime_payload.get(picks_key) or "").strip()
+        if not picks_ref and picks_key == "last_picks_csv":
+            picks_ref = get_runtime_artifact_path("picks_csv")
+        waveform_ref = str(runtime_payload.get(waveform_key) or "").strip()
+        if not waveform_ref and waveform_key in {"last_miniseed_file", "miniseed", "mseed"}:
+            waveform_ref = get_runtime_file_path("miniseed")
+        if not picks_ref:
+            raise ValueError("Missing picks csv in runtime context.")
+        if not waveform_ref:
+            raise ValueError("Missing waveform/miniseed file in runtime context.")
+
+        picks_obj = read_csv(picks_ref)
+        if hasattr(picks_obj, "to_dict"):
+            picks_rows = picks_obj.to_dict("records")
+        elif isinstance(picks_obj, list):
+            picks_rows = list(picks_obj)
+        else:
+            picks_rows = []
+
+        st = read_waveform(waveform_ref)
+        ti = int(trace_index)
+        if ti < 0 or ti >= len(st):
+            raise ValueError(f"trace_index={ti} out of range, available={len(st)}")
+        tr = st[ti]
+        sr = float(getattr(tr.stats, "sampling_rate", 1.0) or 1.0)
+        if sr <= 0:
+            sr = 1.0
+        data_arr = tr.data
+        x = [i / sr for i in range(len(data_arr))]
+
+        trace_col = ""
+        phase_col = ""
+        sample_col = ""
+        keys = list(picks_rows[0].keys()) if picks_rows and isinstance(picks_rows[0], dict) else []
+        for key in keys:
+            lk = str(key).lower()
+            if not trace_col and lk in {"trace_index", "trace", "trace_id", "index"}:
+                trace_col = key
+            if not phase_col and lk in {"phase", "phase_type", "type"}:
+                phase_col = key
+            if not sample_col and lk in {"sample_index", "sample", "index"}:
+                sample_col = key
+
+        selected: list[dict[str, Any]] = []
+        if trace_col and sample_col:
+            for row in picks_rows:
+                if not isinstance(row, dict):
+                    continue
+                raw = str(row.get(trace_col, "")).strip()
+                norm = raw.replace("-", "", 1).replace(".", "", 1)
+                if not norm.isdigit():
+                    continue
+                if int(float(raw)) == ti:
+                    selected.append(row)
+
+        plt, err = _plot_or_error()
+        if plt is None:
+            raise RuntimeError(err or "matplotlib unavailable")
+        fig = plt.figure(figsize=(12, 4))
+        ax = fig.add_subplot(111)
+        ax.plot(x, data_arr, color="#1f77b4", linewidth=0.8)
+        for row in selected:
+            raw = str(row.get(sample_col, "")).strip() if sample_col else ""
+            norm = raw.replace("-", "", 1).replace(".", "", 1)
+            if not norm.isdigit():
+                continue
+            sx = float(raw) / sr
+            phase = str(row.get(phase_col, "P")).upper() if phase_col else "P"
+            color = "#2ca02c" if phase.startswith("P") else "#d62728"
+            ax.axvline(sx, color=color, linestyle="--", linewidth=1.0, alpha=0.85)
+        ax.set_title(f"Trace {ti} Waveform with Picks")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Amplitude")
+        fig.tight_layout()
+        image_name = f"trace_{ti}_waveform_picks.png"
+        image_path = save_plot(image_name)
+        csv_name = f"trace_{ti}_picks.csv"
+        if selected:
+            save_csv(csv_name, selected)
+        return {"trace_index": ti, "pick_count": len(selected), "image_path": image_path}
+
     safe_builtins = {
         "len": len,
         "min": min,
@@ -380,6 +494,10 @@ def _run_restricted_code(
         "resolve_data_path": resolve_data_path,
         "get_runtime_artifact_path": get_runtime_artifact_path,
         "get_runtime_file_path": get_runtime_file_path,
+        "get_visible_artifact": get_visible_artifact,
+        "get_active_file_record": get_active_file_record,
+        "get_file_record": get_file_record,
+        "plot_trace_picks": plot_trace_picks,
         "read_csv": read_csv,
         "read_json": read_json,
         "read_waveform": read_waveform,

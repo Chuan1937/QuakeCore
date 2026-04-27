@@ -658,6 +658,49 @@ class AgentService:
         suffix = self._build_runtime_context_suffix(session_id, lang)
         return f"{message}{suffix}" if suffix else message
 
+    def _apply_file_reference_from_message(self, session_id: str, message: str) -> None:
+        text = str(message or "")
+        if not text:
+            return
+        match = re.search(r"\b([A-Za-z0-9._-]+\.(?:mseed|miniseed|sac|sgy|segy|h5|hdf5|csv|json))\b", text, flags=re.IGNORECASE)
+        if not match:
+            return
+        target_name = str(match.group(1))
+        target_lower = target_name.lower()
+
+        runtime = self._sessions.get_runtime_results(session_id)
+        files_payload = runtime.get("files")
+        if isinstance(files_payload, dict):
+            for name, record in files_payload.items():
+                if str(name).lower() != target_lower or not isinstance(record, dict):
+                    continue
+                source_file = str(record.get("source_file") or "").strip()
+                if source_file:
+                    self._sessions.set_current_file(session_id, source_file)
+                updates: dict[str, Any] = {"active_file": name}
+                for src_key, dst_key in (
+                    ("picks_csv", "last_picks_csv"),
+                    ("picks_image", "last_picks_image"),
+                    ("source_file", "last_miniseed_file"),
+                ):
+                    value = str(record.get(src_key) or "").strip()
+                    if value:
+                        updates[dst_key] = value
+                self._sessions.update_runtime_results(session_id, updates)
+                return
+
+        uploaded = self._sessions.get_uploaded_files(session_id)
+        for path in reversed(uploaded):
+            if Path(str(path)).name.lower() != target_lower:
+                continue
+            normalized = self._to_runtime_path(path)
+            self._sessions.set_current_file(session_id, path)
+            updates = {"active_file": Path(str(path)).name, "last_current_file": normalized}
+            if Path(str(path)).suffix.lower() in {".mseed", ".miniseed"}:
+                updates["last_miniseed_file"] = normalized
+            self._sessions.update_runtime_results(session_id, updates)
+            return
+
     def _extract_runtime_updates(
         self,
         *,
@@ -681,6 +724,7 @@ class AgentService:
         ]
         if artifact_payload:
             updates["last_artifacts"] = artifact_payload
+            updates["last_visible_artifacts"] = artifact_payload
 
         # Result analysis artifacts must NOT overwrite main workflow context
         if route == "result_analysis":
@@ -694,6 +738,8 @@ class AgentService:
         if route == "phase_picking":
             current = self._sessions.get_current_file(session_id)
             uploaded = self._sessions.get_uploaded_files(session_id)
+            source_name = Path(str(current)).name if current else ""
+            source_rel = self._to_runtime_path(current) if current else ""
             if current:
                 normalized_current = self._to_runtime_path(current)
                 if normalized_current:
@@ -702,13 +748,23 @@ class AgentService:
             if uploaded:
                 updates["last_uploaded_files"] = [self._to_runtime_path(item) for item in uploaded if str(item or "").strip()]
 
+            file_record: dict[str, Any] = {
+                "source_file": source_rel,
+                "artifacts": artifact_payload,
+            }
             for item in artifacts:
                 path = self._to_runtime_path(item.path or item.url)
                 lowered = path.lower()
                 if item.type == "image" and "pick" in lowered:
                     updates["last_picks_image"] = path
+                    file_record["picks_image"] = path
                 if item.type == "file" and lowered.endswith(".csv") and "pick" in lowered:
                     updates["last_picks_csv"] = path
+                    file_record["picks_csv"] = path
+
+            if source_name:
+                updates["active_file"] = source_name
+                updates["files"] = {source_name: file_record}
 
         key_mapping = {
             "picks_csv": "last_picks_csv",
@@ -790,6 +846,7 @@ class AgentService:
             normalized_current = self._to_runtime_path(current_file)
             if normalized_current:
                 updates.setdefault("last_current_file", normalized_current)
+                updates.setdefault("active_file", Path(str(current_file)).name)
             suffix = Path(str(current_file)).suffix.lower()
             if suffix in {".mseed", ".miniseed"}:
                 updates.setdefault("last_miniseed_file", normalized_current)
@@ -986,6 +1043,7 @@ class AgentService:
 
         try:
             self._inject_session_file_context(final_session_id, attachments)
+            self._apply_file_reference_from_message(final_session_id, message)
             runtime_results = self._sessions.get_runtime_results(final_session_id)
             uploaded_files = self._sessions.get_uploaded_files(final_session_id)
             current_file = self._sessions.get_current_file(final_session_id)

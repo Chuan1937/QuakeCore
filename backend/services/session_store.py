@@ -103,13 +103,20 @@ class SessionStore:
             return session
 
     def update_runtime_results(self, session_id: str, values: dict[str, Any]) -> AgentSession:
+        def _deep_merge(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
+            for key, value in (src or {}).items():
+                if isinstance(value, dict) and isinstance(dst.get(key), dict):
+                    _deep_merge(dst[key], value)
+                else:
+                    dst[key] = value
+            return dst
+
         with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
                 session = AgentSession(session_id=session_id)
                 self._sessions[session_id] = session
-            for key, value in (values or {}).items():
-                session.runtime_results[str(key)] = value
+            _deep_merge(session.runtime_results, values or {})
             session.touch()
             return session
 

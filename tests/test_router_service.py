@@ -11,6 +11,7 @@ def test_route_intent_covers_expected_routes():
         "解释一下定位结果": "result_explanation",
         "看看第3个事件": "result_analysis",
         "看看 trace 3 的拾取结果": "result_analysis",
+        "分析一下这个文件的拾取情况": "result_analysis",
         "画一下震级分布": "result_analysis",
         "对当前波形做 phase picking": "phase_picking",
         "请对当前波形做初至拾取": "phase_picking",
