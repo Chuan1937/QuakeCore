@@ -36,6 +36,7 @@ from backend.services.langgraph_runtime import LangGraphRuntime
 from backend.services.router_service import ArtifactItem, RouterService
 from backend.services.session_store import AgentSession, SessionStore, get_session_store
 from backend.services.skills_prompt_service import SkillsPromptService
+from backend.services.tool_planner import ToolPlan, ToolPlanner
 from backend.services.tool_result import NormalizedToolResult, ToolResult, normalize_tool_output
 from backend.workflows.location_workflow import run_location_workflow
 
@@ -56,6 +57,7 @@ class AgentService:
         self._router_service = RouterService()
         self._config_service = ConfigService()
         self._skills_prompt_service = SkillsPromptService()
+        self._tool_planner = ToolPlanner()
         self._langgraph_runtime = LangGraphRuntime(
             enabled=os.getenv("QUAKECORE_USE_LANGGRAPH", "1") == "1"
         )
@@ -622,6 +624,13 @@ class AgentService:
 
         if route == "continuous_monitoring" and payload:
             updates["last_continuous_monitoring"] = payload
+        if route == "result_analysis":
+            # Result analysis should not replace core runtime anchors.
+            for key in ("last_picks_csv", "last_catalog_csv", "last_catalog_json", "last_location_image"):
+                updates.pop(key, None)
+            if artifact_payload:
+                updates["last_analysis_artifacts"] = artifact_payload
+                updates["last_analysis_files"] = [item.get("path", "") for item in artifact_payload if item.get("path")]
 
         return updates
 
@@ -654,6 +663,122 @@ class AgentService:
             return None
         return parsed if isinstance(parsed, dict) else None
 
+    def _try_execute_tool_plan(
+        self,
+        *,
+        plan: ToolPlan,
+        message: str,
+        session_id: str,
+        lang: str,
+    ) -> ChatResult | None:
+        tool_obj = None
+        payload: Any | None = None
+        route = plan.route
+        tool = plan.tool
+        params = dict(plan.params or {})
+
+        if tool == "pick_first_arrivals":
+            has_session_file = bool(self._sessions.get_current_file(session_id) or self._sessions.get_uploaded_files(session_id))
+            if not has_session_file:
+                return None
+            tool_obj = pick_first_arrivals
+            payload = {"params": params}
+        elif tool == "get_file_structure":
+            tool_obj = get_file_structure
+            payload = {}
+        elif tool == "read_file_trace":
+            tool_obj = read_file_trace
+            payload = {"params": params}
+        elif tool == "plot_location_map":
+            tool_obj = plot_location_map
+            payload = {"params": params}
+        elif tool in {
+            "convert_miniseed_to_hdf5",
+            "convert_miniseed_to_numpy",
+            "convert_miniseed_to_sac",
+            "convert_sac_to_hdf5",
+            "convert_sac_to_numpy",
+            "convert_sac_to_miniseed",
+            "convert_segy_to_hdf5",
+            "convert_segy_to_numpy",
+            "convert_segy_to_excel",
+            "convert_hdf5_to_numpy",
+            "convert_hdf5_to_excel",
+        }:
+            mapping = {
+                "convert_miniseed_to_hdf5": convert_miniseed_to_hdf5,
+                "convert_miniseed_to_numpy": convert_miniseed_to_numpy,
+                "convert_miniseed_to_sac": convert_miniseed_to_sac,
+                "convert_sac_to_hdf5": convert_sac_to_hdf5,
+                "convert_sac_to_numpy": convert_sac_to_numpy,
+                "convert_sac_to_miniseed": convert_sac_to_miniseed,
+                "convert_segy_to_hdf5": convert_segy_to_hdf5,
+                "convert_segy_to_numpy": convert_segy_to_numpy,
+                "convert_segy_to_excel": convert_segy_to_excel,
+                "convert_hdf5_to_numpy": convert_hdf5_to_numpy,
+                "convert_hdf5_to_excel": convert_hdf5_to_excel,
+            }
+            current_file = self._sessions.get_current_file(session_id)
+            uploaded = self._sessions.get_uploaded_files(session_id)
+            path = params.get("path") or current_file or (uploaded[-1] if uploaded else None)
+            if not path:
+                return None
+            params["path"] = path
+            tool_obj = mapping[tool]
+            payload = {"params": params}
+            route = "format_conversion"
+        elif tool in {
+            "picks_trace_plot",
+            "picks_trace_detail",
+            "picks_summary",
+            "picks_by_station",
+            "catalog_magnitude_hist",
+            "catalog_depth_hist",
+            "catalog_time_series",
+            "catalog_mag_depth_scatter",
+            "catalog_event_index",
+        }:
+            from quakecore_tools.analysis_tools import run_analysis_sandbox
+
+            params["template"] = tool
+            params["session_id"] = session_id
+            if tool.startswith("picks_"):
+                params.setdefault("input_artifact_key", "last_picks_csv")
+            else:
+                params.setdefault("input_artifact_key", "last_catalog_csv")
+            tool_obj = run_analysis_sandbox
+            payload = {"params": params}
+            route = "result_analysis"
+        elif tool == "result_explanation" or not tool:
+            return None
+        else:
+            return None
+
+        try:
+            raw = self._invoke_direct_tool(tool_obj, payload)
+        except Exception:
+            return None
+        normalized = normalize_tool_output(raw)
+        artifacts = self._build_chat_artifacts(normalized)
+        self._persist_runtime_updates(
+            session_id,
+            self._extract_runtime_updates(route=route, data=normalized.data, artifacts=artifacts),
+        )
+        return ChatResult(
+            session_id=session_id,
+            answer=self._summarize_direct_tool_result(
+                message=message,
+                route=route,
+                normalized=normalized,
+                artifacts=artifacts,
+                lang=lang,
+            ),
+            error=normalized.error,
+            route=route,
+            artifacts=artifacts,
+            workflow=None,
+        )
+
     def chat(
         self,
         message: str,
@@ -667,6 +792,25 @@ class AgentService:
 
         try:
             self._inject_session_file_context(final_session_id, attachments)
+            runtime_results = self._sessions.get_runtime_results(final_session_id)
+            uploaded_files = self._sessions.get_uploaded_files(final_session_id)
+            current_file = self._sessions.get_current_file(final_session_id)
+            plan = self._tool_planner.plan(
+                message=message,
+                route=route,
+                runtime_results=runtime_results,
+                uploaded_files=uploaded_files,
+                current_file=current_file,
+                lang=final_lang,
+            )
+            planned_result = self._try_execute_tool_plan(
+                plan=plan,
+                message=message,
+                session_id=final_session_id,
+                lang=final_lang,
+            )
+            if planned_result is not None:
+                return planned_result
             fast_path_result = self._try_fast_path_trace_pick(
                 message=message,
                 session_id=final_session_id,

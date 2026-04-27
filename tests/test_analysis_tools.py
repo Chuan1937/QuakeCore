@@ -82,3 +82,22 @@ def test_analysis_sandbox_picks_trace_detail(tmp_path):
     assert payload["data"]["trace_index"] == 3
     assert payload["data"]["pick_count"] == 2
     assert any(item.get("name", "").startswith("trace_3_picks_") for item in payload["artifacts"])
+
+
+def test_analysis_sandbox_picks_trace_plot(tmp_path):
+    src = tmp_path / "picks.csv"
+    _write_picks_csv(src)
+
+    raw = run_analysis_sandbox.invoke(
+        {
+            "params": {
+                "input_path": str(src),
+                "template": "picks_trace_plot",
+                "trace_index": 3,
+            }
+        }
+    )
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    assert payload["data"]["trace_index"] == 3
+    assert any(item.get("type") == "image" for item in payload["artifacts"])

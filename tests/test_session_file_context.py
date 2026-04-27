@@ -54,6 +54,11 @@ def test_agent_service_returns_structured_fallback_on_react_parse_error(monkeypa
         return AgentSession(session_id=session_id, lang=lang, agent=_BrokenAgent())
 
     monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+    monkeypatch.setattr(
+        service._tool_planner,
+        "plan",
+        lambda **_: type("P", (), {"route": "phase_picking", "tool": "", "params": {}, "need_rerun": False, "confidence": 0.0})(),
+    )
 
     result = service.chat("对当前波形做初至拾取", session_id="sid-react", lang="zh")
 
@@ -115,6 +120,8 @@ def test_agent_service_injects_runtime_context_and_updates_runtime(monkeypatch):
 
 def test_agent_service_trace_pick_fast_path_skips_react(monkeypatch):
     store = SessionStore()
+    store.add_file("sid-fast", "/tmp/demo.mseed")
+    store.set_current_file("sid-fast", "/tmp/demo.mseed")
     service = AgentService(session_store=store)
 
     class _ShouldNotRunAgent:
@@ -126,6 +133,21 @@ def test_agent_service_trace_pick_fast_path_skips_react(monkeypatch):
 
     monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
     monkeypatch.setattr(service, "_summarize_direct_tool_result", lambda **_: "summary")
+    monkeypatch.setattr(
+        service._tool_planner,
+        "plan",
+        lambda **_: type(
+            "P",
+            (),
+            {
+                "route": "result_analysis",
+                "tool": "pick_first_arrivals",
+                "params": {"trace_number": 1},
+                "need_rerun": False,
+                "confidence": 1.0,
+            },
+        )(),
+    )
     monkeypatch.setattr(
         "backend.services.agent_service.pick_first_arrivals",
         type(

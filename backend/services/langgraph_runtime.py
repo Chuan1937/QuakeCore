@@ -81,6 +81,8 @@ class LangGraphRuntime:
 
         # Trace-specific picks detail takes priority over generic image display
         if ("trace" in text or "轨迹" in text or "道" in text) and ("拾取" in text or "pick" in text):
+            if any(token in text for token in ("图", "图像", "图片", "plot", "image")):
+                return "picks_trace_plot"
             return "picks_trace_detail"
 
         if any(k in text for k in ("图像", "图", "图片", "plot", "image")) and any(
@@ -262,7 +264,7 @@ class LangGraphRuntime:
         }
         if template == "catalog_event_index":
             params["event_index"] = LangGraphRuntime._extract_event_index(message)
-        if template == "picks_trace_detail":
+        if template in {"picks_trace_detail", "picks_trace_plot"}:
             trace_index = LangGraphRuntime._extract_trace_index(message)
             if trace_index is not None:
                 params["trace_index"] = trace_index
