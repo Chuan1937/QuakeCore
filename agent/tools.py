@@ -1724,6 +1724,8 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
       path (optional): File path override.
       file_type (optional): 'hdf5', 'sac', 'segy', 'miniseed'.
       dataset (optional): For HDF5, specific dataset name.
+      trace_index (optional): 0-based trace index to plot picks on a specific trace.
+      trace_number (optional): 1-based trace number alias (preferred by human phrasing).
       methods (optional): Comma-separated list of methods (e.g. 'sta_lta,aic').
           If not specified, defaults to 'eqtransformer,phasenet' (deep learning only).
       method_params (optional): JSON string or dict of params for methods.
@@ -1790,9 +1792,21 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
             dataset=dataset
         )
 
-        # Find best trace:
-        # 1) Prefer traces with both P and S picks
-        # 2) Then choose highest total confidence score
+        # Find target trace:
+        # - if user specifies trace_index/trace_number, force plotting that trace
+        # - otherwise choose best trace by confidence and phase completeness
+        specified_trace_idx = None
+        if parsed.get("trace_index") is not None:
+            try:
+                specified_trace_idx = int(parsed.get("trace_index"))
+            except Exception:
+                specified_trace_idx = None
+        elif parsed.get("trace_number") is not None:
+            try:
+                specified_trace_idx = max(0, int(parsed.get("trace_number")) - 1)
+            except Exception:
+                specified_trace_idx = None
+
         best_trace_idx = 0
         best_trace_score = -1.0
         best_has_both = False
@@ -1823,6 +1837,13 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
                 best_trace_score = total_score
                 best_trace_idx = trace_idx
                 best_has_both = has_both
+
+        if specified_trace_idx is not None:
+            # Clamp into valid trace range to avoid out-of-bounds behavior.
+            if traces:
+                best_trace_idx = max(0, min(int(specified_trace_idx), len(traces) - 1))
+            else:
+                best_trace_idx = max(0, int(specified_trace_idx))
 
         # Filter to best trace only
         best_traces = [t for t in traces if t.metadata.get("trace_index", 0) == best_trace_idx]
@@ -1879,6 +1900,9 @@ def pick_first_arrivals(params: Union[str, dict, None] = None):
         lines.append(f"{'初至拾取已完成。' if _l == 'zh' else 'Phase picking completed.'}")
         lines.append(
             f"{'图表已保存至' if _l == 'zh' else 'Plot saved to'}：`{plot_path}`"
+        )
+        lines.append(
+            f"{'绘图道索引' if _l == 'zh' else 'Plotted trace index'}：{best_trace_idx}"
         )
         if csv_path:
             lines.append(

@@ -15,6 +15,7 @@ from quakecore_tools.conversion_tools import (
     convert_segy_to_hdf5,
     convert_segy_to_numpy,
 )
+from quakecore_tools.analysis_tools import run_analysis_sandbox
 from quakecore_tools.file_tools import (
     download_seismic_data,
     get_file_structure,
@@ -52,6 +53,7 @@ from quakecore_tools.waveform_tools import (
 )
 
 __all__ = [
+    "run_analysis_sandbox",
     "add_station_coordinates",
     "associate_continuous_events",
     "compress_hdf5_to_zfp",

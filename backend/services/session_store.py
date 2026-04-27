@@ -16,6 +16,7 @@ class AgentSession:
     skill_context: str = ""
     uploaded_files: list[str] = field(default_factory=list)
     current_file: str | None = None
+    runtime_results: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_active_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -89,6 +90,43 @@ class SessionStore:
                 return
             session.uploaded_files.clear()
             session.current_file = None
+            session.touch()
+
+    def set_runtime_result(self, session_id: str, key: str, value: Any) -> AgentSession:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = AgentSession(session_id=session_id)
+                self._sessions[session_id] = session
+            session.runtime_results[str(key)] = value
+            session.touch()
+            return session
+
+    def update_runtime_results(self, session_id: str, values: dict[str, Any]) -> AgentSession:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = AgentSession(session_id=session_id)
+                self._sessions[session_id] = session
+            for key, value in (values or {}).items():
+                session.runtime_results[str(key)] = value
+            session.touch()
+            return session
+
+    def get_runtime_results(self, session_id: str) -> dict[str, Any]:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return {}
+            session.touch()
+            return dict(session.runtime_results)
+
+    def clear_runtime_results(self, session_id: str) -> None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return
+            session.runtime_results.clear()
             session.touch()
 
 

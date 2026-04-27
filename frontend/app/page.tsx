@@ -94,6 +94,9 @@ function isContinuousMonitoringRequest(text: string): boolean {
   );
 }
 
+const ARTIFACT_PATH_PATTERN =
+  /(?:\/api\/artifacts\/[^\s`'"<>()，。；！？：:,]+|(?:\.?\/)?data\/[^\s`'"<>()，。；！？：:,]+)/gi;
+
 function basename(path: string): string {
   const cleaned = String(path || "").replace(/\\/g, "/");
   const parts = cleaned.split("/");
@@ -107,6 +110,83 @@ function stripUuidPrefix(name: string): string {
 function getArtifactDisplayName(artifact: ChatArtifact): string {
   const candidate = basename(artifact.name || artifact.path || artifact.url);
   return stripUuidPrefix(candidate);
+}
+
+function normalizeArtifactPath(raw: string): string {
+  let value = String(raw || "").trim().replace(/\\/g, "/");
+  value = value.replace(/^['"`]+|['"`]+$/g, "");
+  value = value.replace(/[，。；！？：:,]+$/g, "");
+  if (value.startsWith("/api/artifacts/")) {
+    value = value.slice("/api/artifacts/".length);
+  }
+  if (value.startsWith("./")) {
+    value = value.slice(2);
+  }
+  if (value.startsWith("/")) {
+    value = value.slice(1);
+  }
+  if (value.startsWith("data/")) {
+    value = value.slice(5);
+  } else if (value.includes("/data/")) {
+    value = value.split("/data/").pop() || value;
+  }
+  return value.replace(/^\/+/, "");
+}
+
+function inferArtifactTypeFromPath(path: string): "image" | "file" {
+  const lower = path.toLowerCase();
+  if (/\.(png|jpg|jpeg|gif|webp|svg)$/.test(lower)) {
+    return "image";
+  }
+  return "file";
+}
+
+function extractArtifactsFromText(content: string): ChatArtifact[] {
+  const text = String(content || "");
+  const matches = text.match(ARTIFACT_PATH_PATTERN) || [];
+  const artifacts: ChatArtifact[] = [];
+  const seen = new Set<string>();
+
+  for (const token of matches) {
+    const path = normalizeArtifactPath(token);
+    if (!path || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    artifacts.push({
+      type: inferArtifactTypeFromPath(path),
+      name: basename(path),
+      path,
+      url: `/api/artifacts/${path}`,
+    });
+  }
+  return artifacts;
+}
+
+function mergeArtifacts(primary: ChatArtifact[] | undefined, content: string): ChatArtifact[] {
+  const merged: ChatArtifact[] = [];
+  const seen = new Set<string>();
+  const fromPayload = Array.isArray(primary) ? primary : [];
+  const fromText = extractArtifactsFromText(content);
+
+  for (const item of [...fromPayload, ...fromText]) {
+    const path = normalizeArtifactPath(item.path || item.url || "");
+    if (!path) {
+      continue;
+    }
+    const url = `/api/artifacts/${path}`;
+    if (seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    merged.push({
+      type: item.type || inferArtifactTypeFromPath(path),
+      name: item.name || basename(path),
+      path,
+      url,
+    });
+  }
+  return merged;
 }
 
 function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
@@ -374,7 +454,10 @@ export default function HomePage() {
 
     const payload = result.result || {};
     const answer = String(payload.message || result.error || "连续监测完成。");
-    const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+    const artifacts = mergeArtifacts(
+      Array.isArray(payload.artifacts) ? payload.artifacts : [],
+      answer,
+    );
     const errorText = String(payload.error || result.error || "");
 
     setMessages((current) =>
@@ -481,6 +564,8 @@ export default function HomePage() {
       clearTimeout(timer);
 
       setSessionId(response.session_id);
+      const responseText = response.answer || response.error || "No response returned.";
+      const resolvedArtifacts = mergeArtifacts(response.artifacts, responseText);
       if (pendingShown) {
         setMessages((current) =>
           current.map((item) =>
@@ -488,9 +573,9 @@ export default function HomePage() {
               ? {
                   ...item,
                   pending: false,
-                  content: response.answer || response.error || "No response returned.",
+                  content: responseText,
                   route: response.route,
-                  artifacts: response.artifacts,
+                  artifacts: resolvedArtifacts,
                   error: response.error,
                   workflow: response.workflow ?? null,
                 }
@@ -503,9 +588,9 @@ export default function HomePage() {
           {
             id: newId(),
             role: "assistant",
-            content: response.answer || response.error || "No response returned.",
+            content: responseText,
             route: response.route,
-            artifacts: response.artifacts,
+            artifacts: resolvedArtifacts,
             error: response.error,
             workflow: response.workflow ?? null,
           },

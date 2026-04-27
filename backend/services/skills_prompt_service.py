@@ -20,13 +20,10 @@ class SkillsPromptService:
                 detail = self._skills_service.get_skill(item.name)
             except FileNotFoundError:
                 continue
-            first_line = ""
-            for line in detail["content"].splitlines():
-                stripped = line.strip()
-                if stripped:
-                    first_line = stripped
-                    break
-            summary = first_line or "No summary."
-            lines.append(f"- {item.name}: {summary}")
+            content = str(detail.get("content", "")).strip()
+            if not content:
+                continue
+            if len(content) > 2000:
+                content = content[:2000]
+            lines.append(f"## Skill: {item.name}\n{content}")
         return "\n".join(lines)
-

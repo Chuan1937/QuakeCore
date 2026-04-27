@@ -17,7 +17,36 @@ class ArtifactItem:
 
 class RouterService:
     _IMAGE_PATTERN = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
+    _PATH_PATTERN = re.compile(
+        r"(?P<path>(?:/api/artifacts/|\.?/)?data/[^\s`'\"<>()，。；！？：:,]+|/api/artifacts/[^\s`'\"<>()，。；！？：:,]+)",
+        re.IGNORECASE,
+    )
     _ROUTE_KEYWORDS = {
+        "result_explanation": (
+            "解释结果",
+            "解读结果",
+            "解释一下结果",
+            "结果说明",
+            "result explanation",
+            "explain the result",
+            "interpret result",
+            "interpret the result",
+        ),
+        "result_analysis": (
+            "看看第",
+            "第3个事件",
+            "第 3 个事件",
+            "统计",
+            "分布",
+            "直方图",
+            "scatter",
+            "histogram",
+            "magnitude distribution",
+            "depth distribution",
+            "事件筛选",
+            "筛选事件",
+            "分析结果",
+        ),
         "earthquake_location": (
             "定位",
             "locate",
@@ -115,6 +144,10 @@ class RouterService:
 
     def route_intent(self, message: str) -> str:
         text = str(message or "").lower()
+        if any(keyword in text for keyword in ("定位结果", "location result", "result of location", "解释结果", "解读结果")):
+            return "result_explanation"
+        if any(keyword in text for keyword in ("第3个事件", "第 3 个事件", "第三个事件", "magnitude distribution", "depth distribution")):
+            return "result_analysis"
         for route, keywords in self._ROUTE_KEYWORDS.items():
             if any(keyword in text for keyword in keywords):
                 return route
@@ -125,8 +158,16 @@ class RouterService:
     def extract_artifacts(self, answer: str) -> list[ArtifactItem]:
         artifacts: list[ArtifactItem] = []
         data_root = Path("data")
-        for match in self._IMAGE_PATTERN.findall(str(answer or "")):
-            source = match.strip().strip("'\"")
+        sources: list[tuple[str, str]] = []
+        text = str(answer or "")
+        for match in self._IMAGE_PATTERN.findall(text):
+            sources.append(("image", match))
+        for match in self._PATH_PATTERN.finditer(text):
+            sources.append(("auto", match.group("path")))
+
+        seen_paths: set[str] = set()
+        for hint_type, source_raw in sources:
+            source = str(source_raw).strip().strip("'\"`")
             if not source:
                 continue
             if source.startswith(("http://", "https://")):
@@ -141,15 +182,20 @@ class RouterService:
             if normalized.startswith("data/"):
                 normalized = normalized[5:]
             normalized = normalized.lstrip("/")
-            if not normalized:
+            if not normalized or normalized in seen_paths:
                 continue
+            seen_paths.add(normalized)
             resolved = self.resolve_artifact_path(data_root, normalized)
             if resolved is None or not resolved.is_file():
                 continue
+            suffix = resolved.suffix.lower()
+            artifact_type = hint_type
+            if artifact_type == "auto":
+                artifact_type = "image" if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"} else "file"
             name = Path(normalized).name
             artifacts.append(
                 ArtifactItem(
-                    type="image",
+                    type=artifact_type,
                     url=f"/api/artifacts/{normalized}",
                     name=name,
                     path=normalized,

@@ -10,6 +10,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 
 from backend.schemas import LocationWorkflowRunRequest
+from backend.services.session_store import get_session_store
 from backend.workflows.continuous_jobs import (
     create_continuous_job,
     fail_continuous_job,
@@ -122,7 +123,70 @@ def _normalize_continuous_result(raw: object) -> dict:
     return {"success": False, "message": str(raw), "error": str(raw)}
 
 
-def _run_continuous_job(job_id: str, params: dict, lang: str | None) -> None:
+def _to_runtime_path(value: str | None) -> str:
+    normalized = str(value or "").replace("\\", "/").strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized.startswith("/api/artifacts/"):
+        normalized = normalized[len("/api/artifacts/"):]
+    if normalized.startswith("data/"):
+        normalized = normalized[5:]
+    return normalized.lstrip("/")
+
+
+def _persist_continuous_runtime_results(session_id: str, result: dict) -> None:
+    if not session_id or not isinstance(result, dict):
+        return
+    payload = result.get("data")
+    if not isinstance(payload, dict):
+        payload = {}
+    artifacts = result.get("artifacts")
+    if not isinstance(artifacts, list):
+        artifacts = []
+
+    updates: dict[str, object] = {
+        "last_route": "continuous_monitoring",
+        "last_continuous_monitoring": payload,
+    }
+
+    for key, target in (
+        ("catalog_csv", "last_catalog_csv"),
+        ("catalog_json", "last_catalog_json"),
+        ("location_map", "last_location_image"),
+        ("location_3view", "last_location_image"),
+        ("catalog_3view", "last_location_image"),
+    ):
+        path = _to_runtime_path(payload.get(key))
+        if path:
+            updates[target] = path
+
+    runtime_artifacts = []
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        path = _to_runtime_path(item.get("path") or item.get("url"))
+        url = str(item.get("url", "") or "").strip()
+        if not url:
+            continue
+        runtime_artifacts.append(
+            {
+                "type": str(item.get("type", "file") or "file"),
+                "name": str(item.get("name", "") or ""),
+                "path": path,
+                "url": url,
+            }
+        )
+    if runtime_artifacts:
+        updates["last_artifacts"] = runtime_artifacts
+
+    if not updates:
+        return
+    get_session_store().update_runtime_results(session_id, updates)
+
+
+def _run_continuous_job(job_id: str, session_id: str, params: dict, lang: str | None) -> None:
     try:
         from agent.tools import set_current_lang
 
@@ -140,6 +204,7 @@ def _run_continuous_job(job_id: str, params: dict, lang: str | None) -> None:
             # Defensive retry: call tool with stringified params if wrapper parsing mismatches.
             retry_raw = run_continuous_monitoring.invoke({"params": json.dumps(payload, ensure_ascii=False)})
             result = _normalize_continuous_result(retry_raw)
+        _persist_continuous_runtime_results(session_id, result)
         failed = bool(result.get("error")) or result.get("success") is False
         finish_continuous_job(job_id, result, failed=failed)
     except Exception as exc:
@@ -156,7 +221,7 @@ def start_continuous_workflow(payload: dict):
     job_id = uuid4().hex
 
     create_continuous_job(job_id, session_id=session_id, message=message)
-    worker = Thread(target=_run_continuous_job, args=(job_id, params, lang), daemon=True)
+    worker = Thread(target=_run_continuous_job, args=(job_id, session_id, params, lang), daemon=True)
     worker.start()
     return {"job_id": job_id, "session_id": session_id, "status": "running"}
 

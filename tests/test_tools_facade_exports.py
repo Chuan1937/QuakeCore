@@ -2,6 +2,7 @@ import importlib
 
 
 EXPECTED_TOOLS = [
+    "run_analysis_sandbox",
     "add_station_coordinates",
     "associate_continuous_events",
     "compress_hdf5_to_zfp",

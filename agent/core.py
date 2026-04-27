@@ -7,6 +7,7 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from agent.tools_facade import (
+    run_analysis_sandbox,
     get_loaded_context, load_local_data, download_seismic_data,
     get_file_structure,
     read_file_trace,
@@ -96,6 +97,7 @@ def get_agent_executor(
 
     tools = [
         get_loaded_context, load_local_data, download_seismic_data,
+        run_analysis_sandbox,
         get_file_structure,
         read_file_trace,
         get_hdf5_keys,
@@ -172,6 +174,7 @@ Important rules:
 - For "read trace X", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
 - If the user asks to "plot" or "draw" the waveform while reading, set `plot=True` in the read tool arguments.
 - Plotting IS supported; never tell the user that the system cannot draw waveforms.
+- If the user asks to view picks for a specific trace (e.g., "trace 3 picks"), prefer `pick_first_arrivals` with `trace_number` (1-based) instead of plain read/plot tools.
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
@@ -250,6 +253,7 @@ Important rules:
 - For "读取第X条轨迹", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
 - If the user asks to "plot" or "draw" the waveform while reading, set `plot=True` in the read tool arguments.
 - Plotting IS supported; never tell the user that the system cannot draw waveforms.
+- 当用户要求“查看某个 trace 的拾取结果”（如“trace 3 的拾取”）时，优先调用 `pick_first_arrivals` 并传 `trace_number`（1 基），不要只用 read/plot 工具。
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
@@ -319,5 +323,6 @@ Thought:{agent_scratchpad}'''
         handle_parsing_errors=True,
         return_intermediate_steps=True,
         max_iterations=6,
-        early_stopping_method="generate",
+        # LangChain Classic compatibility: some versions only support "force".
+        early_stopping_method="force",
     )
