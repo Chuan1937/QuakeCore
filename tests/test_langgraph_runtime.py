@@ -125,3 +125,31 @@ def test_langgraph_runtime_result_analysis_falls_back_to_code(monkeypatch):
     params = captured["payload"]["params"]
     assert params["allow_code"] is True
     assert "code" in params
+
+
+def test_langgraph_runtime_trace_pick_analysis_uses_picks_template(monkeypatch):
+    runtime = LangGraphRuntime(enabled=True)
+    captured = {}
+
+    class _DummySandbox:
+        def invoke(self, payload):
+            captured["payload"] = payload
+            return json.dumps(
+                {"success": True, "message": "trace-ok", "data": {}, "artifacts": []},
+                ensure_ascii=False,
+            )
+
+    monkeypatch.setattr("backend.services.langgraph_runtime.run_analysis_sandbox", _DummySandbox())
+    message = (
+        "看看 trace 3 的拾取结果\n\n"
+        "【当前会话已有结果上下文】\n"
+        + json.dumps({"last_picks_csv": "picks/a.csv"}, ensure_ascii=False)
+    )
+    result = runtime.invoke(session_id="sid-trace", message=message, lang="zh", fallback_agent=_DummyAgent())
+    normalized = normalize_tool_output(result)
+
+    assert normalized.success is True
+    params = captured["payload"]["params"]
+    assert params["template"] == "picks_trace_detail"
+    assert params["trace_index"] == 3
+    assert params["input_artifact_key"] == "last_picks_csv"

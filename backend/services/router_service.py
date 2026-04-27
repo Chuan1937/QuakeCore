@@ -36,6 +36,7 @@ class RouterService:
             "看看第",
             "第3个事件",
             "第 3 个事件",
+            "第三个事件",
             "统计",
             "分布",
             "直方图",
@@ -46,6 +47,23 @@ class RouterService:
             "事件筛选",
             "筛选事件",
             "分析结果",
+            "画一下",
+            "绘制",
+            "重新画",
+            "做个图",
+            "做一张图",
+            "统计一下",
+            "平均",
+            "中位数",
+            "最大值",
+            "最小值",
+            "趋势",
+            "相关性",
+            "对比",
+            "筛选",
+            "导出",
+            "第3道",
+            "第 3 道",
         ),
         "earthquake_location": (
             "定位",
@@ -144,9 +162,16 @@ class RouterService:
 
     def route_intent(self, message: str) -> str:
         text = str(message or "").lower()
-        if any(keyword in text for keyword in ("定位结果", "location result", "result of location", "解释结果", "解读结果")):
+        if any(keyword in text for keyword in ("重新定位", "重新做定位", "进行定位", "定位这个文件", "重新 locate")):
+            return "earthquake_location"
+        if any(keyword in text for keyword in ("定位结果", "location result", "result of location", "解释结果", "解读结果", "监测结果")):
             return "result_explanation"
-        if any(keyword in text for keyword in ("第3个事件", "第 3 个事件", "第三个事件", "magnitude distribution", "depth distribution")):
+        if any(token in text for token in ("trace", "轨迹", "道")) and any(token in text for token in ("pick", "phase", "拾取", "震相")):
+            return "result_analysis"
+        if any(keyword in text for keyword in (
+            "第3个事件", "第 3 个事件", "第三个事件", "magnitude distribution", "depth distribution",
+            "画一下", "绘制", "做个图", "统计一下", "直方图", "分布", "筛选", "平均", "中位数", "相关性",
+        )):
             return "result_analysis"
         for route, keywords in self._ROUTE_KEYWORDS.items():
             if any(keyword in text for keyword in keywords):

@@ -5,9 +5,10 @@ from __future__ import annotations
 import ast
 import csv
 import json
+import multiprocessing as mp
 import os
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -159,7 +160,18 @@ def _validate_restricted_code(source: str) -> str | None:
     except SyntaxError as exc:
         return f"Code syntax error: {exc}"
 
-    blocked_nodes = (ast.Import, ast.ImportFrom, ast.With, ast.Try, ast.Raise, ast.ClassDef, ast.Lambda, ast.Global, ast.Nonlocal)
+    blocked_nodes = (
+        ast.Import,
+        ast.ImportFrom,
+        ast.With,
+        ast.Try,
+        ast.Raise,
+        ast.ClassDef,
+        ast.Lambda,
+        ast.Global,
+        ast.Nonlocal,
+        ast.While,
+    )
     for node in ast.walk(tree):
         if isinstance(node, blocked_nodes):
             return f"Blocked syntax in code: {type(node).__name__}"
@@ -196,7 +208,7 @@ def _run_restricted_code(
     message_holder = {"message": "Analysis code executed."}
 
     def save_csv(name: str, table: list[dict[str, Any]] | list[list[Any]] | dict[str, Any]) -> str:
-        filename = str(name or "").strip() or f"analysis_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        filename = str(name or "").strip() or f"analysis_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
         if not filename.lower().endswith(".csv"):
             filename += ".csv"
         out = (output_dir / filename).resolve()
@@ -309,6 +321,51 @@ def _run_restricted_code(
     return _result(True, message_holder["message"], data=data, artifacts=artifacts)
 
 
+def _restricted_code_worker(payload: dict[str, Any], queue: Any) -> None:
+    try:
+        result = _run_restricted_code(
+            code=str(payload["code"]),
+            rows=list(payload["rows"]),
+            columns=list(payload["columns"]),
+            input_path=Path(str(payload["input_path"])),
+            output_dir=Path(str(payload["output_dir"])),
+        )
+    except Exception as exc:
+        result = _result(False, f"Code worker failed: {exc}")
+    queue.put(result)
+
+
+def _run_restricted_code_with_timeout(
+    *,
+    code: str,
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    input_path: Path,
+    output_dir: Path,
+    timeout_seconds: int = 8,
+) -> str:
+    ctx = mp.get_context("spawn")
+    queue = ctx.Queue(maxsize=1)
+    payload = {
+        "code": code,
+        "rows": rows[:20000],
+        "columns": columns,
+        "input_path": str(input_path),
+        "output_dir": str(output_dir),
+    }
+    proc = ctx.Process(target=_restricted_code_worker, args=(payload, queue))
+    proc.start()
+    proc.join(timeout_seconds)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(2)
+        return _result(False, f"Analysis code timed out after {timeout_seconds}s.")
+    try:
+        return queue.get_nowait()
+    except Exception:
+        return _result(False, "Analysis code finished without result.")
+
+
 @tool
 def run_analysis_sandbox(params: str | dict | None = None):
     """
@@ -317,9 +374,11 @@ def run_analysis_sandbox(params: str | dict | None = None):
     Params:
       - template: picks_summary | picks_by_station | catalog_magnitude_hist |
                   catalog_depth_hist | catalog_time_series |
-                  catalog_mag_depth_scatter | catalog_event_index
+                  catalog_mag_depth_scatter | catalog_event_index |
+                  picks_trace_detail
       - code: optional restricted Python snippet for custom analysis (disabled by default)
       - allow_code: true/false override to enable code mode in this call
+      - timeout_seconds: code mode timeout in seconds, default 8, max 30
       - input_artifact_key: runtime key such as last_picks_csv / last_catalog_csv
       - input_path: explicit path (relative to repo or data/)
       - session_id: required when using input_artifact_key
@@ -346,19 +405,78 @@ def run_analysis_sandbox(params: str | dict | None = None):
     if code:
         if not _code_execution_enabled(parsed):
             return _result(
-                True,
+                False,
                 "Code mode is disabled. Set allow_code=true (or QUAKECORE_ANALYSIS_ALLOW_CODE=1) to enable.",
             )
-        return _run_restricted_code(
+        timeout_seconds = int(parsed.get("timeout_seconds", 8) or 8)
+        timeout_seconds = max(2, min(timeout_seconds, 30))
+        return _run_restricted_code_with_timeout(
             code=code,
             rows=rows,
             columns=columns,
             input_path=input_path,
             output_dir=output_dir,
+            timeout_seconds=timeout_seconds,
         )
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     artifacts: list[dict[str, str]] = []
+
+    if template == "picks_trace_detail":
+        raw_trace_index = parsed.get("trace_index")
+        raw_trace_number = parsed.get("trace_number")
+        if raw_trace_index is not None:
+            try:
+                trace_index = int(raw_trace_index)
+            except Exception:
+                trace_index = 0
+        elif raw_trace_number is not None:
+            try:
+                trace_index = max(0, int(raw_trace_number) - 1)
+            except Exception:
+                trace_index = 0
+        else:
+            trace_index = 0
+
+        trace_col = _find_column(columns, ["trace_index", "trace", "trace_id", "index"])
+        if not trace_col:
+            return _result(False, "Trace index column not found.")
+
+        selected: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                value = int(float(row.get(trace_col, -1)))
+            except Exception:
+                continue
+            if value == trace_index:
+                selected.append(row)
+
+        if not selected:
+            return _result(False, f"No picks found for trace {trace_index}.")
+
+        output_csv = output_dir / f"trace_{trace_index}_picks_{timestamp}.csv"
+        with output_csv.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            writer.writeheader()
+            for row in selected:
+                writer.writerow(row)
+        artifacts.append(_artifact(output_csv, "file"))
+        phase_col = _find_column(columns, ["phase", "phase_type"])
+        method_col = _find_column(columns, ["method", "pick_method"])
+        score_col = _find_column(columns, ["score", "probability", "confidence", "normalized_score"])
+        return _result(
+            True,
+            f"Trace {trace_index} has {len(selected)} picks.",
+            data={
+                "trace_index": trace_index,
+                "pick_count": len(selected),
+                "rows": selected[:20],
+                "phase_column": phase_col,
+                "method_column": method_col,
+                "score_column": score_col,
+            },
+            artifacts=artifacts,
+        )
 
     if template == "picks_summary":
         phase_col = _find_column(columns, ["phase", "phase_type", "type"])

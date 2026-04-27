@@ -125,6 +125,7 @@ def test_agent_service_trace_pick_fast_path_skips_react(monkeypatch):
         return AgentSession(session_id=session_id, lang=lang, agent=_ShouldNotRunAgent())
 
     monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+    monkeypatch.setattr(service, "_summarize_direct_tool_result", lambda **_: "summary")
     monkeypatch.setattr(
         "backend.services.agent_service.pick_first_arrivals",
         type(
@@ -152,7 +153,8 @@ def test_agent_service_trace_pick_fast_path_skips_react(monkeypatch):
 
     result = service.chat("查看 trace 1 的拾取结果", session_id="sid-fast", lang="zh")
     assert result.error is None
-    assert result.route == "phase_picking"
+    assert result.route == "result_analysis"
+    assert result.answer == "summary"
     assert result.artifacts and result.artifacts[0].url == "/api/artifacts/picks/demo.png"
 
 
@@ -168,6 +170,7 @@ def test_agent_service_file_structure_fast_path(monkeypatch):
         return AgentSession(session_id=session_id, lang=lang, agent=_ShouldNotRunAgent())
 
     monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+    monkeypatch.setattr(service, "_summarize_direct_tool_result", lambda **_: "summary-struct")
     monkeypatch.setattr(
         "backend.services.agent_service.get_file_structure",
         type("_DummyTool", (), {"invoke": staticmethod(lambda _payload: "{\"type\":\"miniseed\"}")}),
@@ -176,4 +179,50 @@ def test_agent_service_file_structure_fast_path(monkeypatch):
     result = service.chat("读取当前文件结构", session_id="sid-struct", lang="zh")
     assert result.error is None
     assert result.route == "file_structure"
-    assert "miniseed" in result.answer
+    assert result.answer == "summary-struct"
+
+
+def test_agent_service_format_conversion_fast_path(monkeypatch):
+    store = SessionStore()
+    store.add_file("sid-conv", "/tmp/demo.mseed")
+    store.set_current_file("sid-conv", "/tmp/demo.mseed")
+    service = AgentService(session_store=store)
+
+    class _ShouldNotRunAgent:
+        def invoke(self, _payload):
+            raise AssertionError("ReAct agent should not be invoked for conversion fast path")
+
+    def _fake_build_agent_session(session_id: str, lang: str) -> AgentSession:
+        return AgentSession(session_id=session_id, lang=lang, agent=_ShouldNotRunAgent())
+
+    monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+    monkeypatch.setattr(service, "_summarize_direct_tool_result", lambda **_: "summary-convert")
+    monkeypatch.setattr(
+        "backend.services.agent_service.convert_miniseed_to_hdf5",
+        type(
+            "_DummyTool",
+            (),
+            {
+                "invoke": staticmethod(
+                    lambda _payload: {
+                        "success": True,
+                        "message": "converted",
+                        "artifacts": [
+                            {
+                                "type": "file",
+                                "name": "demo.h5",
+                                "path": "convert/demo.h5",
+                                "url": "/api/artifacts/convert/demo.h5",
+                            }
+                        ],
+                    }
+                )
+            },
+        ),
+    )
+
+    result = service.chat("把这个文件转换成 hdf5", session_id="sid-conv", lang="zh")
+    assert result.error is None
+    assert result.route == "format_conversion"
+    assert result.answer == "summary-convert"
+    assert result.artifacts and result.artifacts[0].url == "/api/artifacts/convert/demo.h5"

@@ -54,8 +54,27 @@ class LangGraphRuntime:
         return 1
 
     @staticmethod
+    def _extract_trace_selector(message: str) -> dict[str, int]:
+        text = str(message or "")
+        zh_match = re.search(r"第\s*(\d+)\s*(?:条|个)?\s*(?:trace|轨迹|道)", text, flags=re.IGNORECASE)
+        if zh_match:
+            try:
+                return {"trace_index": max(0, int(zh_match.group(1)) - 1)}
+            except Exception:
+                return {"trace_index": 0}
+        en_match = re.search(r"trace\s*#?\s*(\d+)", text, flags=re.IGNORECASE)
+        if en_match:
+            try:
+                return {"trace_index": max(0, int(en_match.group(1)))}
+            except Exception:
+                return {"trace_index": 0}
+        return {"trace_index": 0}
+
+    @staticmethod
     def _select_template(message: str, route: str) -> str:
         text = str(message or "").lower()
+        if ("trace" in text or "轨迹" in text or "道" in text) and ("拾取" in text or "pick" in text):
+            return "picks_trace_detail"
         if "第3个事件" in text or "第 3 个事件" in text or "第三个事件" in text or "event" in text and "#" in text:
             return "catalog_event_index"
         if "p/s" in text or "p 波" in text or "s 波" in text:
@@ -95,7 +114,7 @@ class LangGraphRuntime:
     @staticmethod
     def _code_input_key(message: str, runtime_results: dict[str, Any]) -> str:
         text = str(message or "").lower()
-        if any(token in text for token in ("p波", "s波", "pick", "phase", "台站", "station")):
+        if any(token in text for token in ("p波", "s波", "pick", "phase", "台站", "station", "trace", "轨迹", "道")):
             if runtime_results.get("last_picks_csv"):
                 return "last_picks_csv"
         if runtime_results.get("last_catalog_csv"):
@@ -194,6 +213,8 @@ class LangGraphRuntime:
         }
         if template == "catalog_event_index":
             params["event_index"] = LangGraphRuntime._extract_event_index(message)
+        if template == "picks_trace_detail":
+            params.update(LangGraphRuntime._extract_trace_selector(message))
         raw = run_analysis_sandbox.invoke({"params": params})
         return LangGraphRuntime._decode_payload(raw)
 
@@ -206,36 +227,56 @@ class LangGraphRuntime:
         lang: str,
     ) -> dict[str, Any]:
         input_key = self._code_input_key(message, runtime_results)
-        code = self._generate_analysis_code(
-            message=message,
-            runtime_results=runtime_results,
-            input_key=input_key,
-            lang=lang,
-        )
-        if not code:
-            return {
-                "success": False,
-                "message": "Code generation returned empty result.",
-                "error": "empty_generated_code",
-            }
-        raw = run_analysis_sandbox.invoke(
-            {
-                "params": {
-                    "session_id": session_id,
-                    "input_artifact_key": input_key,
-                    "allow_code": True,
-                    "code": code,
+        last_error = ""
+        generated_code = ""
+        for _attempt in range(2):
+            prompt_message = message
+            if last_error:
+                prompt_message = (
+                    f"{message}\n\n"
+                    f"上一次生成代码执行失败，错误如下：{last_error}\n"
+                    "请修复代码。"
+                )
+            generated_code = self._generate_analysis_code(
+                message=prompt_message,
+                runtime_results=runtime_results,
+                input_key=input_key,
+                lang=lang,
+            )
+            if not generated_code:
+                last_error = "empty_generated_code"
+                continue
+            raw = run_analysis_sandbox.invoke(
+                {
+                    "params": {
+                        "session_id": session_id,
+                        "input_artifact_key": input_key,
+                        "allow_code": True,
+                        "code": generated_code,
+                        "timeout_seconds": 8,
+                    }
                 }
-            }
-        )
-        payload = self._decode_payload(raw)
-        if isinstance(payload, dict):
-            data = payload.get("data")
-            if not isinstance(data, dict):
-                data = {}
-            data["generated_code"] = code
-            payload["data"] = data
-        return payload
+            )
+            payload = self._decode_payload(raw)
+            if payload.get("success") is True:
+                data = payload.get("data")
+                if not isinstance(data, dict):
+                    data = {}
+                data["generated_code"] = generated_code
+                data["input_key"] = input_key
+                payload["data"] = data
+                return payload
+            last_error = str(payload.get("error") or payload.get("message") or "unknown_error")
+        return {
+            "success": False,
+            "message": f"黑箱分析失败：{last_error}",
+            "error": last_error,
+            "data": {
+                "generated_code": generated_code,
+                "input_key": input_key,
+            },
+            "artifacts": [],
+        }
 
     @staticmethod
     def _build_explanation_payload(runtime_results: dict[str, Any], lang: str) -> dict[str, Any]:

@@ -6,9 +6,12 @@ def test_route_intent_covers_expected_routes():
 
     cases = {
         "请帮我定位这个事件": "earthquake_location",
+        "请重新定位这个文件": "earthquake_location",
         "Help me locate the earthquake": "earthquake_location",
         "解释一下定位结果": "result_explanation",
         "看看第3个事件": "result_analysis",
+        "看看 trace 3 的拾取结果": "result_analysis",
+        "画一下震级分布": "result_analysis",
         "对当前波形做 phase picking": "phase_picking",
         "请对当前波形做初至拾取": "phase_picking",
         "读取当前文件结构": "file_structure",

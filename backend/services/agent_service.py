@@ -12,7 +12,23 @@ from uuid import uuid4
 
 from agent.core import get_agent_executor
 from agent.tools import set_current_lang
-from agent.tools_facade import get_file_structure, pick_first_arrivals, plot_location_map, read_file_trace
+from agent.tools_facade import (
+    convert_hdf5_to_excel,
+    convert_hdf5_to_numpy,
+    convert_miniseed_to_hdf5,
+    convert_miniseed_to_numpy,
+    convert_miniseed_to_sac,
+    convert_sac_to_hdf5,
+    convert_sac_to_miniseed,
+    convert_sac_to_numpy,
+    convert_segy_to_excel,
+    convert_segy_to_hdf5,
+    convert_segy_to_numpy,
+    get_file_structure,
+    pick_first_arrivals,
+    plot_location_map,
+    read_file_trace,
+)
 from backend.services.config_service import ConfigService
 from backend.services.file_service import FileService, bind_uploaded_file_to_agent
 from backend.services.langgraph_runtime import LangGraphRuntime
@@ -258,7 +274,7 @@ class AgentService:
 
     @staticmethod
     def _is_trace_pick_request(message: str, route: str) -> bool:
-        if route != "phase_picking":
+        if route not in {"phase_picking", "result_analysis"}:
             return False
         text = str(message or "").lower()
         has_trace = any(token in text for token in ("trace", "轨迹", "道", "第"))
@@ -289,7 +305,13 @@ class AgentService:
         )
         return ChatResult(
             session_id=session_id,
-            answer=self._clean_public_answer(normalized.message, route),
+            answer=self._summarize_direct_tool_result(
+                message=message,
+                route=route,
+                normalized=normalized,
+                artifacts=artifacts,
+                lang="zh",
+            ),
             error=normalized.error,
             route=route,
             artifacts=artifacts,
@@ -340,6 +362,107 @@ class AgentService:
             return tool_obj(payload)
         raise TypeError(f"Unsupported direct tool object: {tool_obj!r}")
 
+    def _summarize_direct_tool_result(
+        self,
+        *,
+        message: str,
+        route: str,
+        normalized: NormalizedToolResult,
+        artifacts: list[ArtifactItem],
+        lang: str,
+    ) -> str:
+        raw_text = normalized.message or ""
+        data = normalized.data or {}
+        if not raw_text and data:
+            try:
+                raw_text = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+            except Exception:
+                raw_text = str(data)
+        raw_text = raw_text[:8000]
+        artifact_brief = [
+            {"type": item.type, "name": item.name, "path": item.path}
+            for item in artifacts
+        ]
+        prompt = (
+            "你是 QuakeCore 的结果总结器。你不能调用工具，只能根据给定工具结果生成简洁中文回答。\n"
+            "要求：\n"
+            "1. 不要编造结果。\n"
+            "2. 不要重复长路径。\n"
+            "3. 不要把图片 markdown 写进正文，因为前端会单独显示 artifact。\n"
+            "4. 如果有 CSV/PNG/HDF5 等 artifact，只在文字里简要说明结果文件已生成。\n"
+            "5. 回答适合聊天窗口展示，优先总结关键结论。\n\n"
+            f"用户问题：{message}\n"
+            f"路由：{route}\n"
+            f"工具原始结果：\n{raw_text}\n\n"
+            f"artifacts：{json.dumps(artifact_brief, ensure_ascii=False)}\n"
+        )
+        try:
+            from agent.core import _build_llm
+
+            llm_config = self._config_service.get_llm_config()
+            llm = _build_llm(
+                provider=llm_config.get("provider", "deepseek"),
+                model_name=llm_config.get("model_name", "deepseek-v4-flash"),
+                api_key=llm_config.get("api_key") or os.getenv("DEEPSEEK_API_KEY"),
+                base_url=llm_config.get("base_url"),
+                streaming=False,
+            )
+            out = llm.invoke(prompt)
+            content = getattr(out, "content", out)
+            return self._clean_public_answer(str(content or raw_text), route)
+        except Exception:
+            return self._clean_public_answer(raw_text, route)
+
+    def _select_conversion_tool(self, message: str, session_id: str) -> tuple[Any | None, dict[str, Any] | None]:
+        text = str(message or "").lower()
+        current_file = self._sessions.get_current_file(session_id)
+        uploaded = self._sessions.get_uploaded_files(session_id)
+        path = current_file or (uploaded[-1] if uploaded else None)
+        if not path:
+            return None, None
+
+        suffix = Path(path).suffix.lower()
+        target = None
+        if any(k in text for k in ("hdf5", "h5")):
+            target = "hdf5"
+        elif any(k in text for k in ("numpy", "npy")):
+            target = "numpy"
+        elif any(k in text for k in ("excel", "xlsx")):
+            target = "excel"
+        elif "sac" in text:
+            target = "sac"
+        elif "miniseed" in text or "mseed" in text:
+            target = "miniseed"
+
+        payload = {"params": {"path": path}}
+        if suffix in {".mseed", ".miniseed"}:
+            if target == "hdf5":
+                return convert_miniseed_to_hdf5, payload
+            if target == "numpy":
+                return convert_miniseed_to_numpy, payload
+            if target == "sac":
+                return convert_miniseed_to_sac, payload
+        if suffix == ".sac":
+            if target == "hdf5":
+                return convert_sac_to_hdf5, payload
+            if target == "numpy":
+                return convert_sac_to_numpy, payload
+            if target == "miniseed":
+                return convert_sac_to_miniseed, payload
+        if suffix in {".segy", ".sgy"}:
+            if target == "hdf5":
+                return convert_segy_to_hdf5, payload
+            if target == "numpy":
+                return convert_segy_to_numpy, payload
+            if target == "excel":
+                return convert_segy_to_excel, payload
+        if suffix in {".h5", ".hdf5"}:
+            if target == "numpy":
+                return convert_hdf5_to_numpy, payload
+            if target == "excel":
+                return convert_hdf5_to_excel, payload
+        return None, None
+
     def _try_fast_path_deterministic(
         self,
         *,
@@ -372,6 +495,10 @@ class AgentService:
         elif route == "map_plotting":
             tool_obj = plot_location_map
             payload = {"params": {}}
+        elif route == "format_conversion":
+            tool_obj, payload = self._select_conversion_tool(message, session_id)
+            if tool_obj is None:
+                return None
         else:
             return None
 
@@ -381,19 +508,19 @@ class AgentService:
             return None
         normalized = normalize_tool_output(raw)
         artifacts = self._build_chat_artifacts(normalized)
-        answer = normalized.message
-        if not answer and normalized.data:
-            try:
-                answer = json.dumps(normalized.data, ensure_ascii=False, indent=2)
-            except Exception:
-                answer = str(normalized.data)
         self._persist_runtime_updates(
             session_id,
             self._extract_runtime_updates(route=route, data=normalized.data, artifacts=artifacts),
         )
         return ChatResult(
             session_id=session_id,
-            answer=self._clean_public_answer(answer, route),
+            answer=self._summarize_direct_tool_result(
+                message=message,
+                route=route,
+                normalized=normalized,
+                artifacts=artifacts,
+                lang="zh",
+            ),
             error=normalized.error,
             route=route,
             artifacts=artifacts,
