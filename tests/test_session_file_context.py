@@ -252,6 +252,77 @@ def test_agent_service_bootstraps_pick_for_picks_analysis_without_runtime_csv(mo
     runtime = store.get_runtime_results("sid-bootstrap")
     assert runtime.get("last_picks_csv") == "picks/demo.csv"
     assert runtime.get("last_picks_image") == "picks/demo.png"
+    assert runtime.get("last_picks_source_file") == "tmp/demo.mseed"
+
+
+def test_agent_service_bootstraps_pick_when_picks_source_mismatch(monkeypatch):
+    store = SessionStore()
+    store.add_file("sid-mismatch", "/tmp/new.mseed")
+    store.set_current_file("sid-mismatch", "/tmp/new.mseed")
+    store.update_runtime_results(
+        "sid-mismatch",
+        {
+            "last_picks_csv": "picks/old.csv",
+            "last_picks_source_file": "tmp/old.mseed",
+        },
+    )
+    service = AgentService(session_store=store)
+
+    class _ShouldNotRunAgent:
+        def invoke(self, _payload):
+            raise AssertionError("ReAct agent should not be invoked for mismatch bootstrap")
+
+    def _fake_build_agent_session(session_id: str, lang: str) -> AgentSession:
+        return AgentSession(session_id=session_id, lang=lang, agent=_ShouldNotRunAgent())
+
+    monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+    monkeypatch.setattr(service, "_summarize_direct_tool_result", lambda **_: "summary-mismatch")
+    monkeypatch.setattr(
+        service._tool_planner,
+        "plan",
+        lambda **_: type(
+            "P",
+            (),
+            {
+                "route": "result_analysis",
+                "tool": "picks_trace_plot",
+                "params": {"trace_index": 1},
+                "need_rerun": False,
+                "confidence": 0.9,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "backend.services.agent_service.pick_first_arrivals",
+        type(
+            "_DummyTool",
+            (),
+            {
+                "invoke": staticmethod(
+                    lambda payload: {
+                        "success": True,
+                        "message": "初至拾取已完成。",
+                        "artifacts": [
+                            {
+                                "type": "file",
+                                "name": "new.csv",
+                                "path": "picks/new.csv",
+                                "url": "/api/artifacts/picks/new.csv",
+                            }
+                        ],
+                        "data": {"picks_csv": "picks/new.csv"},
+                    }
+                )
+            },
+        ),
+    )
+
+    result = service.chat("看看第二道拾取的结果图", session_id="sid-mismatch", lang="zh")
+    assert result.error is None
+    assert result.answer == "summary-mismatch"
+    runtime = store.get_runtime_results("sid-mismatch")
+    assert runtime.get("last_picks_csv") == "picks/new.csv"
+    assert runtime.get("last_picks_source_file") == "tmp/new.mseed"
 
 
 def test_agent_service_file_structure_fast_path(monkeypatch):

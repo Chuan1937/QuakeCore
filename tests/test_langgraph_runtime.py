@@ -171,7 +171,7 @@ def test_langgraph_runtime_trace_pick_plot_analysis_uses_plot_template(monkeypat
             )
 
     monkeypatch.setattr("backend.services.langgraph_runtime.run_analysis_sandbox", _DummySandbox())
-    monkeypatch.setattr(runtime, "_generate_analysis_code", lambda **_: "")
+    monkeypatch.setattr(runtime, "_generate_analysis_code", lambda **_: "set_message('trace-plot-ok')")
     message = (
         "看看 trace 3 的拾取结果图\n\n"
         "【当前会话已有结果上下文】\n"
@@ -182,8 +182,9 @@ def test_langgraph_runtime_trace_pick_plot_analysis_uses_plot_template(monkeypat
 
     assert normalized.success is True
     params = captured["payload"]["params"]
-    assert params["template"] == "picks_trace_plot"
-    assert params["trace_index"] == 3
+    assert params["allow_code"] is True
+    assert "code" in params
+    assert params["input_artifact_key"] == "last_picks_csv"
 
 
 def test_langgraph_runtime_result_analysis_fallbacks_to_template_when_code_fails(monkeypatch):

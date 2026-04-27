@@ -77,13 +77,13 @@ class LangGraphRuntime:
         return None
 
     @staticmethod
-    def _select_template(message: str, route: str) -> str:
+    def _select_fallback_template(message: str, route: str) -> str:
         text = str(message or "").lower()
 
-        # Trace-specific picks detail takes priority over generic image display
+        # Fallback only: image-class trace pick requests should stay code-first.
         if ("trace" in text or "轨迹" in text or "道" in text) and ("拾取" in text or "pick" in text):
             if any(token in text for token in ("图", "图像", "图片", "plot", "image")):
-                return "picks_trace_plot"
+                return ""
             return "picks_trace_detail"
 
         if any(k in text for k in ("图像", "图", "图片", "plot", "image")) and any(
@@ -173,6 +173,7 @@ class LangGraphRuntime:
             return (
                 "你是 QuakeCore 的受限 Python 黑箱分析器。只输出 Python 代码，不要 markdown，不要解释。\n"
                 "目标：基于当前会话已有结果做小分析、小统计、小绘图或结果解释。\n"
+                "你需要像数据分析师一样自行决策读取哪些数据与如何绘图，不要套固定模板。\n"
                 "不要重新运行完整 workflow。\n\n"
                 "默认输入：\n"
                 "- rows: list[dict]，来自 input_artifact_key 对应 CSV\n"
@@ -191,8 +192,9 @@ class LangGraphRuntime:
                 "强规则：\n"
                 "1) 中文“第N道”表示 trace_index=N-1；英文 trace N 表示 trace_index=N。\n"
                 "2) 用户要求某道拾取图像时，应画 waveform 并用竖线标出 P/S 到时，不要只画 sample-score 散点图。\n"
-                "3) 图像必须 save_plot，表格必须 save_csv，且必须 set_message。\n"
-                "4) 禁止 import、open、exec、eval、网络与系统调用。\n"
+                "3) 用户问题与默认 rows 不匹配时，主动 read_csv/read_json/read_waveform 读取更合适的 runtime key。\n"
+                "4) 图像必须 save_plot，表格必须 save_csv，且必须 set_message。\n"
+                "5) 禁止 import、open、exec、eval、网络与系统调用。\n"
                 "输出要求：\n"
                 "1) 至少设置 set_message。\n"
                 "2) 若有统计结果，调用 set_data。\n"
@@ -416,7 +418,7 @@ class LangGraphRuntime:
         if route == "result_explanation":
             return ToolResult.from_response(self._build_explanation_payload(runtime_results, lang))
 
-        template = self._select_template(message, route)
+        fallback_template = self._select_fallback_template(message, route)
         try:
             code_payload = self._run_code_analysis(
                 session_id=session_id,
@@ -426,11 +428,11 @@ class LangGraphRuntime:
             )
             if code_payload.get("success") is True:
                 return ToolResult.from_response(code_payload)
-            if template:
+            if fallback_template:
                 template_payload = self._run_template_analysis(
                     session_id=session_id,
                     message=message,
-                    template=template,
+                    template=fallback_template,
                 )
                 if template_payload.get("success") is True:
                     return ToolResult.from_response(template_payload)
@@ -441,7 +443,7 @@ class LangGraphRuntime:
                     "success": False,
                     "message": str(exc),
                     "error": str(exc),
-                    "data": {"route": route, "template": template or ""},
+                    "data": {"route": route, "fallback_template": fallback_template or ""},
                     "artifacts": [],
                 }
             )

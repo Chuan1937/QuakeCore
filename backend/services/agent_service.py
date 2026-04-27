@@ -354,6 +354,46 @@ class AgentService:
         return any(token in text for token in ("plot", "draw", "图", "绘", "画"))
 
     @staticmethod
+    def _trace_index_in_picks_csv(csv_rel_path: str, trace_index: int) -> bool:
+        rel = to_data_relative_path(csv_rel_path)
+        if not rel:
+            return False
+        path = (Path.cwd() / "data" / rel).resolve()
+        data_root = (Path.cwd() / "data").resolve()
+        try:
+            path.relative_to(data_root)
+        except ValueError:
+            return False
+        if not path.exists() or not path.is_file():
+            return False
+        try:
+            import csv
+
+            with path.open("r", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                if not reader.fieldnames:
+                    return False
+                cols = {str(c).lower(): str(c) for c in reader.fieldnames}
+                trace_col = (
+                    cols.get("trace_index")
+                    or cols.get("trace")
+                    or cols.get("trace_id")
+                    or cols.get("index")
+                )
+                if not trace_col:
+                    return False
+                for row in reader:
+                    try:
+                        value = int(float(row.get(trace_col, -1)))
+                    except Exception:
+                        continue
+                    if value == int(trace_index):
+                        return True
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
     def _invoke_direct_tool(tool_obj: Any, payload: Any | None = None) -> Any:
         if hasattr(tool_obj, "invoke"):
             if payload is None:
@@ -415,6 +455,56 @@ class AgentService:
             return self._clean_public_answer(str(content or raw_text), route)
         except Exception:
             return self._clean_public_answer(raw_text, route)
+
+    @staticmethod
+    def _needs_blackbox_postprocess(message: str) -> bool:
+        text = str(message or "").lower()
+        return any(
+            token in text
+            for token in ("并画", "同时画", "顺便画", "统计", "分布", "对比", "筛选", "解释", "展示", "图像", "做个图")
+        )
+
+    def _try_blackbox_postprocess(
+        self,
+        *,
+        message: str,
+        session_id: str,
+        lang: str,
+        route: str,
+    ) -> tuple[str, list[ArtifactItem]] | None:
+        if not self._langgraph_runtime.enabled:
+            return None
+        if route not in {"phase_picking", "format_conversion", "continuous_monitoring", "earthquake_location"}:
+            return None
+        if not self._needs_blackbox_postprocess(message):
+            return None
+        analysis_message = (
+            "请基于当前会话已有结果做后处理分析与绘图，不要重新运行完整流程。"
+            f"用户原请求：{message}"
+        )
+        message_with_context = self._build_message_with_runtime_context(
+            message=analysis_message,
+            session_id=session_id,
+            lang=lang,
+        )
+        try:
+            raw = self._langgraph_runtime.invoke(
+                session_id=session_id,
+                message=message_with_context,
+                lang=lang,
+                fallback_agent=None,
+            )
+        except Exception:
+            return None
+        normalized = normalize_tool_output(raw)
+        if normalized.success is not True:
+            return None
+        artifacts = self._build_chat_artifacts(normalized)
+        self._persist_runtime_updates(
+            session_id,
+            self._extract_runtime_updates(route="result_analysis", data=normalized.data, artifacts=artifacts),
+        )
+        return normalized.message, artifacts
 
     def _select_conversion_tool(self, message: str, session_id: str) -> tuple[Any | None, dict[str, Any] | None]:
         text = str(message or "").lower()
@@ -515,6 +605,23 @@ class AgentService:
             session_id,
             self._extract_runtime_updates(route=route, data=normalized.data, artifacts=artifacts),
         )
+        post = self._try_blackbox_postprocess(
+            message=message,
+            session_id=session_id,
+            lang="zh",
+            route=route,
+        )
+        if post is not None:
+            post_message, post_artifacts = post
+            merged_artifacts = artifacts + [item for item in post_artifacts if item.url not in {a.url for a in artifacts}]
+            return ChatResult(
+                session_id=session_id,
+                answer=self._clean_public_answer(str(post_message or normalized.message or ""), "result_analysis"),
+                error=normalized.error,
+                route="result_analysis",
+                artifacts=merged_artifacts,
+                workflow=None,
+            )
         return ChatResult(
             session_id=session_id,
             answer=self._summarize_direct_tool_result(
@@ -666,6 +773,8 @@ class AgentService:
             suffix = Path(str(current_file)).suffix.lower()
             if suffix in {".mseed", ".miniseed"}:
                 updates.setdefault("last_miniseed_file", normalized_current)
+            if str(updates.get("last_route", "")) == "phase_picking":
+                updates["last_picks_source_file"] = normalized_current
 
         self._sessions.update_runtime_results(session_id, updates)
 
@@ -774,13 +883,19 @@ class AgentService:
             # be handled by code-first analysis runtime.
             if tool.startswith("picks_"):
                 runtime = self._sessions.get_runtime_results(session_id)
-                if not runtime.get("last_picks_csv"):
+                trace_index = int(params.get("trace_index", 0) or 0)
+                current_file = self._sessions.get_current_file(session_id)
+                current_rel = self._to_runtime_path(current_file) if current_file else ""
+                picks_source_rel = self._to_runtime_path(str(runtime.get("last_picks_source_file") or ""))
+                picks_csv = str(runtime.get("last_picks_csv") or "")
+                has_matching_source = bool(picks_csv) and bool(current_rel) and (picks_source_rel == current_rel)
+                has_trace = bool(picks_csv) and self._trace_index_in_picks_csv(picks_csv, trace_index)
+                if not (has_matching_source and has_trace):
                     has_session_file = bool(
                         self._sessions.get_current_file(session_id) or self._sessions.get_uploaded_files(session_id)
                     )
                     if not has_session_file:
                         return None
-                    trace_index = int(params.get("trace_index", 0) or 0)
                     tool_obj = pick_first_arrivals
                     payload = {"params": {"trace_number": max(1, trace_index + 1)}}
                     route = "phase_picking"
@@ -805,6 +920,23 @@ class AgentService:
             session_id,
             self._extract_runtime_updates(route=route, data=normalized.data, artifacts=artifacts),
         )
+        post = self._try_blackbox_postprocess(
+            message=message,
+            session_id=session_id,
+            lang="zh",
+            route=route,
+        )
+        if post is not None:
+            post_message, post_artifacts = post
+            merged_artifacts = artifacts + [item for item in post_artifacts if item.url not in {a.url for a in artifacts}]
+            return ChatResult(
+                session_id=session_id,
+                answer=self._clean_public_answer(str(post_message or normalized.message or ""), "result_analysis"),
+                error=normalized.error,
+                route="result_analysis",
+                artifacts=merged_artifacts,
+                workflow=None,
+            )
         return ChatResult(
             session_id=session_id,
             answer=self._summarize_direct_tool_result(
@@ -872,6 +1004,34 @@ class AgentService:
                 workflow_status = str(workflow_result.get("status", "failed"))
                 workflow_steps = workflow_result.get("steps", [])
                 if workflow_steps:
+                    workflow_artifacts = self._artifacts_from_payload(workflow_result.get("artifacts", []))
+                    post = self._try_blackbox_postprocess(
+                        message=message,
+                        session_id=final_session_id,
+                        lang=final_lang,
+                        route=route,
+                    )
+                    if post is not None:
+                        post_message, post_artifacts = post
+                        workflow_artifacts = workflow_artifacts + [
+                            item for item in post_artifacts if item.url not in {a.url for a in workflow_artifacts}
+                        ]
+                        return ChatResult(
+                            session_id=final_session_id,
+                            answer=self._clean_public_answer(str(post_message or ""), "result_analysis"),
+                            error=workflow_result.get("error"),
+                            route="result_analysis",
+                            artifacts=workflow_artifacts,
+                            workflow={
+                                "status": workflow_result.get("status"),
+                                "summary": workflow_result.get("summary"),
+                                "message": workflow_result.get("message"),
+                                "steps": workflow_steps,
+                                "location": workflow_result.get("location", {}),
+                                "artifacts": workflow_result.get("artifacts", []),
+                                "error": workflow_result.get("error"),
+                            },
+                        )
                     if workflow_status in {"success", "partial_success"}:
                         answer = str(workflow_result.get("summary") or workflow_result.get("message") or "")
                     else:
@@ -885,9 +1045,7 @@ class AgentService:
                         answer=answer,
                         error=workflow_result.get("error"),
                         route=route,
-                        artifacts=self._artifacts_from_payload(
-                            workflow_result.get("artifacts", [])
-                        ),
+                        artifacts=workflow_artifacts,
                         workflow={
                             "status": workflow_result.get("status"),
                             "summary": workflow_result.get("summary"),

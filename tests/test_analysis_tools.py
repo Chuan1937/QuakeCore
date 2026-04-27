@@ -99,9 +99,8 @@ def test_analysis_sandbox_picks_trace_plot(tmp_path):
         }
     )
     payload = json.loads(raw)
-    assert payload["success"] is True
-    assert payload["data"]["trace_index"] == 3
-    assert any(item.get("type") == "image" for item in payload["artifacts"])
+    assert payload["success"] is False
+    assert "fixed template is disabled" in payload["message"]
 
 
 def test_analysis_sandbox_code_mode_runtime_helpers(tmp_path, monkeypatch):
