@@ -42,6 +42,12 @@ _CODE_BLOCKED_NAMES = {
     "requests",
 }
 
+_DEFAULT_MPLCONFIGDIR = os.getenv("MPLCONFIGDIR", "").strip()
+if not _DEFAULT_MPLCONFIGDIR:
+    mpl_dir = (Path.cwd() / "data" / ".mplconfig").resolve()
+    mpl_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(mpl_dir)
+
 
 def _parse_params(params: str | dict | None) -> dict[str, Any]:
     if params is None:
@@ -114,6 +120,11 @@ def _artifact(path: Path, artifact_type: str) -> dict[str, str]:
 
 def _plot_or_error() -> tuple[Any | None, str | None]:
     try:
+        mpl_cache = Path(os.getenv("MPLCONFIGDIR", "")).expanduser()
+        if not str(mpl_cache).strip():
+            mpl_cache = (Path.cwd() / "data" / ".mplconfig").resolve()
+            os.environ["MPLCONFIGDIR"] = str(mpl_cache)
+        mpl_cache.mkdir(parents=True, exist_ok=True)
         import matplotlib
 
         matplotlib.use("Agg")
@@ -273,6 +284,35 @@ def _run_restricted_code(
             raise FileNotFoundError(f"File does not exist: {resolved}")
         return str(resolved)
 
+    def get_runtime_artifact_path(kind: str) -> str:
+        expected = str(kind or "").strip().lower()
+        artifacts = runtime_payload.get("last_artifacts")
+        if not isinstance(artifacts, list):
+            artifacts = []
+
+        def _choose(item: dict[str, Any]) -> str:
+            path = str(item.get("path") or item.get("url") or "").strip()
+            name = str(item.get("name") or "").strip()
+            artifact_type = str(item.get("type") or "").strip().lower()
+            hay = f"{path} {name}".lower()
+            if expected == "picks_csv" and artifact_type == "file" and hay.endswith(".csv") and "pick" in hay:
+                return path
+            if expected == "picks_image" and artifact_type == "image" and "pick" in hay:
+                return path
+            if expected == "catalog_csv" and artifact_type == "file" and hay.endswith(".csv") and "catalog" in hay:
+                return path
+            if expected == "location_image" and artifact_type == "image" and ("location" in hay or "catalog" in hay):
+                return path
+            return ""
+
+        for item in reversed(artifacts):
+            if not isinstance(item, dict):
+                continue
+            chosen = _choose(item)
+            if chosen:
+                return chosen
+        return ""
+
     def read_csv(path_or_key: str) -> list[dict[str, Any]]:
         resolved = Path(resolve_data_path(path_or_key))
         with resolved.open("r", encoding="utf-8") as handle:
@@ -320,6 +360,7 @@ def _run_restricted_code(
         "output_dir": str(output_dir),
         "runtime_results": runtime_payload,
         "resolve_data_path": resolve_data_path,
+        "get_runtime_artifact_path": get_runtime_artifact_path,
         "read_csv": read_csv,
         "read_json": read_json,
         "read_waveform": read_waveform,
@@ -380,7 +421,9 @@ def _run_restricted_code_with_timeout(
     runtime_results: dict[str, Any] | None = None,
     timeout_seconds: int = 8,
 ) -> str:
-    ctx = mp.get_context("spawn")
+    methods = set(mp.get_all_start_methods())
+    ctx_name = "fork" if "fork" in methods else "spawn"
+    ctx = mp.get_context(ctx_name)
     queue = ctx.Queue(maxsize=1)
     payload = {
         "code": code,
@@ -428,6 +471,40 @@ def run_analysis_sandbox(params: str | dict | None = None):
     if not template and not code:
         return _result(False, "Missing template.")
 
+    if code:
+        if not _code_execution_enabled(parsed):
+            return _result(
+                False,
+                "Code mode is disabled. Set allow_code=true (or QUAKECORE_ANALYSIS_ALLOW_CODE=1) to enable.",
+            )
+        session_id = str(parsed.get("session_id") or "").strip()
+        parsed_runtime = parsed.get("runtime_results")
+        if isinstance(parsed_runtime, dict):
+            runtime_results = dict(parsed_runtime)
+        else:
+            runtime_results = get_session_store().get_runtime_results(session_id) if session_id else {}
+        input_path = _resolve_input_path(parsed)
+        rows: list[dict[str, Any]] = []
+        columns: list[str] = []
+        if input_path is not None and input_path.exists() and input_path.is_file():
+            try:
+                rows, columns = _read_csv_rows(input_path)
+            except Exception:
+                rows, columns = [], []
+        input_path_for_code = input_path if input_path is not None else Path("")
+        output_dir = _make_output_dir(parsed.get("session_id"))
+        timeout_seconds = int(parsed.get("timeout_seconds", 8) or 8)
+        timeout_seconds = max(2, min(timeout_seconds, 120))
+        return _run_restricted_code_with_timeout(
+            code=code,
+            rows=rows,
+            columns=columns,
+            input_path=input_path_for_code,
+            output_dir=output_dir,
+            runtime_results=runtime_results,
+            timeout_seconds=timeout_seconds,
+        )
+
     input_path = _resolve_input_path(parsed)
     if input_path is None:
         return _result(False, "Input artifact path not found. Provide input_path or (session_id + input_artifact_key).")
@@ -438,26 +515,6 @@ def run_analysis_sandbox(params: str | dict | None = None):
     rows, columns = _read_csv_rows(input_path)
     if not rows:
         return _result(False, "Input CSV has no rows.")
-
-    if code:
-        if not _code_execution_enabled(parsed):
-            return _result(
-                False,
-                "Code mode is disabled. Set allow_code=true (or QUAKECORE_ANALYSIS_ALLOW_CODE=1) to enable.",
-            )
-        session_id = str(parsed.get("session_id") or "").strip()
-        runtime_results = get_session_store().get_runtime_results(session_id) if session_id else {}
-        timeout_seconds = int(parsed.get("timeout_seconds", 8) or 8)
-        timeout_seconds = max(2, min(timeout_seconds, 30))
-        return _run_restricted_code_with_timeout(
-            code=code,
-            rows=rows,
-            columns=columns,
-            input_path=input_path,
-            output_dir=output_dir,
-            runtime_results=runtime_results,
-            timeout_seconds=timeout_seconds,
-        )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     artifacts: list[dict[str, str]] = []

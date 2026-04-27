@@ -135,3 +135,81 @@ set_message('helpers ok')
     assert payload["message"] == "helpers ok"
     assert payload["data"]["rows2"] == 1
     assert str(payload["data"]["resolved"]).endswith("data/analysis/catalog.csv")
+
+
+def test_analysis_sandbox_code_mode_without_default_input_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    picks_dir = tmp_path / "data" / "picks"
+    picks_dir.mkdir(parents=True, exist_ok=True)
+    src = picks_dir / "demo_picks.csv"
+    src.write_text(
+        "trace_index,phase_type,sample_index,normalized_score\n1,P,120,0.9\n",
+        encoding="utf-8",
+    )
+
+    sid = "sid-no-default-input"
+    store = get_session_store()
+    store.update_runtime_results(
+        sid,
+        {
+            "last_picks_csv": "picks/demo_picks.csv",
+            "last_artifacts": [
+                {
+                    "type": "file",
+                    "name": "demo_picks.csv",
+                    "path": "picks/demo_picks.csv",
+                    "url": "/api/artifacts/picks/demo_picks.csv",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("QUAKECORE_ANALYSIS_ALLOW_CODE", "1")
+
+    raw = run_analysis_sandbox.invoke(
+        {
+            "params": {
+                "session_id": sid,
+                "allow_code": True,
+                "code": """
+picks_csv = runtime_results.get('last_picks_csv') or get_runtime_artifact_path('picks_csv')
+rows2 = read_csv(picks_csv)
+set_data('rows2', len(rows2))
+set_message('code no default input ok')
+""",
+            }
+        }
+    )
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    assert payload["message"] == "code no default input ok"
+    assert payload["data"]["rows2"] == 1
+
+
+def test_analysis_sandbox_code_mode_uses_inline_runtime_results(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    picks_dir = tmp_path / "data" / "picks"
+    picks_dir.mkdir(parents=True, exist_ok=True)
+    src = picks_dir / "inline_picks.csv"
+    src.write_text(
+        "trace_index,phase_type,sample_index,normalized_score\n0,P,10,0.8\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QUAKECORE_ANALYSIS_ALLOW_CODE", "1")
+
+    raw = run_analysis_sandbox.invoke(
+        {
+            "params": {
+                "allow_code": True,
+                "runtime_results": {"last_picks_csv": "picks/inline_picks.csv"},
+                "code": """
+rows2 = read_csv('last_picks_csv')
+set_data('rows2', len(rows2))
+set_message('inline runtime ok')
+""",
+            }
+        }
+    )
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    assert payload["message"] == "inline runtime ok"
+    assert payload["data"]["rows2"] == 1

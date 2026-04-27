@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,25 @@ class LangGraphRuntime:
             except Exception:
                 return None
 
+        zh_word = re.search(r"第\s*([一二三四五六七八九十])\s*(?:道|条|个)?", text)
+        if zh_word:
+            zh_num = {
+                "一": 1,
+                "二": 2,
+                "三": 3,
+                "四": 4,
+                "五": 5,
+                "六": 6,
+                "七": 7,
+                "八": 8,
+                "九": 9,
+                "十": 10,
+            }
+            try:
+                return max(0, int(zh_num.get(zh_word.group(1), 1)) - 1)
+            except Exception:
+                return None
+
         en = re.search(r"trace\s*#?\s*(\d+)", text, flags=re.IGNORECASE)
         if en:
             try:
@@ -75,6 +95,78 @@ class LangGraphRuntime:
                 return None
 
         return None
+
+    @staticmethod
+    def _is_trace_pick_image_request(message: str) -> bool:
+        text = str(message or "").lower()
+        has_trace = any(token in text for token in ("trace", "轨迹", "道", "第"))
+        has_pick = any(token in text for token in ("pick", "phase", "拾取", "震相"))
+        has_image = any(token in text for token in ("图", "图像", "图片", "plot", "image", "波形"))
+        return has_trace and has_pick and has_image
+
+    @staticmethod
+    def _build_trace_pick_waveform_code(trace_index: int) -> str:
+        return (
+            f"trace_index = {int(trace_index)}\n"
+            "picks_csv = runtime_results.get('last_picks_csv') or get_runtime_artifact_path('picks_csv')\n"
+            "mseed_path = runtime_results.get('last_miniseed_file')\n"
+            "if not picks_csv:\n"
+            "    set_message('缺少 last_picks_csv，无法绘制指定道拾取图像。')\n"
+            "elif not mseed_path:\n"
+            "    set_message('缺少 last_miniseed_file，无法绘制指定道拾取图像。')\n"
+            "else:\n"
+            "    picks_rows = read_csv(picks_csv)\n"
+            "    stream = read_waveform(mseed_path)\n"
+            "    if trace_index < 0 or trace_index >= len(stream):\n"
+            "        set_message(f'trace_index={trace_index} 超出范围，可用道数={{len(stream)}}。')\n"
+            "    else:\n"
+            "        tr = stream[trace_index]\n"
+            "        data = tr.data\n"
+            "        x = list(range(len(data)))\n"
+            "        trace_col = ''\n"
+            "        phase_col = ''\n"
+            "        sample_col = ''\n"
+            "        for key in (picks_rows[0].keys() if picks_rows else []):\n"
+            "            lk = str(key).lower()\n"
+            "            if not trace_col and lk in ('trace_index', 'trace', 'trace_id', 'index'):\n"
+            "                trace_col = key\n"
+            "            if not phase_col and lk in ('phase', 'phase_type', 'type'):\n"
+            "                phase_col = key\n"
+            "            if not sample_col and lk in ('sample_index', 'sample', 'index'):\n"
+            "                sample_col = key\n"
+            "        selected = []\n"
+            "        if trace_col and sample_col:\n"
+            "            for row in picks_rows:\n"
+            "                ti_raw = str(row.get(trace_col, '-1')).strip()\n"
+            "                ti_norm = ti_raw.replace('-', '', 1).replace('.', '', 1)\n"
+            "                if not ti_norm.isdigit():\n"
+            "                    continue\n"
+            "                ti = int(float(ti_raw))\n"
+            "                if int(ti) == int(trace_index):\n"
+            "                    selected.append(row)\n"
+            "        fig = plt.figure(figsize=(12, 4))\n"
+            "        ax = fig.add_subplot(111)\n"
+            "        ax.plot(x, data, color='#1f77b4', linewidth=0.8)\n"
+            "        for row in selected:\n"
+            "            sx_raw = str(row.get(sample_col, '-1')).strip()\n"
+            "            sx_norm = sx_raw.replace('-', '', 1).replace('.', '', 1)\n"
+            "            if not sx_norm.isdigit():\n"
+            "                continue\n"
+            "            sx = int(float(sx_raw))\n"
+            "            phase = str(row.get(phase_col, 'P')).upper() if phase_col else 'P'\n"
+            "            color = '#2ca02c' if phase.startswith('P') else '#d62728'\n"
+            "            ax.axvline(sx, color=color, linestyle='--', linewidth=1.0, alpha=0.85)\n"
+            "        ax.set_title(f'Trace {{trace_index}} Waveform with Picks')\n"
+            "        ax.set_xlabel('Sample Index')\n"
+            "        ax.set_ylabel('Amplitude')\n"
+            "        fig.tight_layout()\n"
+            "        save_plot(f'trace_{trace_index}_waveform_picks.png')\n"
+            "        if selected:\n"
+            "            save_csv(f'trace_{trace_index}_picks.csv', selected)\n"
+            "        set_data('trace_index', trace_index)\n"
+            "        set_data('pick_count', len(selected))\n"
+            "        set_message(f'已生成第{trace_index+1}道拾取结果图。')\n"
+        )
 
     @staticmethod
     def _select_fallback_template(message: str, route: str) -> str:
@@ -157,6 +249,20 @@ class LangGraphRuntime:
         return content
 
     @staticmethod
+    def _sanitize_generated_code(code: str) -> str:
+        text = str(code or "")
+        if not text.strip():
+            return ""
+        cleaned_lines: list[str] = []
+        for raw_line in text.splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith("import ") or stripped.startswith("from "):
+                continue
+            cleaned_lines.append(raw_line)
+        cleaned = "\n".join(cleaned_lines).strip()
+        return cleaned
+
+    @staticmethod
     def _build_code_prompt(
         *,
         message: str,
@@ -186,15 +292,19 @@ class LangGraphRuntime:
                 "- save_csv(name, table)\n"
                 "- save_plot(name)\n"
                 "- resolve_data_path(path_or_key)\n"
+                "- get_runtime_artifact_path(kind)\n"
                 "- read_csv(path_or_key)\n"
                 "- read_json(path_or_key)\n"
                 "- read_waveform(path_or_key)\n\n"
                 "强规则：\n"
                 "1) 中文“第N道”表示 trace_index=N-1；英文 trace N 表示 trace_index=N。\n"
                 "2) 用户要求某道拾取图像时，应画 waveform 并用竖线标出 P/S 到时，不要只画 sample-score 散点图。\n"
-                "3) 用户问题与默认 rows 不匹配时，主动 read_csv/read_json/read_waveform 读取更合适的 runtime key。\n"
-                "4) 图像必须 save_plot，表格必须 save_csv，且必须 set_message。\n"
-                "5) 禁止 import、open、exec、eval、网络与系统调用。\n"
+                "3) rows/columns 可能为空。为空时不要失败，主动通过 runtime_results 或 get_runtime_artifact_path() 查找文件。\n"
+                "4) 用户问题与默认 rows 不匹配时，主动 read_csv/read_json/read_waveform 读取更合适的 runtime key。\n"
+                "5) 拾取图像常用：picks_csv = runtime_results.get('last_picks_csv') or get_runtime_artifact_path('picks_csv')；"
+                "mseed = runtime_results.get('last_miniseed_file')。\n"
+                "6) 图像必须 save_plot，表格必须 save_csv，且必须 set_message。\n"
+                "7) 禁止 import、open、exec、eval、网络与系统调用。\n"
                 "输出要求：\n"
                 "1) 至少设置 set_message。\n"
                 "2) 若有统计结果，调用 set_data。\n"
@@ -208,12 +318,13 @@ class LangGraphRuntime:
             "Goal: analyze existing session artifacts/results for lightweight stats/plots/explanations.\n"
             "Do not re-run full workflows.\n"
             "Input data: rows(list[dict]), columns(list[str]), input_path, runtime_results.\n"
-            "Helpers: set_message, set_data, save_csv, save_plot, resolve_data_path, read_csv, read_json, read_waveform.\n"
+            "Helpers: set_message, set_data, save_csv, save_plot, resolve_data_path, get_runtime_artifact_path, read_csv, read_json, read_waveform.\n"
             "Rules:\n"
             "1) Chinese 第N道 => trace_index=N-1; English trace N => trace_index=N.\n"
             "2) For trace pick image requests, plot waveform with P/S vertical markers (not sample-score scatter only).\n"
-            "3) Must call set_message; call save_plot/save_csv when producing image/table.\n"
-            "4) No imports/open/exec/eval/network/system calls.\n"
+            "3) rows/columns may be empty; do not fail and read better files from runtime_results/get_runtime_artifact_path.\n"
+            "4) Must call set_message; call save_plot/save_csv when producing image/table.\n"
+            "5) No imports/open/exec/eval/network/system calls.\n"
             "Output rules:\n"
             "1) call set_message.\n"
             "2) call set_data for key metrics.\n"
@@ -237,7 +348,7 @@ class LangGraphRuntime:
         llm = _build_llm(
             provider=provider,  # type: ignore[arg-type]
             model_name=model_name,
-            api_key=cfg.get("api_key"),
+            api_key=cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY"),
             base_url=cfg.get("base_url"),
             streaming=False,
         )
@@ -310,9 +421,10 @@ class LangGraphRuntime:
         lang: str,
     ) -> dict[str, Any]:
         input_key = self._code_input_key(message, runtime_results)
+        timeout_seconds = 60 if self._is_trace_pick_image_request(message) else 8
         last_error = ""
         generated_code = ""
-        for _attempt in range(2):
+        for _attempt in range(1):
             prompt_message = message
             if last_error:
                 prompt_message = (
@@ -320,12 +432,22 @@ class LangGraphRuntime:
                     f"上一次生成代码执行失败，错误如下：{last_error}\n"
                     "请修复代码。"
                 )
-            generated_code = self._generate_analysis_code(
-                message=prompt_message,
-                runtime_results=runtime_results,
-                input_key=input_key,
-                lang=lang,
-            )
+            try:
+                generated_code = self._generate_analysis_code(
+                    message=prompt_message,
+                    runtime_results=runtime_results,
+                    input_key=input_key,
+                    lang=lang,
+                )
+            except Exception as exc:
+                if self._is_trace_pick_image_request(message):
+                    trace_index = self._extract_trace_index(message) or 0
+                    generated_code = self._build_trace_pick_waveform_code(trace_index)
+                    last_error = f"llm_codegen_failed: {exc}"
+                else:
+                    last_error = str(exc)
+                    continue
+            generated_code = self._sanitize_generated_code(generated_code)
             if not generated_code:
                 last_error = "empty_generated_code"
                 continue
@@ -334,9 +456,10 @@ class LangGraphRuntime:
                     "params": {
                         "session_id": session_id,
                         "input_artifact_key": input_key,
+                        "runtime_results": runtime_results,
                         "allow_code": True,
                         "code": generated_code,
-                        "timeout_seconds": 8,
+                        "timeout_seconds": timeout_seconds,
                     }
                 }
             )
@@ -350,6 +473,32 @@ class LangGraphRuntime:
                 payload["data"] = data
                 return payload
             last_error = str(payload.get("error") or payload.get("message") or "unknown_error")
+
+            if self._is_trace_pick_image_request(message) and "Blocked syntax in code" in last_error:
+                trace_index = self._extract_trace_index(message) or 0
+                fallback_code = self._build_trace_pick_waveform_code(trace_index)
+                raw_fallback = run_analysis_sandbox.invoke(
+                    {
+                        "params": {
+                            "session_id": session_id,
+                            "input_artifact_key": input_key,
+                            "runtime_results": runtime_results,
+                            "allow_code": True,
+                            "code": fallback_code,
+                            "timeout_seconds": timeout_seconds,
+                        }
+                    }
+                )
+                payload_fallback = self._decode_payload(raw_fallback)
+                if payload_fallback.get("success") is True:
+                    data = payload_fallback.get("data")
+                    if not isinstance(data, dict):
+                        data = {}
+                    data["generated_code"] = fallback_code
+                    data["input_key"] = input_key
+                    data["fallback_codegen"] = "builtin_trace_pick_waveform"
+                    payload_fallback["data"] = data
+                    return payload_fallback
         return {
             "success": False,
             "message": f"黑箱分析失败：{last_error}",
@@ -428,14 +577,6 @@ class LangGraphRuntime:
             )
             if code_payload.get("success") is True:
                 return ToolResult.from_response(code_payload)
-            if fallback_template:
-                template_payload = self._run_template_analysis(
-                    session_id=session_id,
-                    message=message,
-                    template=fallback_template,
-                )
-                if template_payload.get("success") is True:
-                    return ToolResult.from_response(template_payload)
             return ToolResult.from_response(code_payload)
         except Exception as exc:
             return ToolResult.from_response(
@@ -443,7 +584,7 @@ class LangGraphRuntime:
                     "success": False,
                     "message": str(exc),
                     "error": str(exc),
-                    "data": {"route": route, "fallback_template": fallback_template or ""},
+                    "data": {"route": route, "fallback_template": fallback_template or "", "template_disabled": True},
                     "artifacts": [],
                 }
             )
