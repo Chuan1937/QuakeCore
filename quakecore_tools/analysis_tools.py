@@ -14,6 +14,7 @@ from typing import Any
 
 from langchain.tools import tool
 
+from backend.services.artifact_utils import make_artifact, to_data_relative_path
 from backend.services.session_store import get_session_store
 
 
@@ -58,14 +59,7 @@ def _parse_params(params: str | dict | None) -> dict[str, Any]:
 
 
 def _to_relative_data_path(value: str | None) -> str:
-    normalized = str(value or "").replace("\\", "/").strip()
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
-    if normalized.startswith("/api/artifacts/"):
-        normalized = normalized[len("/api/artifacts/"):]
-    if normalized.startswith("data/"):
-        normalized = normalized[5:]
-    return normalized.lstrip("/")
+    return to_data_relative_path(value)
 
 
 def _resolve_input_path(parsed: dict[str, Any]) -> Path | None:
@@ -115,13 +109,7 @@ def _find_column(columns: list[str], candidates: list[str]) -> str | None:
 
 
 def _artifact(path: Path, artifact_type: str) -> dict[str, str]:
-    rel = _to_relative_data_path(str(path))
-    return {
-        "type": artifact_type,
-        "name": path.name,
-        "path": rel,
-        "url": f"/api/artifacts/{rel}",
-    }
+    return make_artifact(str(path), artifact_type, name=path.name)
 
 
 def _plot_or_error() -> tuple[Any | None, str | None]:

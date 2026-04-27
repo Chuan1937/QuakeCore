@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.services.artifact_utils import to_data_relative_path
+
 
 @dataclass(frozen=True)
 class ArtifactItem:
@@ -62,8 +64,6 @@ class RouterService:
             "对比",
             "筛选",
             "导出",
-            "第3道",
-            "第 3 道",
         ),
         "earthquake_location": (
             "定位",
@@ -176,6 +176,9 @@ class RouterService:
         for route, keywords in self._ROUTE_KEYWORDS.items():
             if any(keyword in text for keyword in keywords):
                 return route
+        # General "第N道" falls through to result_analysis only after checking all keyword routes
+        if re.search(r"第\s*\d+\s*(?:道|条|个)", text):
+            return "result_analysis"
         if any(token in text for token in ("chat", "hello", "hi", "help")):
             return "general_chat"
         return "general_chat"
@@ -197,16 +200,7 @@ class RouterService:
                 continue
             if source.startswith(("http://", "https://")):
                 continue
-            normalized = source.replace("\\", "/").strip()
-            if normalized.startswith("/api/artifacts/"):
-                normalized = normalized[len("/api/artifacts/"):]
-            if normalized.startswith("./"):
-                normalized = normalized[2:]
-            if "/data/" in normalized:
-                normalized = normalized.split("/data/", 1)[1]
-            if normalized.startswith("data/"):
-                normalized = normalized[5:]
-            normalized = normalized.lstrip("/")
+            normalized = to_data_relative_path(source)
             if not normalized or normalized in seen_paths:
                 continue
             seen_paths.add(normalized)

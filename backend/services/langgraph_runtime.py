@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from agent.core import _build_llm
+from backend.services.artifact_utils import make_artifact, to_data_relative_path
 from backend.services.config_service import ConfigService
 from backend.services.router_service import RouterService
 from backend.services.tool_result import ToolResult
@@ -54,27 +56,37 @@ class LangGraphRuntime:
         return 1
 
     @staticmethod
-    def _extract_trace_selector(message: str) -> dict[str, int]:
+    def _extract_trace_index(message: str) -> int | None:
         text = str(message or "")
-        zh_match = re.search(r"第\s*(\d+)\s*(?:条|个)?\s*(?:trace|轨迹|道)", text, flags=re.IGNORECASE)
-        if zh_match:
+
+        zh = re.search(r"第\s*(\d+)\s*(?:道|条|个)?\s*(?:trace|轨迹|拾取)?", text)
+        if zh and any(k in text for k in ("道", "trace", "轨迹", "拾取")):
             try:
-                return {"trace_index": max(0, int(zh_match.group(1)) - 1)}
+                return max(0, int(zh.group(1)) - 1)
             except Exception:
-                return {"trace_index": 0}
-        en_match = re.search(r"trace\s*#?\s*(\d+)", text, flags=re.IGNORECASE)
-        if en_match:
+                return None
+
+        en = re.search(r"trace\s*#?\s*(\d+)", text, flags=re.IGNORECASE)
+        if en:
             try:
-                return {"trace_index": max(0, int(en_match.group(1)))}
+                return max(0, int(en.group(1)))
             except Exception:
-                return {"trace_index": 0}
-        return {"trace_index": 0}
+                return None
+
+        return None
 
     @staticmethod
     def _select_template(message: str, route: str) -> str:
         text = str(message or "").lower()
+
+        # Trace-specific picks detail takes priority over generic image display
         if ("trace" in text or "轨迹" in text or "道" in text) and ("拾取" in text or "pick" in text):
             return "picks_trace_detail"
+
+        if any(k in text for k in ("图像", "图", "图片", "plot", "image")) and any(
+            k in text for k in ("拾取", "pick", "phase")
+        ):
+            return "picks_existing_image"
         if "第3个事件" in text or "第 3 个事件" in text or "第三个事件" in text or "event" in text and "#" in text:
             return "catalog_event_index"
         if "p/s" in text or "p 波" in text or "s 波" in text:
@@ -114,13 +126,21 @@ class LangGraphRuntime:
     @staticmethod
     def _code_input_key(message: str, runtime_results: dict[str, Any]) -> str:
         text = str(message or "").lower()
-        if any(token in text for token in ("p波", "s波", "pick", "phase", "台站", "station", "trace", "轨迹", "道")):
+
+        if any(token in text for token in ("p波", "s波", "pick", "phase", "拾取", "震相", "台站", "station", "trace", "轨迹", "道")):
             if runtime_results.get("last_picks_csv"):
                 return "last_picks_csv"
+
+        if any(token in text for token in ("catalog", "目录", "事件", "震级", "深度", "定位")):
+            if runtime_results.get("last_catalog_csv"):
+                return "last_catalog_csv"
+
         if runtime_results.get("last_catalog_csv"):
             return "last_catalog_csv"
+
         if runtime_results.get("last_picks_csv"):
             return "last_picks_csv"
+
         return "last_catalog_csv"
 
     @staticmethod
@@ -200,12 +220,41 @@ class LangGraphRuntime:
         return self._extract_code(str(content or ""))
 
     @staticmethod
+    def _run_picks_existing_image(message: str) -> dict[str, Any]:
+        runtime = LangGraphRuntime._extract_runtime_context(message)
+        image_path = runtime.get("last_picks_image")
+        csv_path = runtime.get("last_picks_csv")
+
+        artifacts = []
+
+        if image_path:
+            rel = to_data_relative_path(image_path)
+            artifacts.append(make_artifact(rel, "image"))
+
+        if csv_path:
+            rel = to_data_relative_path(csv_path)
+            artifacts.append(make_artifact(rel, "file"))
+
+        return {
+            "success": True,
+            "message": "已找到最近一次初至拾取的图像和结果文件。" if artifacts else "没有找到已保存的拾取图像。请先运行初至拾取。",
+            "artifacts": artifacts,
+            "data": {
+                "last_picks_image": image_path if isinstance(image_path, str) else "",
+                "last_picks_csv": csv_path if isinstance(csv_path, str) else "",
+            },
+        }
+
+    @staticmethod
     def _run_template_analysis(
         *,
         session_id: str,
         message: str,
         template: str,
     ) -> dict[str, Any]:
+        if template == "picks_existing_image":
+            return LangGraphRuntime._run_picks_existing_image(message)
+
         params: dict[str, Any] = {
             "template": template,
             "session_id": session_id,
@@ -214,7 +263,9 @@ class LangGraphRuntime:
         if template == "catalog_event_index":
             params["event_index"] = LangGraphRuntime._extract_event_index(message)
         if template == "picks_trace_detail":
-            params.update(LangGraphRuntime._extract_trace_selector(message))
+            trace_index = LangGraphRuntime._extract_trace_index(message)
+            if trace_index is not None:
+                params["trace_index"] = trace_index
         raw = run_analysis_sandbox.invoke({"params": params})
         return LangGraphRuntime._decode_payload(raw)
 

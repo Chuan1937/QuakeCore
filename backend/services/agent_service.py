@@ -29,6 +29,7 @@ from agent.tools_facade import (
     plot_location_map,
     read_file_trace,
 )
+from backend.services.artifact_utils import to_data_relative_path
 from backend.services.config_service import ConfigService
 from backend.services.file_service import FileService, bind_uploaded_file_to_agent
 from backend.services.langgraph_runtime import LangGraphRuntime
@@ -274,7 +275,7 @@ class AgentService:
 
     @staticmethod
     def _is_trace_pick_request(message: str, route: str) -> bool:
-        if route not in {"phase_picking", "result_analysis"}:
+        if route != "phase_picking":
             return False
         text = str(message or "").lower()
         has_trace = any(token in text for token in ("trace", "轨迹", "道", "第"))
@@ -529,16 +530,7 @@ class AgentService:
 
     @staticmethod
     def _to_runtime_path(value: str | None) -> str:
-        normalized = str(value or "").replace("\\", "/").strip()
-        if not normalized:
-            return ""
-        if normalized.startswith("./"):
-            normalized = normalized[2:]
-        if normalized.startswith("/api/artifacts/"):
-            normalized = normalized[len("/api/artifacts/"):]
-        if normalized.startswith("data/"):
-            normalized = normalized[5:]
-        return normalized.lstrip("/")
+        return to_data_relative_path(value)
 
     def _build_runtime_context_suffix(self, session_id: str, lang: str) -> str:
         runtime_results = self._sessions.get_runtime_results(session_id)
@@ -567,21 +559,6 @@ class AgentService:
         payload = dict(data or {})
         updates: dict[str, Any] = {"last_route": route}
 
-        key_mapping = {
-            "picks_csv": "last_picks_csv",
-            "catalog_csv": "last_catalog_csv",
-            "catalog_json": "last_catalog_json",
-            "location_map": "last_location_image",
-            "location_3view": "last_location_image",
-            "catalog_3view": "last_location_image",
-        }
-        for source_key, target_key in key_mapping.items():
-            if source_key not in payload:
-                continue
-            normalized = self._to_runtime_path(str(payload.get(source_key, "") or ""))
-            if normalized:
-                updates[target_key] = normalized
-
         artifact_payload = [
             {
                 "type": item.type,
@@ -595,17 +572,51 @@ class AgentService:
         if artifact_payload:
             updates["last_artifacts"] = artifact_payload
 
+        # Result analysis artifacts must NOT overwrite main workflow context
+        if route == "result_analysis":
+            updates["last_analysis_artifacts"] = artifact_payload
+            for item in artifacts:
+                path = self._to_runtime_path(item.path or item.url)
+                if path:
+                    updates.setdefault("last_analysis_files", []).append(path)
+            return updates
+
+        key_mapping = {
+            "picks_csv": "last_picks_csv",
+            "picks_image": "last_picks_image",
+            "plot_path": "last_picks_image",
+            "catalog_csv": "last_catalog_csv",
+            "catalog_json": "last_catalog_json",
+            "location_map": "last_location_image",
+            "location_3view": "last_location_image",
+            "catalog_3view": "last_location_image",
+        }
+        for source_key, target_key in key_mapping.items():
+            if source_key not in payload:
+                continue
+            normalized = self._to_runtime_path(str(payload.get(source_key, "") or ""))
+            if normalized:
+                updates[target_key] = normalized
+
         for item in artifacts:
             path = self._to_runtime_path(item.path or item.url)
             lowered = path.lower()
-            if item.type == "image" and "last_location_image" not in updates and path:
-                updates["last_location_image"] = path
+
+            if item.type == "image" and path:
+                if "pick" in lowered:
+                    updates.setdefault("last_picks_image", path)
+                elif "location" in lowered or "catalog" in lowered:
+                    updates.setdefault("last_location_image", path)
+
             if item.type != "file" or not path:
                 continue
+
             if lowered.endswith(".csv") and "pick" in lowered:
                 updates.setdefault("last_picks_csv", path)
+
             if lowered.endswith(".csv") and "catalog" in lowered:
                 updates.setdefault("last_catalog_csv", path)
+
             if lowered.endswith(".json") and "catalog" in lowered:
                 updates.setdefault("last_catalog_json", path)
 
