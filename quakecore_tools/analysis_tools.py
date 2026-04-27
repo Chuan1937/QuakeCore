@@ -186,6 +186,7 @@ def _run_restricted_code(
     columns: list[str],
     input_path: Path,
     output_dir: Path,
+    runtime_results: dict[str, Any] | None = None,
 ) -> str:
     error = _validate_restricted_code(code)
     if error:
@@ -194,6 +195,8 @@ def _run_restricted_code(
     artifacts: list[dict[str, str]] = []
     data: dict[str, Any] = {}
     message_holder = {"message": "Analysis code executed."}
+    runtime_payload = dict(runtime_results or {})
+    data_root = (Path.cwd() / "data").resolve()
 
     def save_csv(name: str, table: list[dict[str, Any]] | list[list[Any]] | dict[str, Any]) -> str:
         filename = str(name or "").strip() or f"analysis_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
@@ -251,6 +254,44 @@ def _run_restricted_code(
     def set_data(key: str, value: Any) -> None:
         data[str(key)] = value
 
+    def resolve_data_path(path_or_key: str) -> str:
+        token = str(path_or_key or "").strip()
+        if not token:
+            raise ValueError("Empty path_or_key.")
+        if token in runtime_payload:
+            token = str(runtime_payload.get(token) or "").strip()
+        if not token:
+            raise ValueError("Runtime key is empty.")
+
+        rel = _to_relative_data_path(token)
+        resolved = (data_root / rel).resolve()
+        try:
+            resolved.relative_to(data_root)
+        except ValueError as exc:
+            raise ValueError("Path must stay inside data directory.") from exc
+        if not resolved.exists():
+            raise FileNotFoundError(f"File does not exist: {resolved}")
+        return str(resolved)
+
+    def read_csv(path_or_key: str) -> list[dict[str, Any]]:
+        resolved = Path(resolve_data_path(path_or_key))
+        with resolved.open("r", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            return list(reader)
+
+    def read_json(path_or_key: str) -> Any:
+        resolved = Path(resolve_data_path(path_or_key))
+        with resolved.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def read_waveform(path_or_key: str) -> Any:
+        resolved = resolve_data_path(path_or_key)
+        try:
+            from obspy import read
+        except Exception as exc:
+            raise RuntimeError(f"ObsPy unavailable: {exc}") from exc
+        return read(resolved)
+
     safe_builtins = {
         "len": len,
         "min": min,
@@ -277,6 +318,11 @@ def _run_restricted_code(
         "columns": columns,
         "input_path": str(input_path),
         "output_dir": str(output_dir),
+        "runtime_results": runtime_payload,
+        "resolve_data_path": resolve_data_path,
+        "read_csv": read_csv,
+        "read_json": read_json,
+        "read_waveform": read_waveform,
         "save_csv": save_csv,
         "save_plot": save_plot,
         "set_message": set_message,
@@ -317,6 +363,7 @@ def _restricted_code_worker(payload: dict[str, Any], queue: Any) -> None:
             columns=list(payload["columns"]),
             input_path=Path(str(payload["input_path"])),
             output_dir=Path(str(payload["output_dir"])),
+            runtime_results=dict(payload.get("runtime_results") or {}),
         )
     except Exception as exc:
         result = _result(False, f"Code worker failed: {exc}")
@@ -330,6 +377,7 @@ def _run_restricted_code_with_timeout(
     columns: list[str],
     input_path: Path,
     output_dir: Path,
+    runtime_results: dict[str, Any] | None = None,
     timeout_seconds: int = 8,
 ) -> str:
     ctx = mp.get_context("spawn")
@@ -340,6 +388,7 @@ def _run_restricted_code_with_timeout(
         "columns": columns,
         "input_path": str(input_path),
         "output_dir": str(output_dir),
+        "runtime_results": dict(runtime_results or {}),
     }
     proc = ctx.Process(target=_restricted_code_worker, args=(payload, queue))
     proc.start()
@@ -396,6 +445,8 @@ def run_analysis_sandbox(params: str | dict | None = None):
                 False,
                 "Code mode is disabled. Set allow_code=true (or QUAKECORE_ANALYSIS_ALLOW_CODE=1) to enable.",
             )
+        session_id = str(parsed.get("session_id") or "").strip()
+        runtime_results = get_session_store().get_runtime_results(session_id) if session_id else {}
         timeout_seconds = int(parsed.get("timeout_seconds", 8) or 8)
         timeout_seconds = max(2, min(timeout_seconds, 30))
         return _run_restricted_code_with_timeout(
@@ -404,6 +455,7 @@ def run_analysis_sandbox(params: str | dict | None = None):
             columns=columns,
             input_path=input_path,
             output_dir=output_dir,
+            runtime_results=runtime_results,
             timeout_seconds=timeout_seconds,
         )
 

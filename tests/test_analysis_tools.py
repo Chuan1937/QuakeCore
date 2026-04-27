@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from quakecore_tools.analysis_tools import run_analysis_sandbox
+from backend.services.session_store import get_session_store
 
 
 def _write_csv(path: Path):
@@ -101,3 +102,37 @@ def test_analysis_sandbox_picks_trace_plot(tmp_path):
     assert payload["success"] is True
     assert payload["data"]["trace_index"] == 3
     assert any(item.get("type") == "image" for item in payload["artifacts"])
+
+
+def test_analysis_sandbox_code_mode_runtime_helpers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data" / "analysis"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    src = data_dir / "catalog.csv"
+    _write_csv(src)
+
+    sid = "sid-runtime-helper"
+    store = get_session_store()
+    store.update_runtime_results(sid, {"last_catalog_csv": "analysis/catalog.csv"})
+    monkeypatch.setenv("QUAKECORE_ANALYSIS_ALLOW_CODE", "1")
+
+    raw = run_analysis_sandbox.invoke(
+        {
+            "params": {
+                "session_id": sid,
+                "input_path": str(src),
+                "allow_code": True,
+                "code": """
+rows2 = read_csv('last_catalog_csv')
+set_data('rows2', len(rows2))
+set_data('resolved', resolve_data_path('last_catalog_csv'))
+set_message('helpers ok')
+""",
+            }
+        }
+    )
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    assert payload["message"] == "helpers ok"
+    assert payload["data"]["rows2"] == 1
+    assert str(payload["data"]["resolved"]).endswith("data/analysis/catalog.csv")

@@ -178,6 +178,80 @@ def test_agent_service_trace_pick_fast_path_skips_react(monkeypatch):
     assert result.route == "result_analysis"
     assert result.answer == "summary"
     assert result.artifacts and result.artifacts[0].url == "/api/artifacts/picks/demo.png"
+    runtime = store.get_runtime_results("sid-fast")
+    assert runtime.get("last_miniseed_file") == "tmp/demo.mseed"
+    assert runtime.get("last_uploaded_files") == ["tmp/demo.mseed"]
+    assert runtime.get("last_analysis_artifacts")
+
+
+def test_agent_service_bootstraps_pick_for_picks_analysis_without_runtime_csv(monkeypatch):
+    store = SessionStore()
+    store.add_file("sid-bootstrap", "/tmp/demo.mseed")
+    store.set_current_file("sid-bootstrap", "/tmp/demo.mseed")
+    service = AgentService(session_store=store)
+
+    class _ShouldNotRunAgent:
+        def invoke(self, _payload):
+            raise AssertionError("ReAct agent should not be invoked for bootstrap picking")
+
+    def _fake_build_agent_session(session_id: str, lang: str) -> AgentSession:
+        return AgentSession(session_id=session_id, lang=lang, agent=_ShouldNotRunAgent())
+
+    monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+    monkeypatch.setattr(service, "_summarize_direct_tool_result", lambda **_: "summary-bootstrap")
+    monkeypatch.setattr(
+        service._tool_planner,
+        "plan",
+        lambda **_: type(
+            "P",
+            (),
+            {
+                "route": "result_analysis",
+                "tool": "picks_trace_plot",
+                "params": {"trace_index": 0},
+                "need_rerun": False,
+                "confidence": 0.9,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "backend.services.agent_service.pick_first_arrivals",
+        type(
+            "_DummyTool",
+            (),
+            {
+                "invoke": staticmethod(
+                    lambda payload: {
+                        "success": True,
+                        "message": "初至拾取已完成。",
+                        "artifacts": [
+                            {
+                                "type": "image",
+                                "name": "demo.png",
+                                "path": "picks/demo.png",
+                                "url": "/api/artifacts/picks/demo.png",
+                            },
+                            {
+                                "type": "file",
+                                "name": "demo.csv",
+                                "path": "picks/demo.csv",
+                                "url": "/api/artifacts/picks/demo.csv",
+                            },
+                        ],
+                        "data": {"picks_csv": "picks/demo.csv", "plot_path": "picks/demo.png"},
+                    }
+                )
+            },
+        ),
+    )
+
+    result = service.chat("看看第一道的拾取图像", session_id="sid-bootstrap", lang="zh")
+    assert result.error is None
+    assert result.route == "phase_picking"
+    assert result.answer == "summary-bootstrap"
+    runtime = store.get_runtime_results("sid-bootstrap")
+    assert runtime.get("last_picks_csv") == "picks/demo.csv"
+    assert runtime.get("last_picks_image") == "picks/demo.png"
 
 
 def test_agent_service_file_structure_fast_path(monkeypatch):
@@ -248,3 +322,6 @@ def test_agent_service_format_conversion_fast_path(monkeypatch):
     assert result.route == "format_conversion"
     assert result.answer == "summary-convert"
     assert result.artifacts and result.artifacts[0].url == "/api/artifacts/convert/demo.h5"
+    runtime = store.get_runtime_results("sid-conv")
+    assert runtime.get("last_converted_file") == "convert/demo.h5"
+    assert runtime.get("last_uploaded_files") == ["tmp/demo.mseed"]

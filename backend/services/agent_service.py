@@ -622,6 +622,21 @@ class AgentService:
             if lowered.endswith(".json") and "catalog" in lowered:
                 updates.setdefault("last_catalog_json", path)
 
+        if route == "format_conversion":
+            for item in artifacts:
+                path = self._to_runtime_path(item.path or item.url)
+                if not path:
+                    continue
+                lowered = path.lower()
+                if item.type == "file" and lowered.endswith((".h5", ".hdf5", ".npy", ".sac", ".mseed", ".miniseed", ".xlsx")):
+                    updates["last_converted_file"] = path
+                    break
+            for item in artifacts:
+                path = self._to_runtime_path(item.path or item.url)
+                if item.type == "image" and path:
+                    updates["last_conversion_image"] = path
+                    break
+
         if route == "continuous_monitoring" and payload:
             updates["last_continuous_monitoring"] = payload
         if route == "result_analysis":
@@ -635,8 +650,24 @@ class AgentService:
         return updates
 
     def _persist_runtime_updates(self, session_id: str, updates: dict[str, Any]) -> None:
-        if updates:
-            self._sessions.update_runtime_results(session_id, updates)
+        if not updates:
+            return
+
+        current_file = self._sessions.get_current_file(session_id)
+        uploaded_files = self._sessions.get_uploaded_files(session_id)
+        normalized_uploaded = [self._to_runtime_path(path) for path in uploaded_files if str(path or "").strip()]
+        if normalized_uploaded:
+            updates.setdefault("last_uploaded_files", normalized_uploaded)
+
+        if current_file:
+            normalized_current = self._to_runtime_path(current_file)
+            if normalized_current:
+                updates.setdefault("last_current_file", normalized_current)
+            suffix = Path(str(current_file)).suffix.lower()
+            if suffix in {".mseed", ".miniseed"}:
+                updates.setdefault("last_miniseed_file", normalized_current)
+
+        self._sessions.update_runtime_results(session_id, updates)
 
     def _persist_workflow_runtime(self, session_id: str, workflow_result: dict[str, Any]) -> None:
         artifacts = self._artifacts_from_payload(workflow_result.get("artifacts", []))
@@ -738,17 +769,27 @@ class AgentService:
             "catalog_mag_depth_scatter",
             "catalog_event_index",
         }:
-            from quakecore_tools.analysis_tools import run_analysis_sandbox
-
-            params["template"] = tool
-            params["session_id"] = session_id
+            # For pick-analysis requests without existing picks context, bootstrap
+            # one pass of deterministic picking first, then future follow-ups can
+            # be handled by code-first analysis runtime.
             if tool.startswith("picks_"):
-                params.setdefault("input_artifact_key", "last_picks_csv")
+                runtime = self._sessions.get_runtime_results(session_id)
+                if not runtime.get("last_picks_csv"):
+                    has_session_file = bool(
+                        self._sessions.get_current_file(session_id) or self._sessions.get_uploaded_files(session_id)
+                    )
+                    if not has_session_file:
+                        return None
+                    trace_index = int(params.get("trace_index", 0) or 0)
+                    tool_obj = pick_first_arrivals
+                    payload = {"params": {"trace_number": max(1, trace_index + 1)}}
+                    route = "phase_picking"
+                else:
+                    return None
             else:
-                params.setdefault("input_artifact_key", "last_catalog_csv")
-            tool_obj = run_analysis_sandbox
-            payload = {"params": params}
-            route = "result_analysis"
+                # Route analysis requests to LangGraphRuntime so it can do code-first,
+                # template-fallback execution consistently.
+                return None
         elif tool == "result_explanation" or not tool:
             return None
         else:

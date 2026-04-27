@@ -11,6 +11,7 @@ from agent.core import _build_llm
 from backend.services.artifact_utils import make_artifact, to_data_relative_path
 from backend.services.config_service import ConfigService
 from backend.services.router_service import RouterService
+from backend.services.session_store import get_session_store
 from backend.services.tool_result import ToolResult
 from quakecore_tools.analysis_tools import run_analysis_sandbox
 
@@ -163,34 +164,61 @@ class LangGraphRuntime:
         input_key: str,
         lang: str,
     ) -> str:
+        try:
+            runtime_preview = json.dumps(runtime_results, ensure_ascii=False, default=str)
+        except Exception:
+            runtime_preview = str(runtime_results)
+        runtime_preview = runtime_preview[:5000]
         if str(lang).lower().startswith("zh"):
             return (
-                "你是地震分析代码生成器。请输出一段可执行 Python 代码（仅代码，不要解释，不要 markdown）。\n"
-                "目标：完成用户提出的分析请求。\n"
-                "输入数据：rows(list[dict])、columns(list[str])，来自 input_artifact_key。\n"
-                "可用 helper：save_csv(name, table), save_plot(name), set_message(text), set_data(key, value), np, pd, plt(可选)。\n"
-                "约束：禁止 import、禁止 open/exec/eval、禁止网络与系统调用。\n"
+                "你是 QuakeCore 的受限 Python 黑箱分析器。只输出 Python 代码，不要 markdown，不要解释。\n"
+                "目标：基于当前会话已有结果做小分析、小统计、小绘图或结果解释。\n"
+                "不要重新运行完整 workflow。\n\n"
+                "默认输入：\n"
+                "- rows: list[dict]，来自 input_artifact_key 对应 CSV\n"
+                "- columns: list[str]\n"
+                "- input_path: 默认 CSV 路径\n"
+                "- runtime_results: 当前会话已登记结果\n\n"
+                "可用 helper：\n"
+                "- set_message(text)\n"
+                "- set_data(key, value)\n"
+                "- save_csv(name, table)\n"
+                "- save_plot(name)\n"
+                "- resolve_data_path(path_or_key)\n"
+                "- read_csv(path_or_key)\n"
+                "- read_json(path_or_key)\n"
+                "- read_waveform(path_or_key)\n\n"
+                "强规则：\n"
+                "1) 中文“第N道”表示 trace_index=N-1；英文 trace N 表示 trace_index=N。\n"
+                "2) 用户要求某道拾取图像时，应画 waveform 并用竖线标出 P/S 到时，不要只画 sample-score 散点图。\n"
+                "3) 图像必须 save_plot，表格必须 save_csv，且必须 set_message。\n"
+                "4) 禁止 import、open、exec、eval、网络与系统调用。\n"
                 "输出要求：\n"
                 "1) 至少设置 set_message。\n"
                 "2) 若有统计结果，调用 set_data。\n"
                 "3) 若有表格或图，调用 save_csv/save_plot。\n\n"
                 f"用户请求：{message}\n"
                 f"推荐输入：{input_key}\n"
-                f"runtime_results keys: {sorted(runtime_results.keys())}\n"
+                f"runtime_results：{runtime_preview}\n"
             )
         return (
-            "You are a seismic analysis code generator. Output executable Python code only.\n"
-            "Goal: satisfy the user's analysis request.\n"
-            "Input data: rows(list[dict]), columns(list[str]) from input_artifact_key.\n"
-            "Helpers: save_csv(name, table), save_plot(name), set_message(text), set_data(key, value), np, pd, plt(optional).\n"
-            "Constraints: no imports, no open/exec/eval, no network/system calls.\n"
+            "You are QuakeCore's restricted Python analysis sandbox generator. Output Python code only.\n"
+            "Goal: analyze existing session artifacts/results for lightweight stats/plots/explanations.\n"
+            "Do not re-run full workflows.\n"
+            "Input data: rows(list[dict]), columns(list[str]), input_path, runtime_results.\n"
+            "Helpers: set_message, set_data, save_csv, save_plot, resolve_data_path, read_csv, read_json, read_waveform.\n"
+            "Rules:\n"
+            "1) Chinese 第N道 => trace_index=N-1; English trace N => trace_index=N.\n"
+            "2) For trace pick image requests, plot waveform with P/S vertical markers (not sample-score scatter only).\n"
+            "3) Must call set_message; call save_plot/save_csv when producing image/table.\n"
+            "4) No imports/open/exec/eval/network/system calls.\n"
             "Output rules:\n"
             "1) call set_message.\n"
             "2) call set_data for key metrics.\n"
             "3) call save_csv/save_plot when useful.\n\n"
             f"User request: {message}\n"
             f"Recommended input key: {input_key}\n"
-            f"runtime_results keys: {sorted(runtime_results.keys())}\n"
+            f"runtime_results: {runtime_preview}\n"
         )
 
     def _generate_analysis_code(
@@ -381,21 +409,15 @@ class LangGraphRuntime:
             raw = fallback_agent.invoke({"input": message})
             return ToolResult.from_response(raw)
 
-        runtime_results = self._extract_runtime_context(message)
+        store_runtime = get_session_store().get_runtime_results(session_id)
+        message_runtime = self._extract_runtime_context(message)
+        runtime_results = dict(store_runtime)
+        runtime_results.update(message_runtime)
         if route == "result_explanation":
             return ToolResult.from_response(self._build_explanation_payload(runtime_results, lang))
 
         template = self._select_template(message, route)
         try:
-            if template:
-                template_payload = self._run_template_analysis(
-                    session_id=session_id,
-                    message=message,
-                    template=template,
-                )
-                # Template first. On success return directly; on failure, try code fallback.
-                if template_payload.get("success") is True:
-                    return ToolResult.from_response(template_payload)
             code_payload = self._run_code_analysis(
                 session_id=session_id,
                 message=message,
