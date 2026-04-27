@@ -354,3 +354,36 @@ def test_langgraph_runtime_trace_pick_image_blocked_syntax_uses_builtin_fallback
     second_code = str(calls[1]["params"].get("code", ""))
     assert "read_waveform" in second_code
     assert "try:" not in second_code
+
+
+def test_langgraph_runtime_trace_pick_image_general_code_error_uses_builtin_fallback(monkeypatch):
+    runtime = LangGraphRuntime(enabled=True)
+    calls = []
+
+    class _DummySandbox:
+        def invoke(self, payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                return json.dumps(
+                    {"success": False, "message": "Code execution failed: list object has no attribute columns"},
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {"success": True, "message": "fallback-after-general-error-ok", "data": {}, "artifacts": []},
+                ensure_ascii=False,
+            )
+
+    monkeypatch.setattr("backend.services.langgraph_runtime.run_analysis_sandbox", _DummySandbox())
+    monkeypatch.setattr(runtime, "_generate_analysis_code", lambda **_: "set_message('bad path')")
+
+    message = (
+        "看看第二道数据的拾取图像\n\n"
+        "【当前会话已有结果上下文】\n"
+        + json.dumps({"last_picks_csv": "picks/a.csv", "last_miniseed_file": "uploads/x.mseed"}, ensure_ascii=False)
+    )
+    result = runtime.invoke(session_id="sid-general-err", message=message, lang="zh", fallback_agent=_DummyAgent())
+    normalized = normalize_tool_output(result)
+
+    assert normalized.success is True
+    assert normalized.message == "fallback-after-general-error-ok"
+    assert len(calls) == 2

@@ -304,7 +304,7 @@ class AgentService:
         artifacts = self._build_chat_artifacts(normalized)
         self._persist_runtime_updates(
             session_id,
-            self._extract_runtime_updates(route=route, data=normalized.data, artifacts=artifacts),
+            self._extract_runtime_updates(session_id=session_id, route=route, data=normalized.data, artifacts=artifacts),
         )
         return ChatResult(
             session_id=session_id,
@@ -502,7 +502,7 @@ class AgentService:
         artifacts = self._build_chat_artifacts(normalized)
         self._persist_runtime_updates(
             session_id,
-            self._extract_runtime_updates(route="result_analysis", data=normalized.data, artifacts=artifacts),
+            self._extract_runtime_updates(session_id=session_id, route="result_analysis", data=normalized.data, artifacts=artifacts),
         )
         return normalized.message, artifacts
 
@@ -603,7 +603,7 @@ class AgentService:
         artifacts = self._build_chat_artifacts(normalized)
         self._persist_runtime_updates(
             session_id,
-            self._extract_runtime_updates(route=route, data=normalized.data, artifacts=artifacts),
+            self._extract_runtime_updates(session_id=session_id, route=route, data=normalized.data, artifacts=artifacts),
         )
         post = self._try_blackbox_postprocess(
             message=message,
@@ -661,6 +661,7 @@ class AgentService:
     def _extract_runtime_updates(
         self,
         *,
+        session_id: str,
         route: str,
         data: dict[str, Any] | None,
         artifacts: list[ArtifactItem],
@@ -689,6 +690,25 @@ class AgentService:
                 if path:
                     updates.setdefault("last_analysis_files", []).append(path)
             return updates
+
+        if route == "phase_picking":
+            current = self._sessions.get_current_file(session_id)
+            uploaded = self._sessions.get_uploaded_files(session_id)
+            if current:
+                normalized_current = self._to_runtime_path(current)
+                if normalized_current:
+                    updates["last_miniseed_file"] = normalized_current
+                    updates["last_picks_source_file"] = normalized_current
+            if uploaded:
+                updates["last_uploaded_files"] = [self._to_runtime_path(item) for item in uploaded if str(item or "").strip()]
+
+            for item in artifacts:
+                path = self._to_runtime_path(item.path or item.url)
+                lowered = path.lower()
+                if item.type == "image" and "pick" in lowered:
+                    updates["last_picks_image"] = path
+                if item.type == "file" and lowered.endswith(".csv") and "pick" in lowered:
+                    updates["last_picks_csv"] = path
 
         key_mapping = {
             "picks_csv": "last_picks_csv",
@@ -781,6 +801,7 @@ class AgentService:
     def _persist_workflow_runtime(self, session_id: str, workflow_result: dict[str, Any]) -> None:
         artifacts = self._artifacts_from_payload(workflow_result.get("artifacts", []))
         updates = self._extract_runtime_updates(
+            session_id=session_id,
             route="earthquake_location",
             data=workflow_result.get("location", {}),
             artifacts=artifacts,
@@ -918,7 +939,7 @@ class AgentService:
         artifacts = self._build_chat_artifacts(normalized)
         self._persist_runtime_updates(
             session_id,
-            self._extract_runtime_updates(route=route, data=normalized.data, artifacts=artifacts),
+            self._extract_runtime_updates(session_id=session_id, route=route, data=normalized.data, artifacts=artifacts),
         )
         post = self._try_blackbox_postprocess(
             message=message,
@@ -1094,6 +1115,7 @@ class AgentService:
             self._persist_runtime_updates(
                 final_session_id,
                 self._extract_runtime_updates(
+                    session_id=final_session_id,
                     route=route,
                     data=runtime_data,
                     artifacts=artifacts,

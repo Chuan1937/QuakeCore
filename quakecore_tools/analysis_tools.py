@@ -313,11 +313,16 @@ def _run_restricted_code(
                 return chosen
         return ""
 
-    def read_csv(path_or_key: str) -> list[dict[str, Any]]:
+    def read_csv(path_or_key: str) -> Any:
         resolved = Path(resolve_data_path(path_or_key))
-        with resolved.open("r", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            return list(reader)
+        try:
+            import pandas as pd
+
+            return pd.read_csv(resolved)
+        except Exception:
+            with resolved.open("r", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                return list(reader)
 
     def read_json(path_or_key: str) -> Any:
         resolved = Path(resolve_data_path(path_or_key))
@@ -331,6 +336,17 @@ def _run_restricted_code(
         except Exception as exc:
             raise RuntimeError(f"ObsPy unavailable: {exc}") from exc
         return read(resolved)
+
+    def get_runtime_file_path(kind: str) -> str:
+        expected = str(kind or "").strip().lower()
+        if expected in {"miniseed", "mseed", "waveform"}:
+            candidate = str(runtime_payload.get("last_miniseed_file") or "").strip()
+            if candidate:
+                return candidate
+            uploaded = runtime_payload.get("last_uploaded_files")
+            if isinstance(uploaded, list) and uploaded:
+                return str(uploaded[-1] or "").strip()
+        return ""
 
     safe_builtins = {
         "len": len,
@@ -350,6 +366,8 @@ def _run_restricted_code(
         "dict": dict,
         "set": set,
         "tuple": tuple,
+        "isinstance": isinstance,
+        "hasattr": hasattr,
         "print": print,
     }
 
@@ -361,6 +379,7 @@ def _run_restricted_code(
         "runtime_results": runtime_payload,
         "resolve_data_path": resolve_data_path,
         "get_runtime_artifact_path": get_runtime_artifact_path,
+        "get_runtime_file_path": get_runtime_file_path,
         "read_csv": read_csv,
         "read_json": read_json,
         "read_waveform": read_waveform,

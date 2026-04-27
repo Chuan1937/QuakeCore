@@ -213,3 +213,29 @@ set_message('inline runtime ok')
     assert payload["success"] is True
     assert payload["message"] == "inline runtime ok"
     assert payload["data"]["rows2"] == 1
+
+
+def test_analysis_sandbox_code_mode_runtime_file_path_helper(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    wave = tmp_path / "data" / "uploads" / "demo.mseed"
+    wave.parent.mkdir(parents=True, exist_ok=True)
+    wave.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setenv("QUAKECORE_ANALYSIS_ALLOW_CODE", "1")
+
+    raw = run_analysis_sandbox.invoke(
+        {
+            "params": {
+                "allow_code": True,
+                "runtime_results": {"last_uploaded_files": ["uploads/demo.mseed"]},
+                "code": """
+path = get_runtime_file_path('miniseed')
+set_data('path', path)
+set_message('runtime file helper ok')
+""",
+            }
+        }
+    )
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    assert payload["message"] == "runtime file helper ok"
+    assert payload["data"]["path"] == "uploads/demo.mseed"
