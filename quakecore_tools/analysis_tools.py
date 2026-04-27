@@ -462,6 +462,168 @@ def _run_restricted_code(
             save_csv(csv_name, selected)
         return {"trace_index": ti, "pick_count": len(selected), "image_path": image_path}
 
+    def summarize_picks(picks_key: str = "last_picks_csv") -> dict[str, Any]:
+        picks_obj = read_csv(picks_key)
+        if hasattr(picks_obj, "columns"):
+            df = picks_obj
+        elif isinstance(picks_obj, list):
+            try:
+                import pandas as pd
+
+                df = pd.DataFrame(picks_obj)
+            except Exception:
+                df = picks_obj
+        else:
+            df = picks_obj
+
+        if hasattr(df, "columns"):
+            cols = list(df.columns)
+            lower = {str(c).lower(): str(c) for c in cols}
+            phase_col = lower.get("phase") or lower.get("phase_type") or lower.get("type")
+            method_col = lower.get("method") or lower.get("pick_method")
+            trace_col = lower.get("trace_index") or lower.get("trace") or lower.get("trace_id") or lower.get("index")
+            score_col = lower.get("score") or lower.get("probability") or lower.get("confidence") or lower.get("normalized_score")
+            result: dict[str, Any] = {"row_count": int(len(df)), "columns": cols}
+            if phase_col:
+                result["phase_counts"] = df[phase_col].astype(str).value_counts().to_dict()
+            if method_col:
+                result["method_counts"] = df[method_col].astype(str).value_counts().to_dict()
+            if trace_col:
+                result["trace_counts"] = df[trace_col].astype(str).value_counts().to_dict()
+            if score_col:
+                score = df[score_col]
+                try:
+                    import pandas as pd
+
+                    score = pd.to_numeric(score, errors="coerce")
+                    result["score_mean"] = float(score.mean())
+                    result["score_min"] = float(score.min())
+                    result["score_max"] = float(score.max())
+                except Exception:
+                    pass
+            set_data("picks_summary", result)
+            save_csv("picks_summary.csv", [result])
+            set_message("已完成拾取结果统计。")
+            return result
+
+        # list fallback
+        rows_list = list(df) if isinstance(df, list) else []
+        result = {"row_count": len(rows_list)}
+        set_data("picks_summary", result)
+        save_csv("picks_summary.csv", [result])
+        set_message("已完成拾取结果统计。")
+        return result
+
+    def plot_picks_score_distribution(picks_key: str = "last_picks_csv") -> dict[str, Any]:
+        picks_obj = read_csv(picks_key)
+        if hasattr(picks_obj, "columns"):
+            df = picks_obj
+        else:
+            try:
+                import pandas as pd
+
+                df = pd.DataFrame(picks_obj if isinstance(picks_obj, list) else [])
+            except Exception:
+                raise ValueError("Cannot build dataframe for picks score distribution.")
+
+        lower = {str(c).lower(): str(c) for c in df.columns}
+        score_col = lower.get("score") or lower.get("probability") or lower.get("confidence") or lower.get("normalized_score")
+        phase_col = lower.get("phase") or lower.get("phase_type") or lower.get("type")
+        if not score_col:
+            set_message("未找到 score/probability/confidence 列，无法绘制置信度分布。")
+            return {"success": False}
+        plt, err = _plot_or_error()
+        if plt is None:
+            raise RuntimeError(err or "matplotlib unavailable")
+        fig = plt.figure(figsize=(8, 4))
+        ax = fig.add_subplot(111)
+        try:
+            import pandas as pd
+
+            if phase_col:
+                for phase, group in df.groupby(phase_col):
+                    values = pd.to_numeric(group[score_col], errors="coerce").dropna()
+                    ax.hist(values, bins=20, alpha=0.5, label=str(phase))
+                ax.legend()
+            else:
+                values = pd.to_numeric(df[score_col], errors="coerce").dropna()
+                ax.hist(values, bins=20)
+        except Exception:
+            ax.hist([], bins=20)
+        ax.set_xlabel(str(score_col))
+        ax.set_ylabel("Count")
+        ax.set_title("Pick Score Distribution")
+        fig.tight_layout()
+        save_plot("picks_score_distribution.png")
+        set_message("已绘制拾取置信度分布图。")
+        return {"success": True}
+
+    def plot_picks_by_trace(picks_key: str = "last_picks_csv") -> dict[str, Any]:
+        picks_obj = read_csv(picks_key)
+        if hasattr(picks_obj, "columns"):
+            df = picks_obj
+        else:
+            try:
+                import pandas as pd
+
+                df = pd.DataFrame(picks_obj if isinstance(picks_obj, list) else [])
+            except Exception:
+                raise ValueError("Cannot build dataframe for picks by trace.")
+        lower = {str(c).lower(): str(c) for c in df.columns}
+        trace_col = lower.get("trace_index") or lower.get("trace") or lower.get("trace_id") or lower.get("index")
+        if not trace_col:
+            set_message("未找到 trace 列，无法绘制按道统计图。")
+            return {"success": False}
+        counts = df[trace_col].astype(str).value_counts().sort_index()
+        plt, err = _plot_or_error()
+        if plt is None:
+            raise RuntimeError(err or "matplotlib unavailable")
+        fig = plt.figure(figsize=(10, 4))
+        ax = fig.add_subplot(111)
+        ax.bar(range(len(counts)), list(counts.values))
+        ax.set_xticks(range(len(counts)))
+        ax.set_xticklabels(list(counts.index), rotation=45, ha="right")
+        ax.set_title("Picks by Trace")
+        ax.set_ylabel("Count")
+        fig.tight_layout()
+        save_plot("picks_by_trace.png")
+        save_csv("picks_by_trace.csv", [{"trace": k, "count": int(v)} for k, v in counts.to_dict().items()])
+        set_message("已绘制每道拾取数量统计图。")
+        return {"success": True}
+
+    def plot_picks_by_method(picks_key: str = "last_picks_csv") -> dict[str, Any]:
+        picks_obj = read_csv(picks_key)
+        if hasattr(picks_obj, "columns"):
+            df = picks_obj
+        else:
+            try:
+                import pandas as pd
+
+                df = pd.DataFrame(picks_obj if isinstance(picks_obj, list) else [])
+            except Exception:
+                raise ValueError("Cannot build dataframe for picks by method.")
+        lower = {str(c).lower(): str(c) for c in df.columns}
+        method_col = lower.get("method") or lower.get("pick_method")
+        if not method_col:
+            set_message("未找到 method 列，无法绘制按方法统计图。")
+            return {"success": False}
+        counts = df[method_col].astype(str).value_counts()
+        plt, err = _plot_or_error()
+        if plt is None:
+            raise RuntimeError(err or "matplotlib unavailable")
+        fig = plt.figure(figsize=(8, 4))
+        ax = fig.add_subplot(111)
+        ax.bar(range(len(counts)), list(counts.values))
+        ax.set_xticks(range(len(counts)))
+        ax.set_xticklabels(list(counts.index), rotation=30, ha="right")
+        ax.set_title("Picks by Method")
+        ax.set_ylabel("Count")
+        fig.tight_layout()
+        save_plot("picks_by_method.png")
+        save_csv("picks_by_method.csv", [{"method": k, "count": int(v)} for k, v in counts.to_dict().items()])
+        set_message("已绘制按拾取方法统计图。")
+        return {"success": True}
+
     safe_builtins = {
         "len": len,
         "min": min,
@@ -498,6 +660,10 @@ def _run_restricted_code(
         "get_active_file_record": get_active_file_record,
         "get_file_record": get_file_record,
         "plot_trace_picks": plot_trace_picks,
+        "summarize_picks": summarize_picks,
+        "plot_picks_score_distribution": plot_picks_score_distribution,
+        "plot_picks_by_trace": plot_picks_by_trace,
+        "plot_picks_by_method": plot_picks_by_method,
         "read_csv": read_csv,
         "read_json": read_json,
         "read_waveform": read_waveform,

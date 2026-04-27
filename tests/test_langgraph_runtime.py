@@ -327,7 +327,7 @@ def test_langgraph_runtime_trace_pick_image_blocked_syntax_uses_builtin_fallback
     class _DummySandbox:
         def invoke(self, payload):
             calls.append(payload)
-            if len(calls) == 1:
+            if len(calls) <= 3:
                 return json.dumps(
                     {"success": False, "message": "Blocked syntax in code: Try", "error": "Blocked syntax in code: Try"},
                     ensure_ascii=False,
@@ -350,10 +350,10 @@ def test_langgraph_runtime_trace_pick_image_blocked_syntax_uses_builtin_fallback
 
     assert normalized.success is True
     assert normalized.message == "fallback-after-block-ok"
-    assert len(calls) == 2
-    second_code = str(calls[1]["params"].get("code", ""))
-    assert "read_waveform" in second_code
-    assert "try:" not in second_code
+    assert len(calls) == 4
+    fourth_code = str(calls[3]["params"].get("code", ""))
+    assert "read_waveform" in fourth_code
+    assert "try:" not in fourth_code
 
 
 def test_langgraph_runtime_trace_pick_image_general_code_error_uses_builtin_fallback(monkeypatch):

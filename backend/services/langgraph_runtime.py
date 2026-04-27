@@ -161,7 +161,7 @@ class LangGraphRuntime:
             "            phase = str(row.get(phase_col, 'P')).upper() if phase_col else 'P'\n"
             "            color = '#2ca02c' if phase.startswith('P') else '#d62728'\n"
             "            ax.axvline(sx / sr, color=color, linestyle='--', linewidth=1.0, alpha=0.85)\n"
-            "        ax.set_title(f'Trace {{trace_index}} Waveform with Picks')\n"
+            "        ax.set_title(f'Trace {trace_index} Waveform with Picks')\n"
             "        ax.set_xlabel('Time (s)')\n"
             "        ax.set_ylabel('Amplitude')\n"
             "        fig.tight_layout()\n"
@@ -268,18 +268,91 @@ class LangGraphRuntime:
         return cleaned
 
     @staticmethod
+    def _extract_json_dict(text: str) -> dict[str, Any] | None:
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+        block = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw, flags=re.IGNORECASE)
+        if block:
+            raw = block.group(1).strip()
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start >= 0 and end > start:
+            raw = raw[start : end + 1]
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _generate_analysis_plan(
+        self,
+        *,
+        message: str,
+        runtime_results: dict[str, Any],
+        lang: str,
+    ) -> dict[str, Any]:
+        cfg = ConfigService().get_llm_config()
+        llm = _build_llm(
+            provider=str(cfg.get("provider", "deepseek")),
+            model_name=str(cfg.get("model_name", "deepseek-v4-flash")),
+            api_key=cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY"),
+            base_url=cfg.get("base_url"),
+            streaming=False,
+        )
+        try:
+            runtime_preview = json.dumps(runtime_results, ensure_ascii=False, default=str)[:5000]
+        except Exception:
+            runtime_preview = str(runtime_results)[:5000]
+        prompt = (
+            "你是 QuakeCore 的分析规划器。只输出 JSON。\n"
+            f"用户请求：{message}\n"
+            f"runtime_results：{runtime_preview}\n"
+            "规则：\n"
+            "1) “所有/整体/全部/总体/拾取情况”优先 picks_summary，不是单道图。\n"
+            "2) 只有“第N道/trace N/某道图像”才 picks_trace_plot。\n"
+            "3) “第二张图/第N张图”使用 artifact_view，并给 image_index。\n"
+            "4) 中文第N道 => trace_index=N-1。\n"
+            "输出：\n"
+            "{\n"
+            '  "task_type":"picks_summary|picks_trace_plot|picks_distribution|catalog_summary|catalog_plot|artifact_view|conversion_analysis|custom",\n'
+            '  "target_file":"",\n'
+            '  "input_keys":[],\n'
+            '  "trace_index":null,\n'
+            '  "image_index":null,\n'
+            '  "need_waveform":false,\n'
+            '  "need_csv":true,\n'
+            '  "need_plot":true,\n'
+            '  "expected_outputs":[],\n'
+            '  "user_intent":""\n'
+            "}"
+        )
+        out = llm.invoke(prompt)
+        content = getattr(out, "content", out)
+        parsed = self._extract_json_dict(str(content or ""))
+        if isinstance(parsed, dict):
+            return parsed
+        return {"task_type": "custom", "input_keys": [], "user_intent": message}
+
+    @staticmethod
     def _build_code_prompt(
         *,
         message: str,
         runtime_results: dict[str, Any],
         input_key: str,
         lang: str,
+        plan: dict[str, Any] | None = None,
     ) -> str:
         try:
             runtime_preview = json.dumps(runtime_results, ensure_ascii=False, default=str)
         except Exception:
             runtime_preview = str(runtime_results)
         runtime_preview = runtime_preview[:5000]
+        try:
+            plan_preview = json.dumps(plan or {}, ensure_ascii=False, default=str)
+        except Exception:
+            plan_preview = str(plan or {})
+        plan_preview = plan_preview[:2000]
         if str(lang).lower().startswith("zh"):
             return (
                 "你是 QuakeCore 的受限 Python 黑箱分析器。只输出 Python 代码，不要 markdown，不要解释。\n"
@@ -306,9 +379,11 @@ class LangGraphRuntime:
                 "- read_csv(path_or_key)\n"
                 "- read_json(path_or_key)\n"
                 "- read_waveform(path_or_key)\n\n"
+                f"分析计划：\n{plan_preview}\n\n"
                 "强规则：\n"
                 "1) 中文“第N道”表示 trace_index=N-1；英文 trace N 表示 trace_index=N。\n"
                 "2) 用户要求某道拾取图像时，优先调用 plot_trace_picks(trace_index)。\n"
+                "2.1) 如果 task_type 是 picks_summary 或用户说所有/整体/全部/总体/拾取情况，不要调用 plot_trace_picks，优先 summarize_picks。\n"
                 "3) rows/columns 可能为空。为空时不要失败，主动通过 runtime_results 或 get_runtime_artifact_path() 查找文件。\n"
                 "4) 用户问题与默认 rows 不匹配时，主动 read_csv/read_json/read_waveform 读取更合适的 runtime key。\n"
                 "5) read_csv(path_or_key) 优先返回 pandas DataFrame；若返回 list，可用 pd.DataFrame(list_obj) 转换。\n"
@@ -331,6 +406,7 @@ class LangGraphRuntime:
             "Goal: analyze existing session artifacts/results for lightweight stats/plots/explanations.\n"
             "Do not re-run full workflows.\n"
             "Input data: rows(list[dict]), columns(list[str]), input_path, runtime_results.\n"
+            f"Plan: {plan_preview}\n"
             "Helpers: set_message, set_data, save_csv, save_plot, resolve_data_path, get_runtime_artifact_path, get_runtime_file_path, get_visible_artifact, get_active_file_record, get_file_record, plot_trace_picks, read_csv, read_json, read_waveform.\n"
             "Rules:\n"
             "1) Chinese 第N道 => trace_index=N-1; English trace N => trace_index=N.\n"
@@ -358,6 +434,7 @@ class LangGraphRuntime:
         runtime_results: dict[str, Any],
         input_key: str,
         lang: str,
+        plan: dict[str, Any] | None = None,
     ) -> str:
         cfg = ConfigService().get_llm_config()
         provider = str(cfg.get("provider", "deepseek"))
@@ -374,6 +451,7 @@ class LangGraphRuntime:
             runtime_results=runtime_results,
             input_key=input_key,
             lang=lang,
+            plan=plan,
         )
         out = llm.invoke(prompt)
         content = getattr(out, "content", out)
@@ -442,6 +520,15 @@ class LangGraphRuntime:
         max_attempts = 3 if self._is_trace_pick_image_request(message) else 2
         last_error = ""
         generated_code = ""
+        plan: dict[str, Any] = {}
+        try:
+            plan = self._generate_analysis_plan(
+                message=message,
+                runtime_results=runtime_results,
+                lang=lang,
+            )
+        except Exception:
+            plan = {"task_type": "custom", "input_keys": [], "user_intent": message}
         for _attempt in range(max_attempts):
             prompt_message = message
             if last_error:
@@ -456,9 +543,10 @@ class LangGraphRuntime:
                     runtime_results=runtime_results,
                     input_key=input_key,
                     lang=lang,
+                    plan=plan,
                 )
             except Exception as exc:
-                if self._is_trace_pick_image_request(message):
+                if self._is_trace_pick_image_request(message) and _attempt == max_attempts - 1:
                     trace_index = self._extract_trace_index(message) or 0
                     generated_code = self._build_trace_pick_waveform_code(trace_index)
                     last_error = f"llm_codegen_failed: {exc}"
@@ -491,7 +579,7 @@ class LangGraphRuntime:
                 payload["data"] = data
                 return payload
             last_error = str(payload.get("error") or payload.get("message") or "unknown_error")
-            if self._is_trace_pick_image_request(message):
+            if self._is_trace_pick_image_request(message) and _attempt == max_attempts - 1:
                 trace_index = self._extract_trace_index(message) or 0
                 fallback_code = self._build_trace_pick_waveform_code(trace_index)
                 raw_fallback = run_analysis_sandbox.invoke(
@@ -514,6 +602,7 @@ class LangGraphRuntime:
                     data["generated_code"] = fallback_code
                     data["input_key"] = input_key
                     data["fallback_codegen"] = "builtin_trace_pick_waveform"
+                    data["analysis_plan"] = plan
                     payload_fallback["data"] = data
                     return payload_fallback
         return {
@@ -523,6 +612,7 @@ class LangGraphRuntime:
             "data": {
                 "generated_code": generated_code,
                 "input_key": input_key,
+                "analysis_plan": plan,
             },
             "artifacts": [],
         }
