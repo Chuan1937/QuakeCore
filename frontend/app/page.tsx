@@ -41,6 +41,8 @@ type Message = {
   files?: Array<{ name: string; fileType?: string }>;
   pending?: boolean;
   attachments?: ChatAttachment[];
+  currentWorkflowStep?: WorkflowStep | null;
+  workflowStepHistory?: WorkflowStep[];
   progress?: {
     percent: number;
     step: string;
@@ -83,6 +85,21 @@ function inferPendingText(text: string): string {
     return "正在准备连续地震监测任务…";
   }
   return "正在思考…";
+}
+
+function buildWorkflowFromPendingSteps(steps: WorkflowStep[]): WorkflowResult | null {
+  if (!steps.length) {
+    return null;
+  }
+  return {
+    status: "success",
+    summary: "",
+    message: "",
+    steps: [...steps],
+    location: {},
+    artifacts: [],
+    error: null,
+  };
 }
 
 function isContinuousMonitoringRequest(text: string): boolean {
@@ -569,6 +586,14 @@ export default function HomePage() {
       let receivedFinal = false;
 
       for await (const event of stream) {
+        if (event.type === "status" && event.message) {
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === msgId ? { ...item, content: event.message ?? item.content } : item,
+            ),
+          );
+        }
+
         if (event.type === "progress" && event.event) {
           const ev = event.event;
           const stepName = ev.summary || ev.type || "";
@@ -599,6 +624,8 @@ export default function HomePage() {
               item.id === msgId
                 ? {
                     ...item,
+                    currentWorkflowStep: step,
+                    workflowStepHistory: [...pendingSteps].slice(-20),
                     workflow: {
                       status: "running",
                       summary: "",
@@ -631,7 +658,9 @@ export default function HomePage() {
                     route: r.route,
                     artifacts: resolvedArtifacts,
                     error: r.error,
-                    workflow: r.workflow ?? null,
+                    currentWorkflowStep: null,
+                    workflowStepHistory: item.workflowStepHistory ?? [...pendingSteps].slice(-20),
+                    workflow: r.workflow ?? buildWorkflowFromPendingSteps(pendingSteps),
                   }
                 : item,
             ),
@@ -649,6 +678,8 @@ export default function HomePage() {
                   pending: false,
                   content: "Stream ended without response.",
                   error: "No final event received.",
+                  currentWorkflowStep: null,
+                  workflow: buildWorkflowFromPendingSteps(pendingSteps),
                 }
               : item,
           ),
@@ -658,9 +689,9 @@ export default function HomePage() {
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
       setMessages((current) =>
-        current.map((item) =>
-          item.id === msgId
-            ? { ...item, pending: false, content: "请求失败。", error: message }
+          current.map((item) =>
+            item.id === msgId
+            ? { ...item, pending: false, content: "请求失败。", error: message, currentWorkflowStep: null }
             : item,
         ),
       );
@@ -847,7 +878,7 @@ export default function HomePage() {
                         <div>{message.progress.step}</div>
                       </div>
                     ) : (
-                      <div className="assistant-message">
+                      <div className="assistant-message assistant-message-live">
                         <span className="pending-text">
                           {message.content}
                           <span className="dot-wave">
@@ -856,6 +887,23 @@ export default function HomePage() {
                             <i />
                           </span>
                         </span>
+                        {message.currentWorkflowStep ? (
+                          <div className="workflow-floating-step" aria-live="polite">
+                            <div className="workflow-step-title">{message.currentWorkflowStep.name}</div>
+                            {message.currentWorkflowStep.message ? (
+                              <div className="workflow-step-detail">{message.currentWorkflowStep.message}</div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {message.workflowStepHistory?.length ? (
+                          <div className="workflow-history">
+                            {message.workflowStepHistory.slice(-3).map((step, index) => (
+                              <div key={`${step.name}-${index}`} className={`workflow-history-item status-${step.status}`}>
+                                <span>{step.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     )
                   ) : (

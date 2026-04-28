@@ -197,10 +197,32 @@ export async function* chatWithAgentStream(
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  const parseChunk = (chunk: string): StreamEvent | null => {
+    const line = chunk
+      .split("\n")
+      .find((item) => item.startsWith("data:"));
+
+    if (!line) return null;
+
+    const json = line.slice("data:".length).trim();
+    if (!json) return null;
+
+    try {
+      return JSON.parse(json) as StreamEvent;
+    } catch {
+      return null;
+    }
+  };
 
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+      const tailEvent = parseChunk(buffer);
+      if (tailEvent) {
+        yield tailEvent;
+      }
+      break;
+    }
 
     buffer += decoder.decode(value, { stream: true });
 
@@ -208,20 +230,9 @@ export async function* chatWithAgentStream(
     buffer = chunks.pop() || "";
 
     for (const chunk of chunks) {
-      const line = chunk
-        .split("\n")
-        .find((item) => item.startsWith("data:"));
-
-      if (!line) continue;
-
-      const json = line.slice("data:".length).trim();
-      if (!json) continue;
-
-      try {
-        const event = JSON.parse(json) as StreamEvent;
+      const event = parseChunk(chunk);
+      if (event) {
         yield event;
-      } catch {
-        // skip malformed SSE events
       }
     }
   }

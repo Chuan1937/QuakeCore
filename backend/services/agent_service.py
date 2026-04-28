@@ -506,6 +506,81 @@ class AgentService:
         )
         return normalized.message, artifacts
 
+    def _should_stream_blackbox_postprocess(self, *, message: str, route: str) -> bool:
+        return (
+            self._langgraph_runtime.enabled
+            and route in {"phase_picking", "format_conversion", "continuous_monitoring", "earthquake_location"}
+            and self._needs_blackbox_postprocess(message)
+        )
+
+    @staticmethod
+    def _build_blackbox_analysis_message(message: str) -> str:
+        return (
+            "请基于当前会话已有结果做后处理分析与绘图，不要重新运行完整流程。"
+            f"用户原请求：{message}"
+        )
+
+    def _stream_blackbox_postprocess(
+        self,
+        *,
+        session_id: str,
+        message: str,
+        lang: str,
+        base_artifacts: list[ArtifactItem] | None = None,
+        base_workflow: dict[str, Any] | None = None,
+    ):
+        merged_artifacts = list(base_artifacts or [])
+        seen_urls = {item.url for item in merged_artifacts if item.url}
+        analysis_message = self._build_message_with_runtime_context(
+            message=self._build_blackbox_analysis_message(message),
+            session_id=session_id,
+            lang=lang,
+        )
+
+        for event in self._langgraph_runtime.stream_invoke(
+            session_id=session_id,
+            message=analysis_message,
+            lang=lang,
+        ):
+            if event.get("type") != "final":
+                yield event
+                continue
+
+            response = dict(event.get("response") or {})
+            new_artifacts: list[ArtifactItem] = []
+            for item in response.get("artifacts", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                artifact = ArtifactItem(
+                    type=str(item.get("type", "file")),
+                    name=str(item.get("name", "")),
+                    path=str(item.get("path", "")),
+                    url=str(item.get("url", "")),
+                )
+                if artifact.url and artifact.url in seen_urls:
+                    continue
+                if artifact.url:
+                    seen_urls.add(artifact.url)
+                new_artifacts.append(artifact)
+
+            persisted_updates = self._extract_runtime_updates(
+                session_id=session_id,
+                route="result_analysis",
+                data=((response.get("workflow") or {}).get("data") if isinstance(response.get("workflow"), dict) else None),
+                artifacts=new_artifacts,
+            )
+            self._persist_runtime_updates(session_id, persisted_updates)
+
+            response["artifacts"] = [
+                {"type": item.type, "name": item.name, "path": item.path, "url": item.url}
+                for item in merged_artifacts + new_artifacts
+            ]
+            if base_workflow and not response.get("workflow"):
+                response["workflow"] = base_workflow
+            response["route"] = "result_analysis"
+            yield {"type": "final", "response": response}
+            return
+
     def _select_conversion_tool(self, message: str, session_id: str) -> tuple[Any | None, dict[str, Any] | None]:
         text = str(message or "").lower()
         current_file = self._sessions.get_current_file(session_id)
@@ -888,6 +963,7 @@ class AgentService:
         message: str,
         session_id: str,
         lang: str,
+        allow_postprocess: bool = True,
     ) -> ChatResult | None:
         tool_obj = None
         payload: Any | None = None
@@ -998,23 +1074,24 @@ class AgentService:
             session_id,
             self._extract_runtime_updates(session_id=session_id, route=route, data=normalized.data, artifacts=artifacts),
         )
-        post = self._try_blackbox_postprocess(
-            message=message,
-            session_id=session_id,
-            lang="zh",
-            route=route,
-        )
-        if post is not None:
-            post_message, post_artifacts = post
-            merged_artifacts = artifacts + [item for item in post_artifacts if item.url not in {a.url for a in artifacts}]
-            return ChatResult(
+        if allow_postprocess:
+            post = self._try_blackbox_postprocess(
+                message=message,
                 session_id=session_id,
-                answer=self._clean_public_answer(str(post_message or normalized.message or ""), "result_analysis"),
-                error=normalized.error,
-                route="result_analysis",
-                artifacts=merged_artifacts,
-                workflow=None,
+                lang="zh",
+                route=route,
             )
+            if post is not None:
+                post_message, post_artifacts = post
+                merged_artifacts = artifacts + [item for item in post_artifacts if item.url not in {a.url for a in artifacts}]
+                return ChatResult(
+                    session_id=session_id,
+                    answer=self._clean_public_answer(str(post_message or normalized.message or ""), "result_analysis"),
+                    error=normalized.error,
+                    route="result_analysis",
+                    artifacts=merged_artifacts,
+                    workflow=None,
+                )
         return ChatResult(
             session_id=session_id,
             answer=self._summarize_direct_tool_result(
@@ -1052,7 +1129,19 @@ class AgentService:
         try:
             self._inject_session_file_context(final_session_id, attachments)
             self._apply_file_reference_from_message(final_session_id, message)
+            runtime_results = self._sessions.get_runtime_results(final_session_id)
+            uploaded_files = self._sessions.get_uploaded_files(final_session_id)
+            current_file = self._sessions.get_current_file(final_session_id)
+            plan = self._tool_planner.plan(
+                message=message,
+                route=route,
+                runtime_results=runtime_results,
+                uploaded_files=uploaded_files,
+                current_file=current_file,
+                lang=final_lang,
+            )
         except Exception:
+            plan = None
             pass
 
         yield {"type": "status", "message": f"QuakeCore 路由中 (route={route})..."}
@@ -1074,13 +1163,9 @@ class AgentService:
                 return
 
             try:
-                analysis_message = (
-                    "请基于当前会话已有结果做后处理分析与绘图，不要重新运行完整流程。"
-                    f"用户原请求：{message}"
-                )
-                for event in self._langgraph_runtime.stream_invoke(
+                for event in self._stream_blackbox_postprocess(
                     session_id=final_session_id,
-                    message=analysis_message,
+                    message=message,
                     lang=final_lang,
                 ):
                     yield event
@@ -1097,6 +1182,94 @@ class AgentService:
                     },
                 }
             return
+
+        if plan is not None and self._should_stream_blackbox_postprocess(message=message, route=plan.route):
+            yield {"type": "status", "message": "QuakeCore 处理中..."}
+            try:
+                planned_result = self._try_execute_tool_plan(
+                    plan=plan,
+                    message=message,
+                    session_id=final_session_id,
+                    lang=final_lang,
+                    allow_postprocess=False,
+                )
+                if planned_result is not None and planned_result.route == "result_analysis":
+                    yield {
+                        "type": "final",
+                        "response": {
+                            "session_id": planned_result.session_id,
+                            "answer": planned_result.answer,
+                            "error": planned_result.error,
+                            "route": planned_result.route,
+                            "artifacts": [
+                                {"type": item.type, "name": item.name, "path": item.path, "url": item.url}
+                                for item in planned_result.artifacts
+                            ],
+                            "workflow": planned_result.workflow,
+                        },
+                    }
+                    return
+                if planned_result is not None:
+                    for event in self._stream_blackbox_postprocess(
+                        session_id=final_session_id,
+                        message=message,
+                        lang=final_lang,
+                        base_artifacts=planned_result.artifacts,
+                        base_workflow=planned_result.workflow,
+                    ):
+                        yield event
+                    return
+            except Exception as exc:
+                yield {
+                    "type": "final",
+                    "response": {
+                        "session_id": final_session_id,
+                        "answer": str(exc),
+                        "error": str(exc),
+                        "route": route,
+                        "artifacts": [],
+                        "workflow": None,
+                    },
+                }
+                return
+
+        if route == "earthquake_location" and self._should_stream_blackbox_postprocess(message=message, route=route):
+            yield {"type": "status", "message": "QuakeCore 处理中..."}
+            try:
+                workflow_result = run_location_workflow(final_session_id)
+                self._persist_workflow_runtime(final_session_id, workflow_result)
+                workflow_payload = {
+                    "status": workflow_result.get("status"),
+                    "summary": workflow_result.get("summary"),
+                    "message": workflow_result.get("message"),
+                    "steps": workflow_result.get("steps", []),
+                    "location": workflow_result.get("location", {}),
+                    "artifacts": workflow_result.get("artifacts", []),
+                    "error": workflow_result.get("error"),
+                }
+                workflow_artifacts = self._artifacts_from_payload(workflow_result.get("artifacts", []))
+                for event in self._stream_blackbox_postprocess(
+                    session_id=final_session_id,
+                    message=message,
+                    lang=final_lang,
+                    base_artifacts=workflow_artifacts,
+                    base_workflow=workflow_payload,
+                ):
+                    yield event
+                return
+            except Exception as exc:
+                yield {
+                    "type": "final",
+                    "response": {
+                        "session_id": final_session_id,
+                        "answer": str(exc),
+                        "error": str(exc),
+                        "route": route,
+                        "artifacts": [],
+                        "workflow": None,
+                    },
+                }
+                return
 
         # All other routes: use non-streaming chat() which has fast paths for
         # phase_picking, file_structure, waveform_reading, map_plotting,

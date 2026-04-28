@@ -4,7 +4,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +154,10 @@ class OpenCodeAdminRuntime:
         _scan_start = _time.time()
 
         try:
+            debug_enabled = os.getenv("QUAKECORE_DEBUG_OPENCODE_STREAM") == "1"
+            debug_stream = None
+            if debug_enabled:
+                debug_stream = (workspace / "stream_debug.jsonl").open("a", encoding="utf-8")
             proc = subprocess.Popen(
                 [
                     OPENCODE_BIN, "run",
@@ -166,7 +169,7 @@ class OpenCodeAdminRuntime:
                 cwd=str(workspace),
                 text=True,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 env=env,
                 bufsize=1,
             )
@@ -178,6 +181,7 @@ class OpenCodeAdminRuntime:
         total_tokens = 0
         total_cost = 0.0
         written_files: set[str] = set()
+        progress_events: list[dict[str, Any]] = []
 
         try:
             for line in proc.stdout:
@@ -187,7 +191,15 @@ class OpenCodeAdminRuntime:
                 try:
                     raw_event = json.loads(line)
                 except Exception:
+                    if debug_stream is not None:
+                        debug_stream.write(
+                            json.dumps({"raw_line": line, "parse_error": "invalid_json"}, ensure_ascii=False) + "\n"
+                        )
+                        debug_stream.flush()
                     continue
+                if debug_stream is not None:
+                    debug_stream.write(json.dumps(raw_event, ensure_ascii=False, default=str) + "\n")
+                    debug_stream.flush()
 
                 parsed = self._parse_single_event(raw_event, written_files=written_files)
                 if parsed is None:
@@ -203,6 +215,7 @@ class OpenCodeAdminRuntime:
                 if text_content:
                     final_message = text_content
 
+                progress_events.append(parsed)
                 yield {"type": "progress", "event": parsed}
 
             proc.wait(timeout=10)
@@ -217,20 +230,23 @@ class OpenCodeAdminRuntime:
             proc.kill()
             yield {"type": "error", "message": f"opencode streaming failed: {exc}"}
             return
+        finally:
+            if debug_stream is not None:
+                debug_stream.close()
 
         # Build final result
         artifacts = self._scan_artifacts(written_files, _scan_start, workspace=workspace)
         final_message = self._clean_image_contradiction(final_message, artifacts)
 
-        stderr_output = proc.stderr.read() if proc.stderr else ""
-
         if proc.returncode != 0:
             result = {
                 "success": False,
-                "message": (stderr_output or "")[-3000:] or "opencode exited with error",
+                "message": final_message[-3000:] or "opencode exited with error",
                 "data": {
                     "total_tokens": total_tokens,
                     "total_cost_usd": round(total_cost, 6),
+                    "progress_events": progress_events,
+                    "event_count": len(progress_events),
                     "returncode": proc.returncode,
                 },
                 "artifacts": artifacts,
@@ -243,6 +259,8 @@ class OpenCodeAdminRuntime:
                 "data": {
                     "total_tokens": total_tokens,
                     "total_cost_usd": round(total_cost, 6),
+                    "progress_events": progress_events,
+                    "event_count": len(progress_events),
                 },
                 "artifacts": artifacts,
                 "opencode_admin": True,
@@ -367,7 +385,7 @@ class OpenCodeAdminRuntime:
             return {
                 "type": "step",
                 "status": "running",
-                "summary": "Agent is thinking...",
+                "summary": OpenCodeAdminRuntime._compact_summary("Agent is thinking..."),
                 "timestamp": timestamp,
             }
 
@@ -377,8 +395,10 @@ class OpenCodeAdminRuntime:
             return {
                 "type": "step",
                 "status": "completed",
-                "summary": f"Step completed ({reason})",
-                "detail": f"tokens={tokens.get('total', 0)}, cost=${tokens.get('cost', 0):.6f}" if tokens.get("total") else "",
+                "summary": OpenCodeAdminRuntime._compact_summary(f"Step completed ({reason})"),
+                "detail": OpenCodeAdminRuntime._compact_detail(
+                    f"tokens={tokens.get('total', 0)}, cost=${tokens.get('cost', 0):.6f}" if tokens.get("total") else ""
+                ),
                 "timestamp": timestamp,
                 "_tokens": tokens,
             }
@@ -390,7 +410,7 @@ class OpenCodeAdminRuntime:
                     "type": "text",
                     "icon": "message",
                     "status": "completed",
-                    "summary": text[:200],
+                    "summary": OpenCodeAdminRuntime._compact_summary(text),
                     "timestamp": timestamp,
                     "_text": text,
                 }
@@ -444,12 +464,26 @@ class OpenCodeAdminRuntime:
                 "tool": tool,
                 "icon": icon,
                 "status": "completed",
-                "summary": summary[:200],
-                "detail": (tool_output or "")[:500],
+                "summary": OpenCodeAdminRuntime._compact_summary(summary),
+                "detail": OpenCodeAdminRuntime._compact_detail(tool_output or ""),
                 "timestamp": timestamp,
             }
 
-        return None
+        return {
+            "type": "raw",
+            "status": "completed",
+            "summary": OpenCodeAdminRuntime._compact_summary(f"OpenCode event: {event_type or 'unknown'}"),
+            "detail": OpenCodeAdminRuntime._compact_detail(json.dumps(raw_event, ensure_ascii=False, default=str)),
+            "timestamp": timestamp,
+        }
+
+    @staticmethod
+    def _compact_summary(summary: str) -> str:
+        return re.sub(r"\s+", " ", str(summary or "")).strip()[:160]
+
+    @staticmethod
+    def _compact_detail(detail: str) -> str:
+        return str(detail or "")[:500]
 
     def _parse_opencode_output(
         self,
