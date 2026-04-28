@@ -1030,6 +1030,73 @@ class AgentService:
             workflow=None,
         )
 
+    def chat_stream(
+        self,
+        message: str,
+        session_id: str | None = None,
+        lang: str | None = "en",
+        attachments: list[str] | None = None,
+    ):
+        """Stream chat response via SSE events.
+
+        Yields dicts with keys:
+          - type: "status" | "progress" | "final"
+          - For status: message (str)
+          - For progress: event (dict, a parsed opencode progress event)
+          - For final: response (ChatResult as dict)
+        """
+        final_session_id = session_id or uuid4().hex
+        final_lang = self._normalize_lang(lang)
+        route = self._router_service.route_intent(message)
+
+        try:
+            self._inject_session_file_context(final_session_id, attachments)
+            self._apply_file_reference_from_message(final_session_id, message)
+        except Exception:
+            pass
+
+        runtime_results = self._sessions.get_runtime_results(final_session_id)
+
+        yield {"type": "status", "message": "开始 OpenCode 后处理..."}
+
+        if not self._langgraph_runtime.enabled:
+            yield {
+                "type": "final",
+                "response": {
+                    "session_id": final_session_id,
+                    "answer": "LangGraph runtime is disabled.",
+                    "error": None,
+                    "route": route,
+                    "artifacts": [],
+                    "workflow": None,
+                },
+            }
+            return
+
+        try:
+            analysis_message = (
+                "请基于当前会话已有结果做后处理分析与绘图，不要重新运行完整流程。"
+                f"用户原请求：{message}"
+            )
+            for event in self._langgraph_runtime.stream_invoke(
+                session_id=final_session_id,
+                message=analysis_message,
+                lang=final_lang,
+            ):
+                yield event
+        except Exception as exc:
+            yield {
+                "type": "final",
+                "response": {
+                    "session_id": final_session_id,
+                    "answer": str(exc),
+                    "error": str(exc),
+                    "route": route,
+                    "artifacts": [],
+                    "workflow": None,
+                },
+            }
+
     def chat(
         self,
         message: str,

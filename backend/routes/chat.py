@@ -1,6 +1,9 @@
 """Chat route backed by the existing AgentExecutor."""
 
+import json
+
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from backend.schemas import ChatRequest, ChatResponse
 from backend.services.agent_service import AgentService
@@ -37,3 +40,22 @@ def chat(
         ],
         "workflow": result.workflow,
     }
+
+
+@router.post("/chat/stream")
+def chat_stream(
+    payload: ChatRequest,
+    agent_service: AgentService = Depends(get_agent_service),
+):
+    resolved_lang = payload.language or payload.lang
+
+    def event_stream():
+        for event in agent_service.chat_stream(
+            message=payload.message,
+            session_id=payload.session_id,
+            lang=resolved_lang,
+            attachments=[item.path for item in payload.attachments or [] if item.path],
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

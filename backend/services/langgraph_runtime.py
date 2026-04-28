@@ -503,6 +503,7 @@ class LangGraphRuntime:
             runtime_results=runtime_results,
             model="deepseek/deepseek-v4-flash",
             timeout_seconds=timeout_seconds,
+            session_id=session_id,
         )
 
         result["data"] = result.get("data") or {}
@@ -546,6 +547,96 @@ class LangGraphRuntime:
             },
             "artifacts": artifacts,
         }
+
+    def stream_invoke(
+        self,
+        session_id: str,
+        message: str,
+        lang: str,
+    ):
+        """Stream opencode execution events via SSE.
+
+        Yields dicts with keys:
+          - type: "status" | "progress" | "final"
+        """
+        if not self.enabled:
+            yield {
+                "type": "final",
+                "response": {
+                    "session_id": session_id,
+                    "answer": "LangGraph runtime is disabled.",
+                    "error": None,
+                    "route": "result_analysis",
+                    "artifacts": [],
+                    "workflow": None,
+                },
+            }
+            return
+
+        store_runtime = get_session_store().get_runtime_results(session_id)
+        message_runtime = self._extract_runtime_context(message)
+        runtime_results = dict(store_runtime)
+        runtime_results.update(message_runtime)
+
+        timeout_seconds = int(os.getenv("QUAKECORE_OPENCODE_ADMIN_TIMEOUT", "300"))
+
+        for event in OpenCodeAdminRuntime().stream_execute(
+            message=message,
+            runtime_results=runtime_results,
+            model="deepseek/deepseek-v4-flash",
+            timeout_seconds=timeout_seconds,
+            session_id=session_id,
+        ):
+            if event.get("type") == "progress":
+                yield event
+            elif event.get("type") == "final":
+                result = event.get("result", {})
+                yield {
+                    "type": "final",
+                    "response": {
+                        "session_id": session_id,
+                        "answer": result.get("message", ""),
+                        "error": "" if result.get("success") else result.get("message", ""),
+                        "route": "result_analysis",
+                        "artifacts": [
+                            {"type": a["type"], "name": a["name"], "path": a["path"], "url": a["url"]}
+                            for a in result.get("artifacts", [])
+                        ],
+                        "workflow": {
+                            "status": "success" if result.get("success") else "failed",
+                            "summary": result.get("message", ""),
+                            "message": result.get("message", ""),
+                            "steps": [
+                                {
+                                    "name": str(ev.get("summary", "")),
+                                    "status": str(ev.get("status", "completed")),
+                                    "required": True,
+                                    "message": str(ev.get("detail", ev.get("summary", ""))),
+                                    "error": None,
+                                    "data": {k: v for k, v in ev.items() if k not in ("summary", "status", "detail")},
+                                    "artifacts": [],
+                                    "duration_ms": 0,
+                                }
+                                for ev in result.get("data", {}).get("progress_events", [])
+                            ],
+                            "location": {},
+                            "artifacts": result.get("artifacts", []),
+                            "error": "" if result.get("success") else result.get("message", ""),
+                        },
+                    },
+                }
+            elif event.get("type") == "error":
+                yield {
+                    "type": "final",
+                    "response": {
+                        "session_id": session_id,
+                        "answer": event.get("message", "opencode error"),
+                        "error": event.get("message", ""),
+                        "route": "result_analysis",
+                        "artifacts": [],
+                        "workflow": None,
+                    },
+                }
 
     def invoke(
         self,
