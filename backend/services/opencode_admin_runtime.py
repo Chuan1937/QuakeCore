@@ -21,9 +21,69 @@ import matplotlib.pyplot as plt
 from obspy import read
 
 
+def pick_value(row, candidates, default=None):
+    for key in candidates:
+        if key in row and row[key] not in ("", None):
+            return row[key]
+    lowered = {str(k).lower(): k for k in row.keys()}
+    for key in candidates:
+        real = lowered.get(str(key).lower())
+        if real is not None and row[real] not in ("", None):
+            return row[real]
+    return default
+
+
+def parse_pick_row(row):
+    method = str(pick_value(row, ["method", "model", "picker", "algorithm"], "unknown"))
+    phase = str(pick_value(row, ["phase", "phase_type", "phase_name", "label", "type"], "")).upper()
+    score_raw = pick_value(
+        row,
+        ["score", "confidence", "probability", "prob", "peak_value", "phase_score", "p_score", "s_score"],
+        None,
+    )
+    sample_raw = pick_value(
+        row,
+        ["sample", "sample_index", "arrival_sample", "pick_sample", "index", "sample_id"],
+        None,
+    )
+    time_raw = pick_value(row, ["time", "arrival_time", "relative_time", "time_sec", "seconds"], None)
+
+    try:
+        score = float(score_raw)
+    except Exception:
+        score = None
+
+    try:
+        sample = int(float(sample_raw))
+    except Exception:
+        sample = None
+
+    try:
+        relative_time = float(time_raw)
+    except Exception:
+        relative_time = None
+
+    if not phase:
+        row_text = " ".join(f"{k}={v}" for k, v in row.items()).lower()
+        if "phase" in row_text and "p" in row_text:
+            phase = "P"
+        elif "phase" in row_text and "s" in row_text:
+            phase = "S"
+
+    return {
+        "method": method,
+        "phase": phase,
+        "score": score,
+        "sample": sample,
+        "relative_time": relative_time,
+    }
+
+
 def plot_trace_picks_standard(picks_csv, waveform_path, trace_index, output_png):
     df = pd.read_csv(picks_csv)
     st = read(waveform_path)
+    if len(st) <= int(trace_index):
+        raise IndexError(f"trace_index {trace_index} out of range for waveform stream of size {len(st)}")
 
     tr = st[int(trace_index)]
     sr = float(tr.stats.sampling_rate)
@@ -31,6 +91,8 @@ def plot_trace_picks_standard(picks_csv, waveform_path, trace_index, output_png)
     x = np.arange(len(y)) / sr
 
     trace_df = df[df[\"trace_index\"].astype(int) == int(trace_index)].copy()
+    if trace_df.empty:
+        raise ValueError(f"no picks found for trace_index={trace_index}")
 
     fig, (ax1, ax2) = plt.subplots(
         2, 1,
@@ -44,20 +106,28 @@ def plot_trace_picks_standard(picks_csv, waveform_path, trace_index, output_png)
     ax1.axhline(0, color=\"0.75\", linewidth=0.7)
 
     for _, row in trace_df.iterrows():
-        phase = str(row.get(\"phase\", \"\")).upper()
-        method = str(row.get(\"method\", \"\"))
-        score = float(row.get(\"score\", row.get(\"confidence\", 0)) or 0)
-        sample = int(float(row.get(\"sample_index\", row.get(\"sample\", 0)) or 0))
-        t = sample / sr if sr else 0.0
+        parsed = parse_pick_row(row)
+        phase = parsed["phase"]
+        method = parsed["method"]
+        score = parsed["score"]
+        sample = parsed["sample"]
+        relative_time = parsed["relative_time"]
+        if sample is not None:
+            t = sample / sr if sr else 0.0
+        elif relative_time is not None:
+            t = float(relative_time)
+        else:
+            continue
 
         color = \"red\" if phase.startswith(\"P\") else \"blue\"
         marker = \"^\" if phase.startswith(\"P\") else \"o\"
-        alpha = 0.9 if score >= 0.5 else 0.4
+        alpha = 0.9 if score is not None and score >= 0.5 else 0.4
         linestyle = \"--\" if \"eqtransformer\" in method.lower() else \":\"
+        label_score = "NA" if score is None else f"{score:.2f}"
 
         ax1.axvline(t, color=color, linestyle=linestyle, alpha=alpha, linewidth=1.1)
         ax1.scatter([t], [0], color=color, marker=marker, s=48, alpha=alpha, zorder=5)
-        ax2.scatter([t], [score], color=color, marker=marker, s=64, alpha=alpha, label=f\"{method}-{phase} ({score:.2f})\")
+        ax2.scatter([t], [0 if score is None else score], color=color, marker=marker, s=64, alpha=alpha, label=f\"{method}-{phase or 'UNK'} ({label_score})\")
 
     ax1.set_ylabel(\"Amplitude (counts)\")
     ax1.set_title(f\"Trace {trace_index} ({tr.id}) - Phase Picking\")
@@ -114,7 +184,7 @@ class OpenCodeAdminRuntime:
         retry_reason = ""
         last_result = {
             "success": False,
-            "message": "opencode did not run",
+            "message": self._public_label("QuakeCore did not run"),
             "data": {},
             "artifacts": [],
             "opencode_admin": True,
@@ -153,7 +223,7 @@ class OpenCodeAdminRuntime:
             except subprocess.TimeoutExpired:
                 return {
                     "success": False,
-                    "message": f"opencode execution timed out after {timeout_seconds}s.",
+                    "message": self._public_label(f"QuakeCore execution timed out after {timeout_seconds}s."),
                     "data": {"timeout_seconds": timeout_seconds, "attempt": attempt},
                     "artifacts": [],
                     "opencode_admin": True,
@@ -161,7 +231,7 @@ class OpenCodeAdminRuntime:
             except Exception as exc:
                 return {
                     "success": False,
-                    "message": f"opencode invocation failed: {exc}",
+                    "message": self._public_label(f"QuakeCore invocation failed: {exc}"),
                     "data": {"attempt": attempt},
                     "artifacts": [],
                     "opencode_admin": True,
@@ -202,7 +272,7 @@ class OpenCodeAdminRuntime:
         retry_reason = ""
         last_result = {
             "success": False,
-            "message": "opencode did not run",
+            "message": self._public_label("QuakeCore did not run"),
             "data": {},
             "artifacts": [],
             "opencode_admin": True,
@@ -215,7 +285,7 @@ class OpenCodeAdminRuntime:
                     "event": {
                         "type": "retry",
                         "status": "running",
-                        "summary": self._compact_summary(f"OpenCode retry {attempt}/{max_attempts}"),
+                        "summary": self._compact_summary(f"QuakeCore retry {attempt}/{max_attempts}"),
                         "detail": self._compact_detail(retry_reason),
                         "timestamp": int(_time.time() * 1000),
                     },
@@ -256,7 +326,7 @@ class OpenCodeAdminRuntime:
                     bufsize=1,
                 )
             except Exception as exc:
-                yield {"type": "error", "message": f"opencode invocation failed: {exc}"}
+                yield {"type": "error", "message": self._public_label(f"QuakeCore invocation failed: {exc}")}
                 return
 
             final_message = ""
@@ -298,11 +368,11 @@ class OpenCodeAdminRuntime:
                 proc.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                yield {"type": "error", "message": f"opencode execution timed out after {timeout_seconds}s."}
+                yield {"type": "error", "message": self._public_label(f"QuakeCore execution timed out after {timeout_seconds}s.")}
                 return
             except Exception as exc:
                 proc.kill()
-                yield {"type": "error", "message": f"opencode streaming failed: {exc}"}
+                yield {"type": "error", "message": self._public_label(f"QuakeCore streaming failed: {exc}")}
                 return
             finally:
                 if debug_stream is not None:
@@ -312,7 +382,7 @@ class OpenCodeAdminRuntime:
             final_message = self._clean_image_contradiction(final_message, artifacts)
             last_result = {
                 "success": proc.returncode == 0,
-                "message": final_message or ("opencode 已完成分析。" if proc.returncode == 0 else "opencode exited with error"),
+                "message": self._public_label(final_message or ("QuakeCore 已完成分析。" if proc.returncode == 0 else "QuakeCore exited with error")),
                 "data": {
                     "total_tokens": total_tokens,
                     "total_cost_usd": round(total_cost, 6),
@@ -600,11 +670,24 @@ class OpenCodeAdminRuntime:
 
     @staticmethod
     def _compact_summary(summary: str) -> str:
-        return re.sub(r"\s+", " ", str(summary or "")).strip()[:160]
+        return re.sub(r"\s+", " ", OpenCodeAdminRuntime._public_label(str(summary or ""))).strip()[:160]
 
     @staticmethod
     def _compact_detail(detail: str) -> str:
-        return str(detail or "")[:500]
+        return OpenCodeAdminRuntime._public_label(str(detail or ""))[:500]
+
+    @staticmethod
+    def _public_label(text: str) -> str:
+        value = str(text or "")
+        replacements = {
+            "OpenCode Admin": "QuakeCore",
+            "OpenCode": "QuakeCore",
+            "opencode_admin": "quakecore_runtime",
+            "opencode": "QuakeCore",
+        }
+        for src, dst in replacements.items():
+            value = value.replace(src, dst)
+        return value
 
     def _parse_opencode_output(
         self,
@@ -659,7 +742,7 @@ class OpenCodeAdminRuntime:
         if returncode != 0:
             result = {
                 "success": False,
-                "message": stderr[-3000:] or "opencode exited with error",
+                "message": self._public_label(stderr[-3000:] or "QuakeCore exited with error"),
                 "data": {**data, "returncode": returncode},
                 "artifacts": artifacts,
                 "opencode_admin": True,
@@ -667,7 +750,7 @@ class OpenCodeAdminRuntime:
         else:
             result = {
                 "success": True,
-                "message": final_message or "opencode 已完成分析。",
+                "message": self._public_label(final_message or "QuakeCore 已完成分析。"),
                 "data": data,
                 "artifacts": artifacts,
                 "opencode_admin": True,
@@ -830,7 +913,7 @@ class OpenCodeAdminRuntime:
         if proc.returncode != 0:
             result = {
                 "success": False,
-                "message": final_message[-3000:] or "opencode exited with error",
+                "message": self._public_label(final_message[-3000:] or "QuakeCore exited with error"),
                 "data": {
                     "total_tokens": total_tokens,
                     "total_cost_usd": round(total_cost, 6),
@@ -844,7 +927,7 @@ class OpenCodeAdminRuntime:
         else:
             result = {
                 "success": True,
-                "message": final_message or "opencode 已完成分析。",
+                "message": self._public_label(final_message or "QuakeCore 已完成分析。"),
                 "data": {
                     "total_tokens": total_tokens,
                     "total_cost_usd": round(total_cost, 6),

@@ -43,6 +43,63 @@
 - 置信度低于 0.5 的拾取点降低透明度 (alpha=0.4) 或单独标注。
 - 高置信度 (>0.8) 使用实线标记，中等置信度 (0.5-0.8) 使用虚线标记。
 
+## 震相拾取 CSV 字段解析规则
+
+- 绘图前必须自动识别字段，不允许硬编码只读取 `score`、`phase`、`sample`。
+
+### 方法字段候选
+
+- `method`
+- `model`
+- `picker`
+- `algorithm`
+
+### 震相字段候选
+
+- `phase`
+- `phase_type`
+- `phase_name`
+- `label`
+- `type`
+
+### 置信度字段候选
+
+- `score`
+- `confidence`
+- `probability`
+- `prob`
+- `peak_value`
+- `phase_score`
+- `p_score`
+- `s_score`
+
+### 样本点字段候选
+
+- `sample`
+- `sample_index`
+- `arrival_sample`
+- `pick_sample`
+- `index`
+- `sample_id`
+
+### 时间字段候选
+
+- `time`
+- `arrival_time`
+- `relative_time`
+- `time_sec`
+- `seconds`
+
+## 禁止事项
+
+- 禁止使用 `row.get("score", 0)` 直接作为置信度。
+- 禁止使用 `row.get("phase", "")` 后不检查空值。
+- 禁止只读 `score`/`phase`/`sample` 单一字段。
+- 禁止把 sample index 直接当秒。
+- 禁止在图例中显示 `(0.00)`，除非原始 CSV 置信度确实为 0。
+- 如果无法解析 score，图例应显示 `(NA)`，并在回答中说明字段无法识别。
+- 单道拾取图必须检查 waveform 是否成功读取；如果没有读取 waveform，不要生成伪波形图。
+
 ## 输出
 
 - 必须保存 PNG (dpi=150)。

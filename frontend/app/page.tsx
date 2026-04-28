@@ -40,7 +40,7 @@ type Message = {
   files?: Array<{ name: string; fileType?: string }>;
   pending?: boolean;
   attachments?: ChatAttachment[];
-  opencodeAdmin?: boolean;
+  internalRuntime?: string;
   isOpencodeRunning?: boolean;
   liveSteps?: Array<{
     id: string;
@@ -108,7 +108,7 @@ function isOpencodeResponse(event: StreamEvent["response"] | undefined): boolean
   if (!event) {
     return false;
   }
-  return Boolean(event.opencode_admin || event.route === "result_analysis");
+  return Boolean(event.internal_runtime === "quakecore" || event.route === "result_analysis");
 }
 
 const ARTIFACT_PATH_PATTERN =
@@ -597,7 +597,7 @@ export default function HomePage() {
           const ev = event.event;
           const liveStep = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            summary: ev.summary || ev.tool || "OpenCode is working...",
+            summary: ev.summary || ev.tool || "QuakeCore is analyzing...",
             detail: ev.detail || "",
             status: ev.status || "running",
             tool: ev.tool,
@@ -609,7 +609,7 @@ export default function HomePage() {
               item.id === msgId
                 ? {
                     ...item,
-                    opencodeAdmin: true,
+                    internalRuntime: "quakecore",
                     isOpencodeRunning: true,
                     liveSteps: [liveStep, ...(item.liveSteps || [])].slice(0, 4),
                   }
@@ -635,7 +635,7 @@ export default function HomePage() {
                     route: r.route,
                     artifacts: resolvedArtifacts,
                     error: r.error,
-                    opencodeAdmin: isOpencodeResponse(r),
+                    internalRuntime: isOpencodeResponse(r) ? "quakecore" : undefined,
                     isOpencodeRunning: false,
                     workflow: isOpencodeResponse(r) ? null : (r.workflow ?? null),
                   }
@@ -864,7 +864,7 @@ export default function HomePage() {
                       </div>
                     ) : (
                       <div className="assistant-message assistant-message-live">
-                        <div className="opencode-live-header">
+                        <div className="qc-live-header">
                           <span className="pending-text">
                             {message.content}
                             <span className="dot-wave">
@@ -873,15 +873,19 @@ export default function HomePage() {
                               <i />
                             </span>
                           </span>
-                          {message.isOpencodeRunning ? <span className="opencode-live-badge">OpenCode 正在处理...</span> : null}
+                          {message.isOpencodeRunning ? <span className="qc-live-badge">QuakeCore 正在分析...</span> : null}
                         </div>
                         {message.liveSteps?.length ? (
-                          <div className="opencode-live-stack" aria-live="polite">
+                          <div className="qc-live-stack" aria-live="polite">
                             {message.liveSteps.map((step, index) => (
-                              <div key={step.id} className="opencode-live-card" data-index={index}>
-                                <div className="opencode-live-card-title">{step.summary}</div>
-                                {step.detail ? <div className="opencode-live-card-detail">{step.detail}</div> : null}
-                                <div className="opencode-live-card-meta">{step.status || "running"}</div>
+                              <div key={step.id} className="qc-live-card" data-index={index} aria-hidden={index > 0}>
+                                {index === 0 ? (
+                                  <>
+                                    <div className="qc-live-card-title">{step.summary}</div>
+                                    {step.detail ? <div className="qc-live-card-detail">{step.detail}</div> : null}
+                                    <div className="qc-live-card-footer">{step.status === "running" ? "正在处理" : "已完成"}</div>
+                                  </>
+                                ) : null}
                               </div>
                             ))}
                           </div>
@@ -908,7 +912,7 @@ export default function HomePage() {
                         </div>
                       ) : null}
 
-                      {message.workflow && !message.opencodeAdmin ? (
+                      {message.workflow && message.internalRuntime !== "quakecore" ? (
                         <div className="assistant-message">
                           <WorkflowSteps workflow={message.workflow} />
                         </div>

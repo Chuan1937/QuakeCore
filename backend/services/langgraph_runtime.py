@@ -508,7 +508,7 @@ class LangGraphRuntime:
 
         result["data"] = result.get("data") or {}
         result["data"]["input_key"] = self._code_input_key(message, runtime_results)
-        result.setdefault("opencode_admin", True)
+        result.setdefault("internal_runtime", "quakecore")
         result.setdefault("artifacts", [])
         result.setdefault("error", "" if result.get("success") else result.get("message", ""))
 
@@ -598,7 +598,7 @@ class LangGraphRuntime:
                         "answer": result.get("message", ""),
                         "error": "" if result.get("success") else result.get("message", ""),
                         "route": "result_analysis",
-                        "opencode_admin": True,
+                        "internal_runtime": "quakecore",
                         "data": result.get("data", {}),
                         "artifacts": [
                             {"type": a["type"], "name": a["name"], "path": a["path"], "url": a["url"]}
@@ -612,9 +612,10 @@ class LangGraphRuntime:
                     "type": "final",
                     "response": {
                         "session_id": session_id,
-                        "answer": event.get("message", "opencode error"),
+                        "answer": event.get("message", "QuakeCore error"),
                         "error": event.get("message", ""),
                         "route": "result_analysis",
+                        "internal_runtime": "quakecore",
                         "artifacts": [],
                         "workflow": None,
                     },
@@ -657,7 +658,7 @@ class LangGraphRuntime:
                     "success": False,
                     "message": str(exc),
                     "error": str(exc),
-                    "data": {"route": route, "opencode_admin": True},
+                    "data": {"route": route, "internal_runtime": "quakecore"},
                     "artifacts": [],
                 }
             )
