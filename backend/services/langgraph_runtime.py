@@ -11,10 +11,10 @@ from typing import Any
 from agent.core import _build_llm
 from backend.services.artifact_utils import make_artifact, to_data_relative_path
 from backend.services.config_service import ConfigService
+from backend.services.opencode_admin_runtime import OpenCodeAdminRuntime
 from backend.services.router_service import RouterService
 from backend.services.session_store import get_session_store
 from backend.services.tool_result import ToolResult
-from quakecore_tools.analysis_tools import run_analysis_sandbox
 
 
 class LangGraphRuntime:
@@ -255,17 +255,8 @@ class LangGraphRuntime:
 
     @staticmethod
     def _sanitize_generated_code(code: str) -> str:
-        text = str(code or "")
-        if not text.strip():
-            return ""
-        cleaned_lines: list[str] = []
-        for raw_line in text.splitlines():
-            stripped = raw_line.strip()
-            if stripped.startswith("import ") or stripped.startswith("from "):
-                continue
-            cleaned_lines.append(raw_line)
-        cleaned = "\n".join(cleaned_lines).strip()
-        return cleaned
+        # OpenCode Admin allows imports, pip, shell, network — no sanitization needed.
+        return str(code or "").strip()
 
     @staticmethod
     def _extract_json_dict(text: str) -> dict[str, Any] | None:
@@ -435,27 +426,17 @@ class LangGraphRuntime:
         input_key: str,
         lang: str,
         plan: dict[str, Any] | None = None,
+        previous_error: str = "",
+        previous_code: str = "",
     ) -> str:
-        cfg = ConfigService().get_llm_config()
-        provider = str(cfg.get("provider", "deepseek"))
-        model_name = str(cfg.get("model_name", "deepseek-v4-flash"))
-        llm = _build_llm(
-            provider=provider,  # type: ignore[arg-type]
-            model_name=model_name,
-            api_key=cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY"),
-            base_url=cfg.get("base_url"),
-            streaming=False,
-        )
-        prompt = self._build_code_prompt(
+        return OpenCodeAdminRuntime().generate_code(
             message=message,
             runtime_results=runtime_results,
             input_key=input_key,
             lang=lang,
-            plan=plan,
+            previous_error=previous_error,
+            previous_code=previous_code,
         )
-        out = llm.invoke(prompt)
-        content = getattr(out, "content", out)
-        return self._extract_code(str(content or ""))
 
     @staticmethod
     def _run_picks_existing_image(message: str) -> dict[str, Any]:
@@ -515,107 +496,22 @@ class LangGraphRuntime:
         runtime_results: dict[str, Any],
         lang: str,
     ) -> dict[str, Any]:
-        input_key = self._code_input_key(message, runtime_results)
-        timeout_seconds = 60 if self._is_trace_pick_image_request(message) else 8
-        max_attempts = 3 if self._is_trace_pick_image_request(message) else 2
-        last_error = ""
-        generated_code = ""
-        plan: dict[str, Any] = {}
-        try:
-            plan = self._generate_analysis_plan(
-                message=message,
-                runtime_results=runtime_results,
-                lang=lang,
-            )
-        except Exception:
-            plan = {"task_type": "custom", "input_keys": [], "user_intent": message}
-        for _attempt in range(max_attempts):
-            prompt_message = message
-            if last_error:
-                prompt_message = (
-                    f"{message}\n\n"
-                    f"上一次生成代码执行失败，错误如下：{last_error}\n"
-                    "请修复代码。"
-                )
-            try:
-                generated_code = self._generate_analysis_code(
-                    message=prompt_message,
-                    runtime_results=runtime_results,
-                    input_key=input_key,
-                    lang=lang,
-                    plan=plan,
-                )
-            except Exception as exc:
-                if self._is_trace_pick_image_request(message) and _attempt == max_attempts - 1:
-                    trace_index = self._extract_trace_index(message) or 0
-                    generated_code = self._build_trace_pick_waveform_code(trace_index)
-                    last_error = f"llm_codegen_failed: {exc}"
-                else:
-                    last_error = str(exc)
-                    continue
-            generated_code = self._sanitize_generated_code(generated_code)
-            if not generated_code:
-                last_error = "empty_generated_code"
-                continue
-            raw = run_analysis_sandbox.invoke(
-                {
-                    "params": {
-                        "session_id": session_id,
-                        "input_artifact_key": input_key,
-                        "runtime_results": runtime_results,
-                        "allow_code": True,
-                        "code": generated_code,
-                        "timeout_seconds": timeout_seconds,
-                    }
-                }
-            )
-            payload = self._decode_payload(raw)
-            if payload.get("success") is True:
-                data = payload.get("data")
-                if not isinstance(data, dict):
-                    data = {}
-                data["generated_code"] = generated_code
-                data["input_key"] = input_key
-                payload["data"] = data
-                return payload
-            last_error = str(payload.get("error") or payload.get("message") or "unknown_error")
-            if self._is_trace_pick_image_request(message) and _attempt == max_attempts - 1:
-                trace_index = self._extract_trace_index(message) or 0
-                fallback_code = self._build_trace_pick_waveform_code(trace_index)
-                raw_fallback = run_analysis_sandbox.invoke(
-                    {
-                        "params": {
-                            "session_id": session_id,
-                            "input_artifact_key": input_key,
-                            "runtime_results": runtime_results,
-                            "allow_code": True,
-                            "code": fallback_code,
-                            "timeout_seconds": timeout_seconds,
-                        }
-                    }
-                )
-                payload_fallback = self._decode_payload(raw_fallback)
-                if payload_fallback.get("success") is True:
-                    data = payload_fallback.get("data")
-                    if not isinstance(data, dict):
-                        data = {}
-                    data["generated_code"] = fallback_code
-                    data["input_key"] = input_key
-                    data["fallback_codegen"] = "builtin_trace_pick_waveform"
-                    data["analysis_plan"] = plan
-                    payload_fallback["data"] = data
-                    return payload_fallback
-        return {
-            "success": False,
-            "message": f"黑箱分析失败：{last_error}",
-            "error": last_error,
-            "data": {
-                "generated_code": generated_code,
-                "input_key": input_key,
-                "analysis_plan": plan,
-            },
-            "artifacts": [],
-        }
+        timeout_seconds = int(os.getenv("QUAKECORE_OPENCODE_ADMIN_TIMEOUT", "300"))
+
+        result = OpenCodeAdminRuntime().execute(
+            message=message,
+            runtime_results=runtime_results,
+            model="deepseek/deepseek-v4-flash",
+            timeout_seconds=timeout_seconds,
+        )
+
+        result["data"] = result.get("data") or {}
+        result["data"]["input_key"] = self._code_input_key(message, runtime_results)
+        result.setdefault("opencode_admin", True)
+        result.setdefault("artifacts", [])
+        result.setdefault("error", "" if result.get("success") else result.get("message", ""))
+
+        return result
 
     @staticmethod
     def _build_explanation_payload(runtime_results: dict[str, Any], lang: str) -> dict[str, Any]:
@@ -674,7 +570,6 @@ class LangGraphRuntime:
         if route == "result_explanation":
             return ToolResult.from_response(self._build_explanation_payload(runtime_results, lang))
 
-        fallback_template = self._select_fallback_template(message, route)
         try:
             code_payload = self._run_code_analysis(
                 session_id=session_id,
@@ -682,8 +577,6 @@ class LangGraphRuntime:
                 runtime_results=runtime_results,
                 lang=lang,
             )
-            if code_payload.get("success") is True:
-                return ToolResult.from_response(code_payload)
             return ToolResult.from_response(code_payload)
         except Exception as exc:
             return ToolResult.from_response(
@@ -691,7 +584,7 @@ class LangGraphRuntime:
                     "success": False,
                     "message": str(exc),
                     "error": str(exc),
-                    "data": {"route": route, "fallback_template": fallback_template or "", "template_disabled": True},
+                    "data": {"route": route, "opencode_admin": True},
                     "artifacts": [],
                 }
             )

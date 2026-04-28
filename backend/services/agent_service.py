@@ -1180,13 +1180,39 @@ class AgentService:
                 ),
             )
             answer = self._clean_public_answer(answer, route)
+            workflow_for_result: dict[str, Any] | None = None
+            if route == "result_analysis":
+                progress_events = (runtime_data or {}).get("progress_events")
+                if progress_events and isinstance(progress_events, list):
+                    workflow_steps = []
+                    for ev in progress_events:
+                        workflow_steps.append({
+                            "name": str(ev.get("summary", "") or ""),
+                            "status": str(ev.get("status", "completed") or "completed"),
+                            "required": True,
+                            "message": str(ev.get("detail") or ev.get("summary", "") or ""),
+                            "error": None,
+                            "data": {k: v for k, v in ev.items() if k not in ("summary", "status", "detail")},
+                            "artifacts": [],
+                            "duration_ms": 0,
+                        })
+                    workflow_for_result = {
+                        "status": "success" if normalized.success else "failed",
+                        "summary": answer,
+                        "message": answer,
+                        "steps": workflow_steps,
+                        "location": {},
+                        "artifacts": [{"type": a.type, "name": a.name, "path": a.path} for a in artifacts],
+                        "error": normalized.error,
+                    }
+
             return ChatResult(
                 session_id=final_session_id,
                 answer=answer,
                 error=normalized.error,
                 route=route,
                 artifacts=artifacts,
-                workflow=None,
+                workflow=workflow_for_result,
             )
         except Exception as exc:
             normalized = normalize_tool_output(exc)
