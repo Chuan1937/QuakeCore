@@ -35,7 +35,7 @@ CURRENT_MINISEED_PATHS = []  # Support multiple MiniSEED files for multi-station
 CURRENT_HDF5_PATH = None
 CURRENT_SAC_PATH = None
 CURRENT_UPLOADED_FILES = []
-CURRENT_LANG = "en"  # Current UI language, set from app.py
+CURRENT_LANG = "en"  # Current UI language, set by the active frontend/backend entrypoint
 _VALIDATION_MODULE_CACHE = {}
 
 

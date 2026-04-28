@@ -5,7 +5,6 @@ QuakeCore is an AI-based seismic data processing agent framework. It allows user
 ## Features
 - **Multi-Format Support**: Reads SEGY, MiniSEED, SAC, HDF5, NumPy arrays.
 - **Smart Phase Picking**: Built-in STA/LTA, AIC, and other traditional picking algorithms.
-- **Web UI**: A GPT-like chat interface built with Streamlit.
 - **API Backend**: FastAPI routes for chat, uploads, config, skills, and artifacts.
 - **Frontend**: A ChatGPT-like Next.js chat UI with integrated click upload, drag-and-drop upload, and paste upload.
 - **Local/Cloud AI Support**: Integrates with local Ollama or cloud-based DeepSeek APIs.
@@ -28,37 +27,123 @@ pip install -r requirements.txt
 pip install -r requirements-backend.txt
 ```
 
-### 2. Run the Streamlit App
-```bash
-streamlit run app.py
-```
-Open your browser to `http://localhost:8501`.
-The legacy Streamlit UI is still kept for comparison and fallback.
+### 2. Configure LLM
 
-### 3. Run the Backend API
+QuakeCore supports two providers:
+
+- **DeepSeek API**
+- **Ollama**
+
+Recommended DeepSeek setup:
+
+```bash
+export DEEPSEEK_API_KEY=your_key
+```
+
+Recommended defaults:
+
+- Provider: `deepseek`
+- Model: `deepseek-v4-flash`
+- Base URL: `https://api.deepseek.com`
+
+Ollama example:
+
+```bash
+ollama pull qwen2.5:3b
+```
+
+Default Ollama base URL:
+
+- `http://localhost:11434`
+
+### 3. Start the Backend API
+
 ```bash
 conda activate quakecore
 uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-The API runs on `http://localhost:8000`.
 
-### 4. Run the Frontend
+Backend URLs:
+
+- API: `http://127.0.0.1:8000`
+- OpenAPI docs: `http://127.0.0.1:8000/docs`
+
+### 4. Start the Frontend
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open your browser to `http://localhost:3000`.
 
-### 5. Setup LLM
-- **Local (Ollama)**: Install [Ollama](https://ollama.com/) and pull a model (e.g., `ollama pull qwen2.5:3b`). Configure the model name in the app's sidebar.
-- **Cloud (DeepSeek API)**: Enter your DeepSeek API key and base URL in the app's sidebar settings.
-- Export key for backend/smoke scripts:
-  ```bash
-  export DEEPSEEK_API_KEY=your_key
-  ```
-- Recommended DeepSeek model: `deepseek-v4-flash`.
-- Streamlit and FastAPI both read `DEEPSEEK_API_KEY` from environment when config file key is empty.
+Open:
+
+- Frontend: `http://localhost:3000`
+
+If the frontend should talk to a non-default backend, set:
+
+```bash
+export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+```
+
+By default, the frontend uses `http://127.0.0.1:8000`.
+
+## Configuration
+
+### Frontend Settings Page
+
+After starting backend and frontend, open the settings page in the web UI and save model settings there.
+
+- DeepSeek:
+  - Provider: `deepseek`
+  - Model: `deepseek-v4-flash`
+  - API Key: can be left empty if `DEEPSEEK_API_KEY` is already exported
+  - Base URL: `https://api.deepseek.com`
+- Ollama:
+  - Provider: `ollama`
+  - Base URL: usually `http://localhost:11434`
+  - Model: detected from the local Ollama server
+
+### Backend Config Persistence
+
+Backend LLM settings are persisted to:
+
+- `data/config/llm_config.json`
+
+If that file does not exist, backend defaults are used. For DeepSeek, when `api_key` is empty in config, the backend falls back to:
+
+- `DEEPSEEK_API_KEY`
+
+Example config file:
+
+```json
+{
+  "provider": "deepseek",
+  "model_name": "deepseek-v4-flash",
+  "api_key": null,
+  "base_url": "https://api.deepseek.com"
+}
+```
+
+You can also read or update config through the backend API:
+
+- `GET /api/config/defaults`
+- `GET /api/config/llm`
+- `POST /api/config/llm`
+
+## Startup Notes
+
+Recommended startup order:
+
+1. Start the backend on `127.0.0.1:8000`.
+2. Start the frontend on `localhost:3000`.
+3. Open the frontend settings page and confirm the LLM provider.
+4. Upload data and use chat or workflow routes.
+
+Current local CORS defaults allow:
+
+- `http://localhost:3000`
+- `http://127.0.0.1:3000`
 
 ## Usage
 1. Configure your LLM settings in the sidebar.
@@ -77,6 +162,40 @@ Open your browser to `http://localhost:3000`.
    - *"对当前波形做初至拾取"*
    - *"使用当前数据进行地震定位"*
    - *"帮我做连续地震监测"*
+   - *"对加州2019年7月4日的17到18点进行地震监测"*
+
+## Natural Language Parameter Resolution
+
+QuakeCore now applies a shared parameter-understanding layer before deterministic tools are executed.
+
+- `RouterService` identifies the intent route, such as `phase_picking`, `earthquake_location`, or `continuous_monitoring`.
+- `ToolPlanner` converts natural language into structured tool parameters before tool execution.
+- Deterministic routes no longer rely only on raw tool kwargs; they can use LLM planning plus rule-based fallback.
+- Continuous monitoring requests support natural-language time windows and region names such as:
+  - *"对加州2019年7月4日的17到18点进行地震监测"*
+  - *"2019年7月4日的17到18点进行地震监测"*
+  - *"对南加州最近 10 小时做连续监测"*
+
+Typical `continuous_monitoring` planning output looks like:
+
+```json
+{
+  "route": "continuous_monitoring",
+  "tool": "run_continuous_monitoring",
+  "params": {
+    "region": "加州",
+    "start": "2019-07-04T17:00:00",
+    "end": "2019-07-04T18:00:00"
+  },
+  "need_rerun": true,
+  "confidence": 0.9
+}
+```
+
+This same parameter resolution is now used by both:
+
+- `/api/chat`
+- `/api/workflows/continuous/start`
 
 ## Validation
 
@@ -84,6 +203,7 @@ Backend:
 ```bash
 conda run -n quakecore python -m pytest tests/test_backend_health.py tests/test_backend_files.py tests/test_backend_chat_schema.py tests/test_backend_artifacts_route.py tests/test_backend_config.py tests/test_backend_skills.py -q
 conda run -n quakecore python -m pytest tests/test_router_service.py -q
+conda run -n quakecore python -m pytest tests/test_tool_planner.py tests/test_session_file_context.py tests/test_location_workflow_route.py -q
 conda run -n quakecore python -m pytest tests -q
 ```
 
@@ -136,8 +256,8 @@ pytest tests/test_deepseek_live.py -q
 ## Current Limitations
 
 - The project still keeps compatibility with legacy `agent.tools` behaviors.
-- Deterministic workflow currently focuses on `earthquake_location`.
-- Other routes are still primarily handled by Agent + tools.
+- Deterministic fast paths now cover `earthquake_location` and `continuous_monitoring`, but many other routes still depend on Agent + tool orchestration.
+- Natural-language parameter resolution for deterministic tools is improving, but highly ambiguous prompts may still need clarification or explicit parameters.
 - LangGraph is disabled by default (`QUAKECORE_USE_LANGGRAPH=0`).
 - RAG and Python Runner are not enabled by default.
 
