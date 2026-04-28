@@ -50,6 +50,7 @@ def chat_stream(
     resolved_lang = payload.language or payload.lang
 
     def event_stream():
+        yield ": stream-start\n\n"
         for event in agent_service.chat_stream(
             message=payload.message,
             session_id=payload.session_id,
@@ -58,4 +59,12 @@ def chat_stream(
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

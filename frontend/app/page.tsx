@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MarkdownView } from "@/components/markdown-view";
 import { WorkflowSteps } from "@/components/workflow-steps";
 import {
-  chatWithAgent,
+  chatWithAgentStream,
   getContinuousWorkflowProgress,
   getContinuousWorkflowResult,
   getLlmConfig,
@@ -14,10 +14,11 @@ import {
   toBackendUrl,
   uploadFile,
   type ChatArtifact,
-  type ChatResponse,
   type ContinuousJobProgressResponse,
   type LlmConfig,
+  type StreamEvent,
   type WorkflowResult,
+  type WorkflowStep,
 } from "@/lib/api";
 
 type ChatAttachment = {
@@ -490,8 +491,6 @@ export default function HomePage() {
 
     setChatLoading(true);
     setError(null);
-    const pendingId = newId();
-    let pendingShown = false;
     setMessages((current) => [
       ...current,
       { id: newId(), role: "user", content: text, attachments: userAttachments },
@@ -540,16 +539,21 @@ export default function HomePage() {
       return;
     }
 
-    const timer = setTimeout(() => {
-      pendingShown = true;
-      setMessages((current) => [
-        ...current,
-        { id: pendingId, role: "assistant", content: inferPendingText(text), pending: true },
-      ]);
-    }, 1000);
+    const msgId = newId();
+    const pendingSteps: WorkflowStep[] = [];
+
+    setMessages((current) => [
+      ...current,
+      {
+        id: msgId,
+        role: "assistant",
+        content: inferPendingText(text),
+        pending: true,
+      } as Message,
+    ]);
 
     try {
-      const response: ChatResponse = await chatWithAgent({
+      const stream = chatWithAgentStream({
         message: text,
         session_id: sessionId,
         lang: "zh",
@@ -561,59 +565,105 @@ export default function HomePage() {
             file_type: a.fileKind,
           })),
       });
-      clearTimeout(timer);
 
-      setSessionId(response.session_id);
-      const responseText = response.answer || response.error || "No response returned.";
-      const resolvedArtifacts = mergeArtifacts(response.artifacts, responseText);
-      if (pendingShown) {
+      let receivedFinal = false;
+
+      for await (const event of stream) {
+        if (event.type === "progress" && event.event) {
+          const ev = event.event;
+          const stepName = ev.summary || ev.type || "";
+          const stepStatus: WorkflowStep["status"] =
+            ev.status === "running" ? "running" : "ok";
+
+          const existingIndex = pendingSteps.findIndex(
+            (s) => s.name === stepName && s.status === "running",
+          );
+
+          const step: WorkflowStep = {
+            name: stepName,
+            status: stepStatus,
+            required: true,
+            message: ev.detail || ev.summary || "",
+            error: null,
+            duration_ms: 0,
+          };
+
+          if (existingIndex >= 0 && stepStatus !== "running") {
+            pendingSteps[existingIndex] = step;
+          } else if (existingIndex < 0) {
+            pendingSteps.push(step);
+          }
+
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === msgId
+                ? {
+                    ...item,
+                    workflow: {
+                      status: "running",
+                      summary: "",
+                      message: "",
+                      steps: [...pendingSteps],
+                      location: {},
+                      artifacts: [],
+                      error: null,
+                    } as WorkflowResult,
+                  }
+                : item,
+            ),
+          );
+        }
+
+        if (event.type === "final" && event.response) {
+          receivedFinal = true;
+          const r = event.response;
+          setSessionId(r.session_id);
+          const responseText = r.answer || r.error || "No response returned.";
+          const resolvedArtifacts = mergeArtifacts(r.artifacts, responseText);
+
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === msgId
+                ? {
+                    ...item,
+                    pending: false,
+                    content: responseText,
+                    route: r.route,
+                    artifacts: resolvedArtifacts,
+                    error: r.error,
+                    workflow: r.workflow ?? null,
+                  }
+                : item,
+            ),
+          );
+          break;
+        }
+      }
+
+      if (!receivedFinal) {
         setMessages((current) =>
           current.map((item) =>
-            item.id === pendingId
+            item.id === msgId
               ? {
                   ...item,
                   pending: false,
-                  content: responseText,
-                  route: response.route,
-                  artifacts: resolvedArtifacts,
-                  error: response.error,
-                  workflow: response.workflow ?? null,
+                  content: "Stream ended without response.",
+                  error: "No final event received.",
                 }
               : item,
           ),
         );
-      } else {
-        setMessages((current) => [
-          ...current,
-          {
-            id: newId(),
-            role: "assistant",
-            content: responseText,
-            route: response.route,
-            artifacts: resolvedArtifacts,
-            error: response.error,
-            workflow: response.workflow ?? null,
-          },
-        ]);
       }
     } catch (err) {
-      clearTimeout(timer);
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
-      if (pendingShown) {
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === pendingId
-              ? { ...item, pending: false, content: "请求失败。", error: message }
-              : item,
-          ),
-        );
-      } else {
-        setMessages((current) => [
-          ...current,
-          { id: newId(), role: "assistant", content: "请求失败。", error: message },
-        ]);
-      }
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === msgId
+            ? { ...item, pending: false, content: "请求失败。", error: message }
+            : item,
+        ),
+      );
     } finally {
       setChatLoading(false);
     }

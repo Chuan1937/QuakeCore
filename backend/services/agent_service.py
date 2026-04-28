@@ -1055,35 +1055,75 @@ class AgentService:
         except Exception:
             pass
 
-        runtime_results = self._sessions.get_runtime_results(final_session_id)
+        yield {"type": "status", "message": f"QuakeCore 路由中 (route={route})..."}
 
-        yield {"type": "status", "message": "开始 OpenCode 后处理..."}
+        # Routes that benefit from streaming OpenCode post-processing
+        if route in ("result_analysis", "result_explanation"):
+            if not self._langgraph_runtime.enabled:
+                yield {
+                    "type": "final",
+                    "response": {
+                        "session_id": final_session_id,
+                        "answer": "LangGraph runtime is disabled.",
+                        "error": None,
+                        "route": route,
+                        "artifacts": [],
+                        "workflow": None,
+                    },
+                }
+                return
 
-        if not self._langgraph_runtime.enabled:
+            try:
+                analysis_message = (
+                    "请基于当前会话已有结果做后处理分析与绘图，不要重新运行完整流程。"
+                    f"用户原请求：{message}"
+                )
+                for event in self._langgraph_runtime.stream_invoke(
+                    session_id=final_session_id,
+                    message=analysis_message,
+                    lang=final_lang,
+                ):
+                    yield event
+            except Exception as exc:
+                yield {
+                    "type": "final",
+                    "response": {
+                        "session_id": final_session_id,
+                        "answer": str(exc),
+                        "error": str(exc),
+                        "route": route,
+                        "artifacts": [],
+                        "workflow": None,
+                    },
+                }
+            return
+
+        # All other routes: use non-streaming chat() which has fast paths for
+        # phase_picking, file_structure, waveform_reading, map_plotting,
+        # earthquake_location, format_conversion, seismo_qa, settings, general_chat
+        yield {"type": "status", "message": "QuakeCore 处理中..."}
+
+        try:
+            result = self.chat(
+                message=message,
+                session_id=final_session_id,
+                lang=final_lang,
+                attachments=attachments,
+            )
             yield {
                 "type": "final",
                 "response": {
-                    "session_id": final_session_id,
-                    "answer": "LangGraph runtime is disabled.",
-                    "error": None,
-                    "route": route,
-                    "artifacts": [],
-                    "workflow": None,
+                    "session_id": result.session_id,
+                    "answer": result.answer,
+                    "error": result.error,
+                    "route": result.route,
+                    "artifacts": [
+                        {"type": item.type, "name": item.name, "path": item.path, "url": item.url}
+                        for item in result.artifacts
+                    ],
+                    "workflow": result.workflow,
                 },
             }
-            return
-
-        try:
-            analysis_message = (
-                "请基于当前会话已有结果做后处理分析与绘图，不要重新运行完整流程。"
-                f"用户原请求：{message}"
-            )
-            for event in self._langgraph_runtime.stream_invoke(
-                session_id=final_session_id,
-                message=analysis_message,
-                lang=final_lang,
-            ):
-                yield event
         except Exception as exc:
             yield {
                 "type": "final",

@@ -149,6 +149,84 @@ export async function chatWithAgent(payload: ChatRequest): Promise<ChatResponse>
   return (await response.json()) as ChatResponse;
 }
 
+export type ProgressEvent = {
+  type: string;
+  icon?: string;
+  status?: string;
+  summary?: string;
+  detail?: string;
+  timestamp?: number;
+  tool?: string;
+};
+
+export type StreamEvent = {
+  type: "status" | "progress" | "final";
+  message?: string;
+  event?: ProgressEvent;
+  response?: {
+    session_id: string;
+    answer: string;
+    error: string | null;
+    route: string;
+    artifacts: ChatArtifact[];
+    workflow: WorkflowResult | null;
+  };
+};
+
+export async function* chatWithAgentStream(
+  payload: ChatRequest,
+): AsyncGenerator<StreamEvent> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `Request failed with status ${response.status}`);
+  }
+
+  if (!response.body) {
+    throw new Error("No response body");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() || "";
+
+    for (const chunk of chunks) {
+      const line = chunk
+        .split("\n")
+        .find((item) => item.startsWith("data:"));
+
+      if (!line) continue;
+
+      const json = line.slice("data:".length).trim();
+      if (!json) continue;
+
+      try {
+        const event = JSON.parse(json) as StreamEvent;
+        yield event;
+      } catch {
+        // skip malformed SSE events
+      }
+    }
+  }
+}
+
 export async function uploadFile(
   file: File,
   sessionId?: string | null,
