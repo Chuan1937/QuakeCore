@@ -6,6 +6,8 @@ QuakeCore is an AI-based seismic data processing agent framework. It allows user
 - **Multi-Format Support**: Reads SEGY, MiniSEED, SAC, HDF5, NumPy arrays.
 - **Smart Phase Picking**: Built-in STA/LTA, AIC, and other traditional picking algorithms.
 - **Web UI**: A GPT-like chat interface built with Streamlit.
+- **API Backend**: FastAPI routes for chat, uploads, config, skills, and artifacts.
+- **Frontend**: A ChatGPT-like Next.js chat UI with integrated click upload, drag-and-drop upload, and paste upload.
 - **Local/Cloud AI Support**: Integrates with local Ollama or cloud-based DeepSeek APIs.
 
 ## Quick Start
@@ -21,17 +23,42 @@ conda activate quakecore
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Install backend API dependencies
+pip install -r requirements-backend.txt
 ```
 
-### 2. Run the App
+### 2. Run the Streamlit App
 ```bash
 streamlit run app.py
 ```
 Open your browser to `http://localhost:8501`.
+The legacy Streamlit UI is still kept for comparison and fallback.
 
-### 3. Setup LLM
+### 3. Run the Backend API
+```bash
+conda activate quakecore
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+```
+The API runs on `http://localhost:8000`.
+
+### 4. Run the Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open your browser to `http://localhost:3000`.
+
+### 5. Setup LLM
 - **Local (Ollama)**: Install [Ollama](https://ollama.com/) and pull a model (e.g., `ollama pull qwen2.5:3b`). Configure the model name in the app's sidebar.
 - **Cloud (DeepSeek API)**: Enter your DeepSeek API key and base URL in the app's sidebar settings.
+- Export key for backend/smoke scripts:
+  ```bash
+  export DEEPSEEK_API_KEY=your_key
+  ```
+- Recommended DeepSeek model: `deepseek-v4-flash`.
+- Streamlit and FastAPI both read `DEEPSEEK_API_KEY` from environment when config file key is empty.
 
 ## Usage
 1. Configure your LLM settings in the sidebar.
@@ -41,4 +68,77 @@ Open your browser to `http://localhost:8501`.
    - *"What is the sampling rate of this file?"*
    - *"Perform phase picking on the loaded waveform."*
    - *"Convert this data to HDF5 format."*
+4. In the new frontend chat page, you can upload files with:
+   - Click upload (`+` button in composer)
+   - Drag-and-drop to the chat page
+   - Paste file(s) from clipboard
+5. After upload, trigger capabilities with natural language directly:
+   - *"请分析当前文件结构"*
+   - *"对当前波形做初至拾取"*
+   - *"使用当前数据进行地震定位"*
+   - *"帮我做连续地震监测"*
 
+## Validation
+
+Backend:
+```bash
+conda run -n quakecore python -m pytest tests/test_backend_health.py tests/test_backend_files.py tests/test_backend_chat_schema.py tests/test_backend_artifacts_route.py tests/test_backend_config.py tests/test_backend_skills.py -q
+conda run -n quakecore python -m pytest tests/test_router_service.py -q
+conda run -n quakecore python -m pytest tests -q
+```
+
+Frontend:
+```bash
+cd frontend
+npm run build
+```
+
+Smoke scripts (in-process mode, no local socket dependency):
+```bash
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_backend.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_chat.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload_then_chat.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_location_workflow.py
+PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_full_web_agent.py
+```
+
+Live DeepSeek v4 Flash smoke:
+```bash
+export DEEPSEEK_API_KEY=your_key
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+python scripts/smoke_deepseek_v4_flash.py
+```
+
+Pre-merge consolidated checks:
+```bash
+pytest tests -q
+python scripts/smoke_backend.py
+python scripts/smoke_upload.py
+python scripts/smoke_location_workflow.py
+python scripts/smoke_full_web_agent.py
+python scripts/smoke_deepseek_v4_flash.py
+cd frontend && npm run build
+```
+
+Optional live pytest:
+```bash
+pytest tests/test_deepseek_live.py -q
+```
+
+## Security Notes
+
+- Artifact download route enforces path containment under `data/` and blocks path traversal.
+- Upload endpoint accepts unknown extensions as `unknown`; unknown files are not bound to agent current-file state.
+- Chat artifact metadata includes `type`, `name`, `path`, and `url` for explicit frontend rendering.
+- Do not commit real API keys or `.env` files to the repository.
+
+## Current Limitations
+
+- The project still keeps compatibility with legacy `agent.tools` behaviors.
+- Deterministic workflow currently focuses on `earthquake_location`.
+- Other routes are still primarily handled by Agent + tools.
+- LangGraph is disabled by default (`QUAKECORE_USE_LANGGRAPH=0`).
+- RAG and Python Runner are not enabled by default.
+
+No Docker is used in this repository.

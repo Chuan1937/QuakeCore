@@ -6,7 +6,8 @@ from langchain_core.prompts import PromptTemplate
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
-from agent.tools import (
+from agent.tools_facade import (
+    run_analysis_sandbox,
     get_loaded_context, load_local_data, download_seismic_data,
     get_file_structure,
     read_file_trace,
@@ -71,18 +72,11 @@ def _build_llm(
             streaming=streaming,
         )
 
-    # # Default to Ollama LLM
-    # # 默认使用 Ollama LLM
-    # return ChatOllama(model=model_name, temperature=0)
-
-    # Default to DeepSeek API
-    # 默认使用 DeepSeek API
-    return ChatOpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url="https://api.deepseek.com",
+    return ChatOllama(
         model=model_name,
+        base_url=base_url or "http://localhost:11434",
         temperature=0,
-        streaming=streaming,
+        num_predict=4096,
     )
 
 
@@ -95,6 +89,7 @@ def get_agent_executor(
     base_url: Optional[str] = None,
     lang: str = "en",
     streaming: bool = False,
+    skill_context: str = "",
 ):
     """Create a LangChain ReAct agent with configurable LLM backends."""
 
@@ -102,6 +97,7 @@ def get_agent_executor(
 
     tools = [
         get_loaded_context, load_local_data, download_seismic_data,
+        run_analysis_sandbox,
         get_file_structure,
         read_file_trace,
         get_hdf5_keys,
@@ -142,10 +138,27 @@ def get_agent_executor(
         plot_location_map,
     ]
 
+    safe_skill_context = (skill_context or "").replace("{", "{{").replace("}", "}}").strip()
+    if safe_skill_context:
+        if lang == "en":
+            skill_context_block = (
+                "Skill context (injected from skills/*.md):\n"
+                f"{safe_skill_context}\n\n"
+            )
+        else:
+            skill_context_block = (
+                "技能上下文（来自 skills/*.md 注入）：\n"
+                f"{safe_skill_context}\n\n"
+            )
+    else:
+        skill_context_block = ""
+
     if lang == "en":
         template = '''You are QuakeCore, an intelligent seismic data analysis assistant. Answer the user's question in English. You have access to the following tools:
 
 {tools}
+
+''' + skill_context_block + '''
 
 Important rules:
 - Final Answer MUST be in English (file paths, table contents, and method names may remain as-is).
@@ -161,6 +174,7 @@ Important rules:
 - For "read trace X", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
 - If the user asks to "plot" or "draw" the waveform while reading, set `plot=True` in the read tool arguments.
 - Plotting IS supported; never tell the user that the system cannot draw waveforms.
+- If the user asks to view picks for a specific trace (e.g., "trace 3 picks"), prefer `pick_first_arrivals` with `trace_number` (1-based) instead of plain read/plot tools.
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
@@ -176,6 +190,10 @@ Important rules:
 - After a run_continuous_monitoring tool call returns success or error JSON, immediately produce Final Answer and do not start another Thought/Action cycle.
 - If the user mentions a specific place, campus, landmark, or institution, treat it as a place-centered request and prefer that place's center point over a broad region name.
 - For monitoring requests, break the initial reasoning into multiple explicit Thought sentences instead of one short line: (1) what location the user means, (2) how the time window is interpreted, (3) whether the job is large, (4) what the safest next action is.
+- 你必须严格遵守 ReAct 格式。
+- 如果需要调用工具，只能输出 Thought / Action / Action Input 三段。
+- 如果已经可以给最终结果，必须输出 Final Answer: 开头。
+- 不要在 Thought 后直接输出最终答案，不要混合 Final Answer 与 Action。
 
 **Phase Picking Rules**:
 - By default, phase picking uses deep learning methods (EQTransformer and PhaseNet) only. Do NOT specify the `methods` parameter unless the user explicitly requests a specific method.
@@ -219,6 +237,8 @@ Thought:{agent_scratchpad}'''
 
 {tools}
 
+''' + skill_context_block + '''
+
 Important rules:
 - Final Answer 必须使用中文（文件路径、表格内容、方法名可保留原样）。
 - Do NOT invent parameters the user did not request.
@@ -233,6 +253,7 @@ Important rules:
 - For "读取第X条轨迹", prefer read_file_trace unless the user explicitly specifies SEGY/MiniSEED.
 - If the user asks to "plot" or "draw" the waveform while reading, set `plot=True` in the read tool arguments.
 - Plotting IS supported; never tell the user that the system cannot draw waveforms.
+- 当用户要求“查看某个 trace 的拾取结果”（如“trace 3 的拾取”）时，优先调用 `pick_first_arrivals` 并传 `trace_number`（1 基），不要只用 read/plot 工具。
 - If the loaded file is HDF5, prefer get_hdf5_structure / read_hdf5_trace and use convert_hdf5_to_numpy/convert_hdf5_to_excel for conversions.
 - CRITICAL: If a tool returns a Markdown table or an image link (e.g. `![...](...)`), you MUST copy it EXACTLY into your Final Answer. Do not summarize it.
 - ALWAYS provide a brief textual summary of the key findings (e.g. best P-wave time, best S-wave time) in addition to the table/image.
@@ -248,6 +269,10 @@ Important rules:
 - 对监测请求，在第一次工具调用前写更长的 Thought：先复述请求，再识别区域/目录，估算负载，说明主要风险因素，并描述执行过程中的进度信息。
 - 当 run_continuous_monitoring 返回 success 或 error 的 JSON 后，立即给出 Final Answer，不要再继续新的 Thought/Action 循环。
 - 对监测请求，初始推理不要只写一句话，要拆成多句 Thought：1) 用户说的是哪个地点，2) 时间窗怎么理解，3) 任务是否过大，4) 下一步最稳妥的动作是什么。
+- 你必须严格遵守 ReAct 格式。
+- 如果需要调用工具，只能输出 Thought / Action / Action Input 三段。
+- 如果已经可以给最终结果，必须输出 Final Answer: 开头。
+- 不要在 Thought 后直接输出最终答案，不要混合 Final Answer 与 Action。
 
 **震相拾取规则**:
 - 默认使用深度学习方法（EQTransformer 和 PhaseNet）进行震相拾取，不需要指定 `methods` 参数。
@@ -297,5 +322,7 @@ Thought:{agent_scratchpad}'''
         verbose=True,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
-        max_iterations=30,
+        max_iterations=6,
+        # LangChain Classic compatibility: some versions only support "force".
+        early_stopping_method="force",
     )
