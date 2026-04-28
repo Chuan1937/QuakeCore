@@ -6,6 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from agent.core import _build_llm
@@ -65,6 +66,53 @@ class ToolPlanner:
                 return 0
         return None
 
+    @staticmethod
+    def _rule_time_window(message: str) -> dict[str, str]:
+        text = str(message or "")
+        patterns = [
+            r"(?P<year>\d{4})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日(?:的)?\s*"
+            r"(?P<h1>\d{1,2})\s*(?:点|时)?\s*(?:到|至|-|—|~)\s*(?P<h2>\d{1,2})\s*(?:点|时)?",
+            r"(?P<date>\d{4}-\d{1,2}-\d{1,2})\s+(?P<h1>\d{1,2})\s*(?:点|时)?\s*(?:到|至|-|—|~)\s*(?P<h2>\d{1,2})\s*(?:点|时)?",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            try:
+                if match.groupdict().get("date"):
+                    year, month, day = [int(part) for part in str(match.group("date")).split("-")]
+                else:
+                    year = int(match.group("year"))
+                    month = int(match.group("month"))
+                    day = int(match.group("day"))
+                h1 = int(match.group("h1"))
+                h2 = int(match.group("h2"))
+                start_dt = datetime(year, month, day, h1, 0, 0)
+                end_dt = datetime(year, month, day, h2, 0, 0)
+            except Exception:
+                continue
+            return {
+                "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+        return {}
+
+    @staticmethod
+    def _rule_region(message: str) -> str | None:
+        text = str(message or "").lower()
+        candidates = [
+            (("南加州", "southern california", "socal"), "南加州"),
+            (("北加州", "northern california"), "北加州"),
+            (("中加州", "central california"), "中加州"),
+            (("加州", "california"), "加州"),
+            (("日本", "japan"), "日本"),
+            (("新西兰", "new zealand"), "新西兰"),
+        ]
+        for aliases, normalized in candidates:
+            if any(alias in text for alias in aliases):
+                return normalized
+        return None
+
     def _rule_fallback(
         self,
         *,
@@ -87,6 +135,19 @@ class ToolPlanner:
             return ToolPlan(route=route, tool="plot_location_map", params={}, need_rerun=False, confidence=0.8)
         if route == "format_conversion":
             return ToolPlan(route=route, tool="", params={}, need_rerun=True, confidence=0.6)
+        if route == "continuous_monitoring":
+            params: dict[str, Any] = {}
+            params.update(self._rule_time_window(message))
+            region = self._rule_region(message)
+            if region:
+                params["region"] = region
+            return ToolPlan(
+                route=route,
+                tool="run_continuous_monitoring",
+                params=params,
+                need_rerun=True,
+                confidence=0.9 if params.get("start") and params.get("end") else 0.4,
+            )
         if route == "result_explanation":
             return ToolPlan(route=route, tool="result_explanation", params={}, need_rerun=False, confidence=0.8)
         if route == "result_analysis":
@@ -123,7 +184,7 @@ class ToolPlanner:
         fallback = self._rule_fallback(message=message, route=route, trace_index=trace_index)
 
         # Skip LLM planning for non-tool or weakly-defined routes.
-        if route in {"general_chat", "seismo_qa", "settings", "continuous_monitoring", "earthquake_location"}:
+        if route in {"general_chat", "seismo_qa", "settings"}:
             return fallback
 
         try:
@@ -168,6 +229,13 @@ runtime_results keys：
 - convert_segy_to_excel
 - convert_hdf5_to_numpy
 - convert_hdf5_to_excel
+- download_continuous_waveforms
+- run_continuous_picking
+- associate_continuous_events
+- run_continuous_monitoring
+- locate_earthquake
+- locate_uploaded_data_nearseismic
+- locate_place_data_nearseismic
 - picks_trace_plot
 - picks_trace_detail
 - picks_summary
@@ -185,7 +253,12 @@ runtime_results keys：
 3. 中文“第N道”按 1-based -> trace_index=N-1。
 4. 英文 trace N 按 0-based。
 5. 含“图/plot/image”优先 picks_trace_plot，不要 picks_trace_detail。
-6. 仅输出 JSON。
+6. continuous_monitoring 必须从自然语言中解析 start/end 或 date+hours。
+7. “2019年7月4日17到18点”或“2019年7月4日的17到18点” => start=2019-07-04T17:00:00, end=2019-07-04T18:00:00。
+8. “加州” => region="加州"。
+9. 如果用户只说日期和小时范围，优先输出 start/end，不要只输出 date/hours。
+10. earthquake_location 如果用户说“定位当前文件/这个文件”，优先使用当前上传文件上下文，不要要求用户重复路径。
+11. 仅输出 JSON。
 
 输出格式：
 {{
@@ -214,6 +287,8 @@ runtime_results keys：
 
             if not tool:
                 return fallback
+            if route == "continuous_monitoring":
+                params = {**fallback.params, **params}
             return ToolPlan(
                 route=planned_route,
                 tool=tool,

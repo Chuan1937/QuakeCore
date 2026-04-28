@@ -1389,7 +1389,7 @@ def plot_location_three_views(
     ax1.set_xlim(0.0, depth_cap)
     ax1.set_facecolor("#d9d9d9")
     ax1.tick_params(axis="both", which="major", labelsize=10)
-    ax1.set_xlabel("Depth (km)", fontsize=11)
+    ax1.set_xlabel("Lat. (°)", fontsize=11)
     ax1.xaxis.tick_top()
     ax1.xaxis.set_label_position("top")
     ax1.set_yticklabels([])

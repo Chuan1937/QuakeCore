@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 
 from backend.schemas import LocationWorkflowRunRequest
 from backend.services.session_store import get_session_store
+from backend.services.tool_planner import ToolPlanner
 from backend.workflows.continuous_jobs import (
     create_continuous_job,
     fail_continuous_job,
@@ -80,7 +81,7 @@ def _extract_continuous_params_from_message(message: str) -> dict:
     # -> start/end ISO strings for continuous workflow.
     zh_range = re.search(
         r"(?P<y>\d{4})\s*年\s*(?P<m>\d{1,2})\s*月\s*(?P<d>\d{1,2})\s*日?"
-        r"\s*(?P<h1>\d{1,2})\s*(?:点|时)"
+        r"(?:的)?\s*(?P<h1>\d{1,2})\s*(?:点|时)?"
         r"(?:\s*(?:到|至|\-|~|—|–)\s*(?P<h2>\d{1,2})\s*(?:点|时)?)?",
         text,
     )
@@ -107,6 +108,20 @@ def _extract_continuous_params_from_message(message: str) -> dict:
             params.setdefault("date", f"{year:04d}-{month:02d}-{day:02d}")
 
     return params
+
+
+def _plan_continuous_params(session_id: str, message: str, lang: str) -> dict:
+    planner = ToolPlanner()
+    store = get_session_store()
+    plan = planner.plan(
+        message=message,
+        route="continuous_monitoring",
+        runtime_results=store.get_runtime_results(session_id),
+        uploaded_files=store.get_uploaded_files(session_id),
+        current_file=store.get_current_file(session_id),
+        lang=lang,
+    )
+    return dict(plan.params or {})
 
 
 def _normalize_continuous_result(raw: object) -> dict:
@@ -217,7 +232,16 @@ def start_continuous_workflow(payload: dict):
     message = str(payload.get("message") or "")
     lang = payload.get("lang") or "zh"
     request_params = payload.get("params")
-    params = dict(request_params) if isinstance(request_params, dict) else _extract_continuous_params_from_message(message)
+    if isinstance(request_params, dict):
+        params = dict(request_params)
+    else:
+        extracted = _extract_continuous_params_from_message(message)
+        planned = _plan_continuous_params(session_id, message, lang)
+        params = {**extracted, **planned}
+        if planned.get("start") and planned.get("end"):
+            params.pop("date", None)
+            params.pop("hours", None)
+            params.pop("duration_hours", None)
     job_id = uuid4().hex
 
     create_continuous_job(job_id, session_id=session_id, message=message)

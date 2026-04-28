@@ -331,6 +331,75 @@ def test_agent_service_bootstraps_pick_when_picks_source_mismatch(monkeypatch):
     assert runtime.get("last_picks_source_file") == "tmp/new.mseed"
 
 
+def test_agent_service_continuous_monitoring_uses_planned_params(monkeypatch):
+    store = SessionStore()
+    service = AgentService(session_store=store)
+
+    class _ShouldNotRunAgent:
+        def invoke(self, _payload):
+            raise AssertionError("ReAct agent should not be invoked for continuous monitoring")
+
+    def _fake_build_agent_session(session_id: str, lang: str) -> AgentSession:
+        return AgentSession(session_id=session_id, lang=lang, agent=_ShouldNotRunAgent())
+
+    monkeypatch.setattr(service, "_build_agent_session", _fake_build_agent_session)
+    monkeypatch.setattr(service._router_service, "route_intent", lambda _message: "continuous_monitoring")
+    monkeypatch.setattr(service, "_summarize_direct_tool_result", lambda **_: "continuous-summary")
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        service._tool_planner,
+        "plan",
+        lambda **_: type(
+            "P",
+            (),
+            {
+                "route": "continuous_monitoring",
+                "tool": "run_continuous_monitoring",
+                "params": {
+                    "region": "加州",
+                    "start": "2019-07-04T17:00:00",
+                    "end": "2019-07-04T18:00:00",
+                },
+                "need_rerun": True,
+                "confidence": 0.95,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "backend.services.agent_service.run_continuous_monitoring",
+        type(
+            "_DummyTool",
+            (),
+            {
+                "invoke": staticmethod(
+                    lambda payload: (
+                        captured.setdefault("payload", payload),
+                        {
+                            "success": True,
+                            "message": "ok",
+                            "data": {"start_time": "2019-07-04T17:00:00", "end_time": "2019-07-04T18:00:00"},
+                        },
+                    )[1]
+                )
+            },
+        ),
+    )
+
+    result = service.chat("对加州2019年7月4日的17到18点进行地震监测", session_id="sid-cm", lang="zh")
+
+    assert result.error is None
+    assert result.answer == "continuous-summary"
+    assert captured["payload"] == {
+        "params": {
+            "region": "加州",
+            "start": "2019-07-04T17:00:00",
+            "end": "2019-07-04T18:00:00",
+        }
+    }
+
+
 def test_agent_service_apply_file_reference_from_message_activates_file_record():
     store = SessionStore()
     store.add_file("sid-ref", "/tmp/CI.IDO.mseed")

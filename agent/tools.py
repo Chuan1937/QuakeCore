@@ -2,6 +2,7 @@ import csv
 import glob
 from dataclasses import asdict
 from datetime import datetime
+import re
 
 from langchain.tools import tool
 from utils.segy_handler import SegyHandler
@@ -3781,6 +3782,68 @@ def _resolve_continuous_time_window(parsed):
     return start_time, end_time
 
 
+def _parse_chinese_time_window(message: str) -> dict:
+    text = str(message or "")
+    patterns = [
+        r"(?P<year>\d{4})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日(?:的)?\s*"
+        r"(?P<h1>\d{1,2})\s*(?:点|时)?\s*(?:到|至|-|—|~)\s*(?P<h2>\d{1,2})\s*(?:点|时)?",
+        r"(?P<date>\d{4}-\d{1,2}-\d{1,2})\s+(?P<h1>\d{1,2})\s*(?:点|时)?\s*(?:到|至|-|—|~)\s*(?P<h2>\d{1,2})\s*(?:点|时)?",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            if match.groupdict().get("date"):
+                year, month, day = [int(part) for part in str(match.group("date")).split("-")]
+            else:
+                year = int(match.group("year"))
+                month = int(match.group("month"))
+                day = int(match.group("day"))
+            h1 = int(match.group("h1"))
+            h2 = int(match.group("h2"))
+            start_dt = datetime(year, month, day, h1, 0, 0)
+            end_dt = datetime(year, month, day, h2, 0, 0)
+        except Exception:
+            continue
+        return {
+            "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+    return {}
+
+
+def _parse_named_region_from_message(message: str) -> str | None:
+    text = str(message or "").lower()
+    candidates = [
+        (("南加州", "southern california", "socal"), "南加州"),
+        (("北加州", "northern california"), "北加州"),
+        (("中加州", "central california"), "中加州"),
+        (("加州", "california"), "加州"),
+        (("日本", "japan"), "日本"),
+        (("新西兰", "new zealand"), "新西兰"),
+    ]
+    for aliases, normalized in candidates:
+        if any(alias in text for alias in aliases):
+            return normalized
+    return None
+
+
+def _augment_continuous_params_with_message(parsed: dict, raw_params: Union[str, dict, None]) -> dict:
+    result = dict(parsed or {})
+    if isinstance(raw_params, str) and raw_params.strip() and not result:
+        result["message"] = raw_params.strip()
+    raw_message = str(result.get("message") or result.get("query") or "").strip()
+    if raw_message:
+        if not (result.get("start") and result.get("end")):
+            result.update(_parse_chinese_time_window(raw_message))
+        if not result.get("region"):
+            region = _parse_named_region_from_message(raw_message)
+            if region:
+                result["region"] = region
+    return result
+
+
 def _resolve_continuous_region(parsed):
     """Resolve region bounds and network defaults for continuous monitoring."""
     place_name = parsed.get("place") or parsed.get("location") or parsed.get("site")
@@ -4038,15 +4101,16 @@ def download_continuous_waveforms(params: Union[str, dict, None] = None):
     """
     from obspy import UTCDateTime
 
-    parsed = _parse_param_dict(params)
+    parsed = _augment_continuous_params_with_message(_parse_param_dict(params), params)
     _l = CURRENT_LANG
 
     start_time, end_time = _resolve_continuous_time_window(parsed)
     if start_time is None or end_time is None:
         return json.dumps({
+            "success": False,
+            "message": "缺少监测时间范围，请指定例如 2019-07-04T17:00:00 到 2019-07-04T18:00:00。" if _l == "zh"
+                else "Missing monitoring time window. Please specify e.g. 2019-07-04T17:00:00 to 2019-07-04T18:00:00.",
             "error": "start/end or date+hours are required.",
-            "hint": "请提供 start/end，或 date + hours 参数。" if _l == "zh"
-                else "Please provide start/end, or date + hours.",
         }, ensure_ascii=False, indent=2)
 
     region = _resolve_continuous_region(parsed)
@@ -4302,7 +4366,7 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
     """
     from obspy import UTCDateTime
 
-    parsed = _parse_param_dict(params)
+    parsed = _augment_continuous_params_with_message(_parse_param_dict(params), params)
     _l = CURRENT_LANG
     job_id = str(parsed.get("job_id") or "").strip() or None
     local_only = str(parsed.get("local_only", parsed.get("use_local_only", "false"))).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -4311,9 +4375,10 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
 
     if start_time is None or end_time is None:
         return json.dumps({
+            "success": False,
+            "message": "缺少监测时间范围，请指定例如 2019-07-04T17:00:00 到 2019-07-04T18:00:00。" if _l == "zh"
+                else "Missing monitoring time window. Please specify e.g. 2019-07-04T17:00:00 to 2019-07-04T18:00:00.",
             "error": "start/end or date+hours are required.",
-            "hint": "请提供 start/end，或 date + hours 参数。" if _l == "zh"
-                else "Please provide start/end, or date + hours.",
         }, ensure_ascii=False, indent=2)
 
     region = _resolve_continuous_region(parsed)

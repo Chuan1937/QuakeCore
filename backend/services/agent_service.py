@@ -13,6 +13,7 @@ from uuid import uuid4
 from agent.core import get_agent_executor
 from agent.tools import set_current_lang
 from agent.tools_facade import (
+    associate_continuous_events,
     convert_hdf5_to_excel,
     convert_hdf5_to_numpy,
     convert_miniseed_to_hdf5,
@@ -24,10 +25,16 @@ from agent.tools_facade import (
     convert_segy_to_excel,
     convert_segy_to_hdf5,
     convert_segy_to_numpy,
+    download_continuous_waveforms,
     get_file_structure,
+    locate_earthquake,
+    locate_place_data_nearseismic,
+    locate_uploaded_data_nearseismic,
     pick_first_arrivals,
     plot_location_map,
     read_file_trace,
+    run_continuous_monitoring,
+    run_continuous_picking,
 )
 from backend.services.artifact_utils import to_data_relative_path
 from backend.services.config_service import ConfigService
@@ -354,6 +361,17 @@ class AgentService:
         return any(token in text for token in ("plot", "draw", "图", "绘", "画"))
 
     @staticmethod
+    def _missing_continuous_time_result(session_id: str, route: str) -> ChatResult:
+        return ChatResult(
+            session_id=session_id,
+            answer="缺少监测时间范围。请指定例如 2019-07-04T17:00:00 到 2019-07-04T18:00:00。",
+            error="start/end or date+hours are required.",
+            route=route,
+            artifacts=[],
+            workflow=None,
+        )
+
+    @staticmethod
     def _trace_index_in_picks_csv(csv_rel_path: str, trace_index: int) -> bool:
         rel = to_data_relative_path(csv_rel_path)
         if not rel:
@@ -667,6 +685,19 @@ class AgentService:
             tool_obj, payload = self._select_conversion_tool(message, session_id)
             if tool_obj is None:
                 return None
+        elif route == "continuous_monitoring":
+            plan = self._tool_planner.plan(
+                message=message,
+                route=route,
+                runtime_results=self._sessions.get_runtime_results(session_id),
+                uploaded_files=self._sessions.get_uploaded_files(session_id),
+                current_file=self._sessions.get_current_file(session_id),
+                lang="zh",
+            )
+            if not (plan.params.get("start") and plan.params.get("end")):
+                return self._missing_continuous_time_result(session_id, route)
+            tool_obj = run_continuous_monitoring
+            payload = {"params": plan.params}
         else:
             return None
 
@@ -1021,6 +1052,28 @@ class AgentService:
             tool_obj = mapping[tool]
             payload = {"params": params}
             route = "format_conversion"
+        elif tool in {
+            "download_continuous_waveforms",
+            "run_continuous_picking",
+            "associate_continuous_events",
+            "run_continuous_monitoring",
+            "locate_earthquake",
+            "locate_uploaded_data_nearseismic",
+            "locate_place_data_nearseismic",
+        }:
+            mapping = {
+                "download_continuous_waveforms": download_continuous_waveforms,
+                "run_continuous_picking": run_continuous_picking,
+                "associate_continuous_events": associate_continuous_events,
+                "run_continuous_monitoring": run_continuous_monitoring,
+                "locate_earthquake": locate_earthquake,
+                "locate_uploaded_data_nearseismic": locate_uploaded_data_nearseismic,
+                "locate_place_data_nearseismic": locate_place_data_nearseismic,
+            }
+            if tool == "run_continuous_monitoring" and not (params.get("start") and params.get("end")):
+                return self._missing_continuous_time_result(session_id, route)
+            tool_obj = mapping[tool]
+            payload = {"params": params}
         elif tool in {
             "picks_trace_plot",
             "picks_trace_detail",
