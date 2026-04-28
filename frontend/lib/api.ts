@@ -70,6 +70,8 @@ export type ChatResponse = {
   route: string;
   artifacts: ChatArtifact[];
   workflow?: WorkflowResult | null;
+  opencode_admin?: boolean;
+  data?: Record<string, unknown>;
 };
 
 export type ChatRequest = {
@@ -170,6 +172,8 @@ export type StreamEvent = {
     route: string;
     artifacts: ChatArtifact[];
     workflow: WorkflowResult | null;
+    opencode_admin?: boolean;
+    data?: Record<string, unknown>;
   };
 };
 

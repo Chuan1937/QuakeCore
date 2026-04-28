@@ -1194,6 +1194,22 @@ textarea {
   gap: 12px;
 }
 
+.opencode-live-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.opencode-live-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #334155;
+  font-size: 12px;
+}
+
 .progress-card {
   display: grid;
   gap: 8px;
@@ -1220,58 +1236,92 @@ textarea {
   gap: 10px;
 }
 
-.workflow-floating-step {
-  animation: workflowFadeIn 180ms ease-out;
-  transition: opacity 400ms ease;
-  border-radius: 16px;
-  padding: 14px 16px;
+.opencode-live-stack {
+  position: relative;
+  height: 180px;
+  margin: 8px 0 4px;
+  pointer-events: none;
+}
+
+.opencode-live-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 18px;
+  padding: 18px 20px;
   background: rgba(17, 24, 39, 0.92);
   color: #ffffff;
-  max-width: 100%;
+  box-shadow:
+    0 20px 45px rgba(15, 23, 42, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   overflow: hidden;
+  transition:
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 420ms ease,
+    filter 420ms ease;
 }
 
-.workflow-step-title,
-.workflow-step-detail {
+.opencode-live-card[data-index="0"] {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+  z-index: 4;
+  filter: blur(0);
+  animation: opencodeCardEnter 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.opencode-live-card[data-index="1"] {
+  transform: translateY(44px) scale(0.965);
+  opacity: 0.55;
+  z-index: 3;
+  filter: blur(0.2px);
+}
+
+.opencode-live-card[data-index="2"] {
+  transform: translateY(82px) scale(0.93);
+  opacity: 0.26;
+  z-index: 2;
+  filter: blur(0.6px);
+}
+
+.opencode-live-card[data-index="3"] {
+  transform: translateY(112px) scale(0.9);
+  opacity: 0.08;
+  z-index: 1;
+  filter: blur(1px);
+}
+
+.opencode-live-card-title {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.35;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
-  max-width: 100%;
 }
 
-.workflow-step-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-}
-
-.workflow-step-detail {
-  opacity: 0.76;
+.opencode-live-card-detail {
+  margin-top: 8px;
   font-size: 13px;
-  margin-top: 6px;
-  max-height: 80px;
+  line-height: 1.45;
+  opacity: 0.72;
+  max-height: 44px;
   overflow: hidden;
-}
-
-.workflow-history {
-  display: grid;
-  gap: 6px;
-}
-
-.workflow-history-item {
-  border-radius: 10px;
-  padding: 8px 10px;
-  background: #f3f4f6;
-  color: #374151;
-  font-size: 0.82rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-@keyframes workflowFadeIn {
+.opencode-live-card-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.48;
+}
+
+@keyframes opencodeCardEnter {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(18px) scale(0.96);
   }
   to {
     opacity: 1;

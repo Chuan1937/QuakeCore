@@ -18,7 +18,6 @@ import {
   type LlmConfig,
   type StreamEvent,
   type WorkflowResult,
-  type WorkflowStep,
 } from "@/lib/api";
 
 type ChatAttachment = {
@@ -41,8 +40,16 @@ type Message = {
   files?: Array<{ name: string; fileType?: string }>;
   pending?: boolean;
   attachments?: ChatAttachment[];
-  currentWorkflowStep?: WorkflowStep | null;
-  workflowStepHistory?: WorkflowStep[];
+  opencodeAdmin?: boolean;
+  isOpencodeRunning?: boolean;
+  liveSteps?: Array<{
+    id: string;
+    summary: string;
+    detail?: string;
+    status?: string;
+    tool?: string;
+    timestamp?: number;
+  }>;
   progress?: {
     percent: number;
     step: string;
@@ -87,21 +94,6 @@ function inferPendingText(text: string): string {
   return "正在思考…";
 }
 
-function buildWorkflowFromPendingSteps(steps: WorkflowStep[]): WorkflowResult | null {
-  if (!steps.length) {
-    return null;
-  }
-  return {
-    status: "success",
-    summary: "",
-    message: "",
-    steps: [...steps],
-    location: {},
-    artifacts: [],
-    error: null,
-  };
-}
-
 function isContinuousMonitoringRequest(text: string): boolean {
   const source = text.toLowerCase();
   return (
@@ -110,6 +102,13 @@ function isContinuousMonitoringRequest(text: string): boolean {
     source.includes("continuous monitoring") ||
     source.includes("continuous")
   );
+}
+
+function isOpencodeResponse(event: StreamEvent["response"] | undefined): boolean {
+  if (!event) {
+    return false;
+  }
+  return Boolean(event.opencode_admin || event.route === "result_analysis");
 }
 
 const ARTIFACT_PATH_PATTERN =
@@ -557,8 +556,6 @@ export default function HomePage() {
     }
 
     const msgId = newId();
-    const pendingSteps: WorkflowStep[] = [];
-
     setMessages((current) => [
       ...current,
       {
@@ -566,6 +563,8 @@ export default function HomePage() {
         role: "assistant",
         content: inferPendingText(text),
         pending: true,
+        isOpencodeRunning: true,
+        liveSteps: [],
       } as Message,
     ]);
 
@@ -596,45 +595,23 @@ export default function HomePage() {
 
         if (event.type === "progress" && event.event) {
           const ev = event.event;
-          const stepName = ev.summary || ev.type || "";
-          const stepStatus: WorkflowStep["status"] =
-            ev.status === "running" ? "running" : "ok";
-
-          const existingIndex = pendingSteps.findIndex(
-            (s) => s.name === stepName && s.status === "running",
-          );
-
-          const step: WorkflowStep = {
-            name: stepName,
-            status: stepStatus,
-            required: true,
-            message: ev.detail || ev.summary || "",
-            error: null,
-            duration_ms: 0,
+          const liveStep = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            summary: ev.summary || ev.tool || "OpenCode is working...",
+            detail: ev.detail || "",
+            status: ev.status || "running",
+            tool: ev.tool,
+            timestamp: ev.timestamp || Date.now(),
           };
-
-          if (existingIndex >= 0 && stepStatus !== "running") {
-            pendingSteps[existingIndex] = step;
-          } else if (existingIndex < 0) {
-            pendingSteps.push(step);
-          }
 
           setMessages((current) =>
             current.map((item) =>
               item.id === msgId
                 ? {
                     ...item,
-                    currentWorkflowStep: step,
-                    workflowStepHistory: [...pendingSteps].slice(-20),
-                    workflow: {
-                      status: "running",
-                      summary: "",
-                      message: "",
-                      steps: [...pendingSteps],
-                      location: {},
-                      artifacts: [],
-                      error: null,
-                    } as WorkflowResult,
+                    opencodeAdmin: true,
+                    isOpencodeRunning: true,
+                    liveSteps: [liveStep, ...(item.liveSteps || [])].slice(0, 4),
                   }
                 : item,
             ),
@@ -658,13 +635,22 @@ export default function HomePage() {
                     route: r.route,
                     artifacts: resolvedArtifacts,
                     error: r.error,
-                    currentWorkflowStep: null,
-                    workflowStepHistory: item.workflowStepHistory ?? [...pendingSteps].slice(-20),
-                    workflow: r.workflow ?? buildWorkflowFromPendingSteps(pendingSteps),
+                    opencodeAdmin: isOpencodeResponse(r),
+                    isOpencodeRunning: false,
+                    workflow: isOpencodeResponse(r) ? null : (r.workflow ?? null),
                   }
                 : item,
             ),
           );
+          if (isOpencodeResponse(r)) {
+            window.setTimeout(() => {
+              setMessages((current) =>
+                current.map((item) =>
+                  item.id === msgId ? { ...item, liveSteps: [] } : item,
+                ),
+              );
+            }, 1200);
+          }
           break;
         }
       }
@@ -678,8 +664,7 @@ export default function HomePage() {
                   pending: false,
                   content: "Stream ended without response.",
                   error: "No final event received.",
-                  currentWorkflowStep: null,
-                  workflow: buildWorkflowFromPendingSteps(pendingSteps),
+                  isOpencodeRunning: false,
                 }
               : item,
           ),
@@ -689,9 +674,9 @@ export default function HomePage() {
       const message = err instanceof Error ? err.message : "Request failed.";
       setError(message);
       setMessages((current) =>
-          current.map((item) =>
+        current.map((item) =>
             item.id === msgId
-            ? { ...item, pending: false, content: "请求失败。", error: message, currentWorkflowStep: null }
+            ? { ...item, pending: false, content: "请求失败。", error: message, isOpencodeRunning: false }
             : item,
         ),
       );
@@ -879,27 +864,24 @@ export default function HomePage() {
                       </div>
                     ) : (
                       <div className="assistant-message assistant-message-live">
-                        <span className="pending-text">
-                          {message.content}
-                          <span className="dot-wave">
-                            <i />
-                            <i />
-                            <i />
+                        <div className="opencode-live-header">
+                          <span className="pending-text">
+                            {message.content}
+                            <span className="dot-wave">
+                              <i />
+                              <i />
+                              <i />
+                            </span>
                           </span>
-                        </span>
-                        {message.currentWorkflowStep ? (
-                          <div className="workflow-floating-step" aria-live="polite">
-                            <div className="workflow-step-title">{message.currentWorkflowStep.name}</div>
-                            {message.currentWorkflowStep.message ? (
-                              <div className="workflow-step-detail">{message.currentWorkflowStep.message}</div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {message.workflowStepHistory?.length ? (
-                          <div className="workflow-history">
-                            {message.workflowStepHistory.slice(-3).map((step, index) => (
-                              <div key={`${step.name}-${index}`} className={`workflow-history-item status-${step.status}`}>
-                                <span>{step.name}</span>
+                          {message.isOpencodeRunning ? <span className="opencode-live-badge">OpenCode 正在处理...</span> : null}
+                        </div>
+                        {message.liveSteps?.length ? (
+                          <div className="opencode-live-stack" aria-live="polite">
+                            {message.liveSteps.map((step, index) => (
+                              <div key={step.id} className="opencode-live-card" data-index={index}>
+                                <div className="opencode-live-card-title">{step.summary}</div>
+                                {step.detail ? <div className="opencode-live-card-detail">{step.detail}</div> : null}
+                                <div className="opencode-live-card-meta">{step.status || "running"}</div>
                               </div>
                             ))}
                           </div>
@@ -926,7 +908,7 @@ export default function HomePage() {
                         </div>
                       ) : null}
 
-                      {message.workflow ? (
+                      {message.workflow && !message.opencodeAdmin ? (
                         <div className="assistant-message">
                           <WorkflowSteps workflow={message.workflow} />
                         </div>

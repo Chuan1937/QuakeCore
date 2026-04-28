@@ -566,7 +566,7 @@ class AgentService:
             persisted_updates = self._extract_runtime_updates(
                 session_id=session_id,
                 route="result_analysis",
-                data=((response.get("workflow") or {}).get("data") if isinstance(response.get("workflow"), dict) else None),
+                data=response.get("data") if isinstance(response.get("data"), dict) else None,
                 artifacts=new_artifacts,
             )
             self._persist_runtime_updates(session_id, persisted_updates)

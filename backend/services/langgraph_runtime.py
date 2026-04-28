@@ -496,7 +496,7 @@ class LangGraphRuntime:
         runtime_results: dict[str, Any],
         lang: str,
     ) -> dict[str, Any]:
-        timeout_seconds = int(os.getenv("QUAKECORE_OPENCODE_ADMIN_TIMEOUT", "300"))
+        timeout_seconds = int(os.getenv("QUAKECORE_OPENCODE_ADMIN_TIMEOUT", "600"))
 
         result = OpenCodeAdminRuntime().execute(
             message=message,
@@ -578,7 +578,7 @@ class LangGraphRuntime:
         runtime_results = dict(store_runtime)
         runtime_results.update(message_runtime)
 
-        timeout_seconds = int(os.getenv("QUAKECORE_OPENCODE_ADMIN_TIMEOUT", "300"))
+        timeout_seconds = int(os.getenv("QUAKECORE_OPENCODE_ADMIN_TIMEOUT", "600"))
 
         for event in OpenCodeAdminRuntime().stream_execute(
             message=message,
@@ -598,31 +598,13 @@ class LangGraphRuntime:
                         "answer": result.get("message", ""),
                         "error": "" if result.get("success") else result.get("message", ""),
                         "route": "result_analysis",
+                        "opencode_admin": True,
+                        "data": result.get("data", {}),
                         "artifacts": [
                             {"type": a["type"], "name": a["name"], "path": a["path"], "url": a["url"]}
                             for a in result.get("artifacts", [])
                         ],
-                        "workflow": {
-                            "status": "success" if result.get("success") else "failed",
-                            "summary": result.get("message", ""),
-                            "message": result.get("message", ""),
-                            "steps": [
-                                {
-                                    "name": str(ev.get("summary", "")),
-                                    "status": str(ev.get("status", "completed")),
-                                    "required": True,
-                                    "message": str(ev.get("detail", ev.get("summary", ""))),
-                                    "error": None,
-                                    "data": {k: v for k, v in ev.items() if k not in ("summary", "status", "detail")},
-                                    "artifacts": [],
-                                    "duration_ms": 0,
-                                }
-                                for ev in result.get("data", {}).get("progress_events", [])
-                            ],
-                            "location": {},
-                            "artifacts": result.get("artifacts", []),
-                            "error": "" if result.get("success") else result.get("message", ""),
-                        },
+                        "workflow": None,
                     },
                 }
             elif event.get("type") == "error":
