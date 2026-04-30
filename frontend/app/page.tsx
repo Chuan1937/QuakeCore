@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MarkdownView } from "@/components/markdown-view";
 import { WorkflowSteps } from "@/components/workflow-steps";
+import { useLanguage, inferPendingKey } from "@/lib/i18n";
+import { LanguageToggle } from "@/components/language-toggle";
 import {
   chatWithAgentStream,
   getContinuousWorkflowProgress,
@@ -72,26 +74,7 @@ function newId() {
 }
 
 function inferPendingText(text: string): string {
-  const source = text.toLowerCase();
-  if (
-    source.includes("初至") ||
-    source.includes("拾取") ||
-    source.includes("震相") ||
-    source.includes("p波") ||
-    source.includes("s波")
-  ) {
-    return "正在分析波形并进行初至/震相拾取…";
-  }
-  if (source.includes("定位") || source.includes("震中") || source.includes("震源")) {
-    return "正在执行地震定位工作流…";
-  }
-  if (source.includes("结构") || source.includes("采样率") || source.includes("header")) {
-    return "正在读取文件结构…";
-  }
-  if (source.includes("连续") || source.includes("监测")) {
-    return "正在准备连续地震监测任务…";
-  }
-  return "正在思考…";
+  return inferPendingKey(text);
 }
 
 function isContinuousMonitoringRequest(text: string): boolean {
@@ -207,6 +190,7 @@ function mergeArtifacts(primary: ChatArtifact[] | undefined, content: string): C
 }
 
 function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
+  const { t } = useLanguage();
   const url = toBackendUrl(artifact.url);
   const displayName = getArtifactDisplayName(artifact);
   const rawPath = artifact.path || artifact.name || "";
@@ -215,7 +199,7 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
   async function handleDownload() {
     const response = await fetch(url);
     if (!response.ok) {
-      alert("文件不存在或下载失败");
+      alert(t("download_failed"));
       return;
     }
 
@@ -262,7 +246,7 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
-      alert("复制失败");
+      alert(t("copy_failed"));
     }
   }
 
@@ -275,7 +259,7 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
           type="button"
           className="artifact-image-link"
           onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
-          title="查看大图"
+          title={t("view_large_image")}
         >
           <img src={url} alt={displayName} />
         </button>
@@ -296,33 +280,34 @@ function ArtifactMessageCard({ artifact }: { artifact: ChatArtifact }) {
         ) : null}
 
         <div className="artifact-card-actions">
-          <button type="button" onClick={() => void handleDownload()}>
-            下载
-          </button>
+            <button type="button" onClick={() => void handleDownload()}>
+              {t("download")}
+            </button>
 
-          {isImage ? (
-            <>
-              <button
-                type="button"
-                onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
-              >
-                查看
-              </button>
+            {isImage ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+                >
+                  {t("view")}
+                </button>
 
-              <button type="button" onClick={() => void handleCopy()}>
-                复制
-              </button>
-            </>
-          ) : null}
-        </div>
+                <button type="button" onClick={() => void handleCopy()}>
+                  {t("copy")}
+                </button>
+              </>
+            ) : null}
+          </div>
 
-        {copied ? <div className="copy-toast">复制成功</div> : null}
+          {copied ? <div className="copy-toast">{t("copy_success")}</div> : null}
       </div>
     </div>
   );
 }
 
 export default function HomePage() {
+  const { t, lang } = useLanguage();
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -361,7 +346,7 @@ export default function HomePage() {
     if (!messages.length) {
       return;
     }
-    const title = messages.find((item) => item.role === "user")?.content.slice(0, 24) || "未命名会话";
+    const title = messages.find((item) => item.role === "user")?.content.slice(0, 24) || t("unnamed_session");
     setThreads((current) => {
       const snapshot: Thread = {
         id: sessionId || newId(),
@@ -406,7 +391,7 @@ export default function HomePage() {
           setPendingAttachments((prev) =>
             prev.map((a) =>
               a.id === attachments[i].id
-                ? { ...a, status: "failed", error: err instanceof Error ? err.message : "上传失败" }
+                  ? { ...a, status: "failed", error: err instanceof Error ? err.message : t("upload_failed") }
                 : a,
             ),
           );
@@ -430,10 +415,10 @@ export default function HomePage() {
               ...item,
               pending: progress.status === "running",
               route: "continuous_monitoring",
-              content: "连续地震监测进行中",
+              content: t("monitoring_in_progress"),
               progress: {
                 percent: Number(progress.percent ?? 0),
-                step: String(progress.step || "处理中"),
+                step: String(progress.step || t("processing")),
                 status: String(progress.status || "running"),
               },
             }
@@ -450,7 +435,7 @@ export default function HomePage() {
     const started = await startContinuousWorkflow({
       message: text,
       session_id: sessionHint,
-      lang: "zh",
+      lang: lang,
     });
     setSessionId(started.session_id);
     const jobId = started.job_id;
@@ -470,7 +455,7 @@ export default function HomePage() {
     }
 
     const payload = result.result || {};
-    const answer = String(payload.message || result.error || "连续监测完成。");
+    const answer = String(payload.message || result.error || t("monitoring_complete"));
     const artifacts = mergeArtifacts(
       Array.isArray(payload.artifacts) ? payload.artifacts : [],
       answer,
@@ -526,16 +511,16 @@ export default function HomePage() {
         {
           id: pendingId,
           role: "assistant",
-          content: "连续地震监测进行中",
+          content: t("monitoring_in_progress"),
           route: "continuous_monitoring",
           pending: true,
-          progress: { percent: 2, step: "任务准备中", status: "running" },
+          progress: { percent: 2, step: t("task_preparing"), status: "running" },
         },
       ]);
       try {
         await runContinuousWorkflow(text, pendingId, sessionId);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "连续监测任务失败。";
+        const message = err instanceof Error ? err.message : t("monitoring_failed");
         setError(message);
         setMessages((current) =>
           current.map((item) =>
@@ -543,7 +528,7 @@ export default function HomePage() {
               ? {
                   ...item,
                   pending: false,
-                  content: "连续监测任务失败。",
+                  content: t("monitoring_failed"),
                   error: message,
                 }
               : item,
@@ -561,7 +546,7 @@ export default function HomePage() {
       {
         id: msgId,
         role: "assistant",
-        content: inferPendingText(text),
+        content: t(inferPendingText(text)),
         pending: true,
         isOpencodeRunning: true,
         liveSteps: [],
@@ -572,7 +557,7 @@ export default function HomePage() {
       const stream = chatWithAgentStream({
         message: text,
         session_id: sessionId,
-        lang: "zh",
+        lang: lang,
         attachments: userAttachments
           .filter((a): a is ChatAttachment & { path: string } => Boolean(a.path))
           .map((a) => ({
@@ -585,19 +570,11 @@ export default function HomePage() {
       let receivedFinal = false;
 
       for await (const event of stream) {
-        if (event.type === "status" && event.message) {
-          setMessages((current) =>
-            current.map((item) =>
-              item.id === msgId ? { ...item, content: event.message ?? item.content } : item,
-            ),
-          );
-        }
-
         if (event.type === "progress" && event.event) {
           const ev = event.event;
           const liveStep = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            summary: ev.summary || ev.tool || "QuakeCore is analyzing...",
+            summary: ev.summary || ev.tool || t("analyzing_badge"),
             detail: ev.detail || "",
             status: ev.status || "running",
             tool: ev.tool,
@@ -622,7 +599,7 @@ export default function HomePage() {
           receivedFinal = true;
           const r = event.response;
           setSessionId(r.session_id);
-          const responseText = r.answer || r.error || "No response returned.";
+          const responseText = r.answer || r.error || t("no_response");
           const resolvedArtifacts = mergeArtifacts(r.artifacts, responseText);
 
           setMessages((current) =>
@@ -662,8 +639,8 @@ export default function HomePage() {
               ? {
                   ...item,
                   pending: false,
-                  content: "Stream ended without response.",
-                  error: "No final event received.",
+                  content: t("stream_ended"),
+                  error: t("stream_ended"),
                   isOpencodeRunning: false,
                 }
               : item,
@@ -671,12 +648,12 @@ export default function HomePage() {
         );
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Request failed.";
+      const message = err instanceof Error ? err.message : t("request_failed");
       setError(message);
       setMessages((current) =>
         current.map((item) =>
             item.id === msgId
-            ? { ...item, pending: false, content: "请求失败。", error: message, isOpencodeRunning: false }
+            ? { ...item, pending: false, content: t("request_failed"), error: message, isOpencodeRunning: false }
             : item,
         ),
       );
@@ -722,7 +699,7 @@ export default function HomePage() {
       setLlmConfig(saved);
       setModelOpen(false);
     } catch {
-      setError("切换模型配置失败。");
+      setError(t("switch_config_failed"));
     }
   }
 
@@ -763,34 +740,34 @@ export default function HomePage() {
       <aside className="chat-sidebar">
         <div className="model-picker">
           <button type="button" className="model-button" onClick={() => setModelOpen((v) => !v)}>
-            QuakeCore ▾
+            {t("quakecore_dropdown")}
           </button>
           {modelOpen ? (
             <div className="model-menu">
-              <p className="model-menu-title">模型 / 后端</p>
+              <p className="model-menu-title">{t("model_backend")}</p>
               <button type="button" className="model-option" onClick={() => void switchProvider("deepseek")}>
-                {llmConfig?.provider === "deepseek" ? "●" : "○"} DeepSeek API
+                {llmConfig?.provider === "deepseek" ? "●" : "○"} {t("deepseek_api")}
                 <span>model: {llmConfig?.provider === "deepseek" ? llmConfig.model_name : "-"}</span>
               </button>
               <button type="button" className="model-option" onClick={() => void switchProvider("ollama")}>
-                {llmConfig?.provider === "ollama" ? "●" : "○"} Ollama 本地
+                {llmConfig?.provider === "ollama" ? "●" : "○"} {t("ollama_local")}
                 <span>model: {llmConfig?.provider === "ollama" ? llmConfig.model_name : "-"}</span>
               </button>
               <Link href="/settings" className="model-settings-link">
-                打开 Settings
+                {t("open_settings")}
               </Link>
             </div>
           ) : null}
         </div>
 
         <button type="button" className="new-chat-btn" onClick={handleNewChat}>
-          + New Chat
+          {t("new_chat")}
         </button>
 
         <div className="session-list">
-          <p>最近会话</p>
+          <p>{t("recent_sessions")}</p>
           <button type="button" className="session-item active">
-            当前会话
+            {t("current_session")}
           </button>
           {threads.map((thread) => (
             <button
@@ -809,9 +786,10 @@ export default function HomePage() {
         </div>
 
         <div className="sidebar-bottom">
-          <Link href="/skills">Skills</Link>
+          <Link href="/skills">{t("nav_skills")}</Link>
+          <LanguageToggle />
           <small>
-            当前后端：
+            {t("current_backend")}
             {llmConfig?.provider === "ollama" ? "Ollama" : "DeepSeek v4"}
           </small>
         </div>
@@ -823,8 +801,8 @@ export default function HomePage() {
           <div className="messages-inner">
             {messages.length === 0 ? (
               <div className="chat-empty-state">
-                <h2>今天要分析什么地震数据？</h2>
-                <p>上传 MiniSEED、SAC、SEGY、HDF5，或直接提问。</p>
+                <h2>{t("empty_title")}</h2>
+                <p>{t("empty_subtitle")}</p>
               </div>
             ) : (
               messages.map((message) => (
@@ -856,7 +834,7 @@ export default function HomePage() {
                   ) : message.pending ? (
                     message.route === "continuous_monitoring" && message.progress ? (
                       <div className="assistant-message progress-card">
-                        <div>连续地震监测进行中</div>
+                        <div>{t("monitoring_in_progress")}</div>
                         <div className="progress-bar">
                           <div style={{ width: `${Math.max(0, Math.min(100, message.progress.percent))}%` }} />
                         </div>
@@ -873,7 +851,7 @@ export default function HomePage() {
                               <i />
                             </span>
                           </span>
-                          {message.isOpencodeRunning ? <span className="qc-live-badge">QuakeCore 正在分析...</span> : null}
+                          {message.isOpencodeRunning ? <span className="qc-live-badge">{t("analyzing_badge")}</span> : null}
                         </div>
                         {message.liveSteps?.length ? (
                           <div className="qc-live-stack" aria-live="polite">
@@ -883,7 +861,7 @@ export default function HomePage() {
                                   <>
                                     <div className="qc-live-card-title">{step.summary}</div>
                                     {step.detail ? <div className="qc-live-card-detail">{step.detail}</div> : null}
-                                    <div className="qc-live-card-footer">{step.status === "running" ? "正在处理" : "已完成"}</div>
+                                    <div className="qc-live-card-footer">{step.status === "running" ? t("processing") : t("completed")}</div>
                                   </>
                                 ) : null}
                               </div>
@@ -957,8 +935,8 @@ export default function HomePage() {
                   <div key={file.id} className="attachment-chip">
                     <span className="attachment-chip-name">{file.name}</span>
                     {file.fileKind ? <span className="attachment-chip-kind">{file.fileKind}</span> : null}
-                    {file.status === "uploading" ? <span className="attachment-chip-status">上传中…</span> : null}
-                    {file.status === "failed" ? <span className="attachment-chip-status failed">失败</span> : null}
+                    {file.status === "uploading" ? <span className="attachment-chip-status">{t("uploading_status")}</span> : null}
+                    {file.status === "failed" ? <span className="attachment-chip-status failed">{t("failed_status")}</span> : null}
                     <button
                       type="button"
                       className="attachment-chip-remove"
@@ -978,8 +956,8 @@ export default function HomePage() {
                 type="button"
                 className="upload-btn"
                 onClick={() => fileInputRef.current?.click()}
-                aria-label="上传附件"
-                title="上传附件"
+                aria-label={t("upload_attachments")}
+                title={t("upload_attachments")}
                 disabled={uploading}
               >
                 +
@@ -987,7 +965,7 @@ export default function HomePage() {
               <textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="Message QuakeCore"
+                placeholder={t("message_placeholder")}
                 rows={1}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -1004,7 +982,7 @@ export default function HomePage() {
           {error ? <div className="composer-error">{error}</div> : null}
         </div>
       </section>
-      {dragging ? <div className="drop-overlay">释放以上传地震数据文件</div> : null}
+      {dragging ? <div className="drop-overlay">{t("drop_overlay")}</div> : null}
     </main>
   );
 }

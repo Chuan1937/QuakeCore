@@ -11,7 +11,13 @@ QuakeCore is an AI-based seismic data processing agent framework. It allows user
 
 ## Quick Start
 
-### 1. Installation
+### 1. Prerequisites
+
+- **Conda** — for managing the Python environment ([Miniforge](https://github.com/conda-forge/miniforge) recommended, or [Miniconda](https://docs.anaconda.com/miniconda/) / [Anaconda](https://www.anaconda.com/download))
+- **Node.js & npm** — for running the frontend ([Download](https://nodejs.org/))
+
+### 2. Installation
+
 ```bash
 git clone https://github.com/Chuan1937/QuakeCore.git
 cd QuakeCore
@@ -158,11 +164,15 @@ Current local CORS defaults allow:
    - Drag-and-drop to the chat page
    - Paste file(s) from clipboard
 5. After upload, trigger capabilities with natural language directly:
+   - *"please do phase picking"*
    - *"请分析当前文件结构"*
    - *"对当前波形做初至拾取"*
    - *"使用当前数据进行地震定位"*
    - *"帮我做连续地震监测"*
    - *"对加州2019年7月4日的17到18点进行地震监测"*
+
+![Phase picking result](deploy/phase_pick.png)
+*Example: Phase picking results displayed in the chat interface.*
 
 ## Natural Language Parameter Resolution
 

@@ -64,6 +64,11 @@ class RouterService:
             "对比",
             "筛选",
             "导出",
+            "analyze",
+            "analysis",
+            "analyse",
+            "review",
+            "all pickups",
         ),
         "earthquake_location": (
             "定位",
@@ -166,8 +171,8 @@ class RouterService:
             return "earthquake_location"
         if any(keyword in text for keyword in ("定位结果", "location result", "result of location", "解释结果", "解读结果", "监测结果")):
             return "result_explanation"
-        analysis_actions = ("看看", "查看", "分析", "解读", "拾取情况", "拾取结果", "这个结果")
-        analysis_subject_tokens = ("拾取", "pick", "phase", "震相", "结果", "文件", "图")
+        analysis_actions = ("看看", "查看", "分析", "解读", "拾取情况", "拾取结果", "这个结果", "analyze", "analysis", "analyse", "review", "examine", "check")
+        analysis_subject_tokens = ("拾取", "pick", "phase", "震相", "结果", "文件", "图", "file")
         if any(k in text for k in analysis_actions) and any(k in text for k in analysis_subject_tokens):
             return "result_analysis"
         if any(k in text for k in ("初至拾取", "开始拾取", "进行拾取", "重新拾取", "重新计算拾取", "rerun pick", "run picking")):
