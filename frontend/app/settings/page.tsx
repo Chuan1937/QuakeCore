@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useLanguage } from "@/lib/i18n";
+import { LanguageToggle } from "@/components/language-toggle";
 import {
   getConfigDefaults,
   getLlmConfig,
@@ -33,6 +35,7 @@ const OLLAMA_DEFAULTS: ModelConfig = {
 };
 
 export default function SettingsPage() {
+  const { t } = useLanguage();
   const router = useRouter();
   const [config, setConfig] = useState<ModelConfig>(DEEPSEEK_DEFAULTS);
   const [defaults, setDefaults] = useState<ConfigDefaults | null>(null);
@@ -73,7 +76,7 @@ export default function SettingsPage() {
         }
       } catch (error) {
         if (!mounted) return;
-        setMessage(error instanceof Error ? error.message : "加载设置失败。");
+        setMessage(error instanceof Error ? error.message : t("load_settings_failed"));
       }
     }
 
@@ -92,7 +95,7 @@ export default function SettingsPage() {
 
   async function detectOllamaModels() {
     setDetecting(true);
-    setOllamaMessage("正在检测本地 Ollama 模型...");
+    setOllamaMessage(t("detecting_ollama"));
 
     try {
       const data = await getOllamaModels(config.baseUrl);
@@ -104,7 +107,7 @@ export default function SettingsPage() {
       }
     } catch {
       setOllamaModels([]);
-      setOllamaMessage("检测 Ollama 失败，请确认后端服务正常");
+      setOllamaMessage(t("detect_failed"));
     } finally {
       setDetecting(false);
     }
@@ -124,7 +127,7 @@ export default function SettingsPage() {
       });
       router.push("/");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败。");
+      setMessage(error instanceof Error ? error.message : t("save_failed"));
     } finally {
       setLoading(false);
     }
@@ -138,19 +141,22 @@ export default function SettingsPage() {
             type="button"
             className="settings-back"
             onClick={() => router.push("/")}
-            aria-label="返回聊天"
+            aria-label={t("back_to_chat")}
           >
             ←
           </button>
           <div>
-            <h1>模型设置</h1>
-            <p>选择 DeepSeek API 或本地 Ollama。</p>
+            <h1>{t("model_settings")}</h1>
+            <p>{t("settings_subtitle")}</p>
+          </div>
+          <div style={{ marginLeft: "auto" }}>
+            <LanguageToggle />
           </div>
         </div>
 
         <form className="settings-form" onSubmit={handleSubmit}>
           <label>
-            <span>后端</span>
+            <span>{t("backend_label")}</span>
             <select
               value={config.backend}
               onChange={(event) =>
@@ -159,7 +165,7 @@ export default function SettingsPage() {
             >
               {(defaults?.providers ?? ["deepseek", "ollama"]).map((p) => (
                 <option key={p} value={p}>
-                  {p === "deepseek" ? "DeepSeek API" : "Ollama 本地"}
+                  {p === "deepseek" ? t("deepseek_api") : t("ollama_local")}
                 </option>
               ))}
             </select>
@@ -168,7 +174,7 @@ export default function SettingsPage() {
           {config.backend === "deepseek" && (
             <>
               <label>
-                <span>模型</span>
+                <span>{t("model_label")}</span>
                 <input
                   value={config.model}
                   onChange={(event) =>
@@ -179,19 +185,19 @@ export default function SettingsPage() {
               </label>
 
               <label>
-                <span>API Key</span>
+                <span>{t("api_key_label")}</span>
                 <input
                   type="password"
                   value={config.apiKey}
                   onChange={(event) =>
                     setConfig((current) => ({ ...current, apiKey: event.target.value }))
                   }
-                  placeholder="可留空，默认读取 DEEPSEEK_API_KEY"
+                  placeholder={t("api_key_placeholder")}
                 />
               </label>
 
               <label>
-                <span>Base URL</span>
+                <span>{t("base_url_label")}</span>
                 <input
                   value={config.baseUrl}
                   onChange={(event) =>
@@ -206,7 +212,7 @@ export default function SettingsPage() {
           {config.backend === "ollama" && (
             <>
               <label>
-                <span>Ollama 地址</span>
+                <span>{t("ollama_url")}</span>
                 <input
                   value={config.baseUrl}
                   onChange={(event) =>
@@ -222,11 +228,11 @@ export default function SettingsPage() {
                 onClick={detectOllamaModels}
                 disabled={detecting}
               >
-                {detecting ? "检测中..." : "检测本地模型"}
+                {detecting ? t("detecting") : t("detect_local_models")}
               </button>
 
               <label>
-                <span>本地模型</span>
+                <span>{t("local_model")}</span>
                 {ollamaModels.length > 0 ? (
                   <select
                     value={config.model}
@@ -242,7 +248,7 @@ export default function SettingsPage() {
                   </select>
                 ) : (
                   <p className="settings-ollama-empty">
-                    {ollamaMessage || "未检测到 Ollama 模型"}
+                    {ollamaMessage || t("no_models")}
                   </p>
                 )}
               </label>
@@ -252,7 +258,7 @@ export default function SettingsPage() {
           {message ? <p className="settings-message">{message}</p> : null}
 
           <button type="submit" className="settings-submit" disabled={loading}>
-            {loading ? "保存中..." : "保存并返回"}
+            {loading ? t("saving") : t("save_and_return")}
           </button>
         </form>
       </section>

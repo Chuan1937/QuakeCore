@@ -2,6 +2,8 @@
 
 QuakeCore is an AI-based seismic data processing agent framework. It allows users to upload various seismic data formats (MiniSEED, SAC, SEG-Y, HDF5) and interact with an AI via natural language to analyze file structures, get statistics, and perform phase picking.
 
+![Main Page](deploy/main_page.png)
+
 ## Features
 - **Multi-Format Support**: Reads SEGY, MiniSEED, SAC, HDF5, NumPy arrays.
 - **Smart Phase Picking**: Built-in STA/LTA, AIC, and other traditional picking algorithms.
@@ -11,7 +13,13 @@ QuakeCore is an AI-based seismic data processing agent framework. It allows user
 
 ## Quick Start
 
-### 1. Installation
+### 1. Prerequisites
+
+- **Conda** — for managing the Python environment ([Miniforge](https://github.com/conda-forge/miniforge) recommended, or [Miniconda](https://docs.anaconda.com/miniconda/) / [Anaconda](https://www.anaconda.com/download))
+- **Node.js & npm** — for running the frontend ([Download](https://nodejs.org/))
+
+### 2. Installation
+
 ```bash
 git clone https://github.com/Chuan1937/QuakeCore.git
 cd QuakeCore
@@ -104,46 +112,6 @@ After starting backend and frontend, open the settings page in the web UI and sa
   - Base URL: usually `http://localhost:11434`
   - Model: detected from the local Ollama server
 
-### Backend Config Persistence
-
-Backend LLM settings are persisted to:
-
-- `data/config/llm_config.json`
-
-If that file does not exist, backend defaults are used. For DeepSeek, when `api_key` is empty in config, the backend falls back to:
-
-- `DEEPSEEK_API_KEY`
-
-Example config file:
-
-```json
-{
-  "provider": "deepseek",
-  "model_name": "deepseek-v4-flash",
-  "api_key": null,
-  "base_url": "https://api.deepseek.com"
-}
-```
-
-You can also read or update config through the backend API:
-
-- `GET /api/config/defaults`
-- `GET /api/config/llm`
-- `POST /api/config/llm`
-
-## Startup Notes
-
-Recommended startup order:
-
-1. Start the backend on `127.0.0.1:8000`.
-2. Start the frontend on `localhost:3000`.
-3. Open the frontend settings page and confirm the LLM provider.
-4. Upload data and use chat or workflow routes.
-
-Current local CORS defaults allow:
-
-- `http://localhost:3000`
-- `http://127.0.0.1:3000`
 
 ## Usage
 1. Configure your LLM settings in the sidebar.
@@ -158,107 +126,13 @@ Current local CORS defaults allow:
    - Drag-and-drop to the chat page
    - Paste file(s) from clipboard
 5. After upload, trigger capabilities with natural language directly:
+   - *"please do phase picking"*
    - *"请分析当前文件结构"*
    - *"对当前波形做初至拾取"*
    - *"使用当前数据进行地震定位"*
    - *"帮我做连续地震监测"*
    - *"对加州2019年7月4日的17到18点进行地震监测"*
 
-## Natural Language Parameter Resolution
+![Phase picking result](deploy/phase_pick.png)
+*Example: Phase picking results displayed in the chat interface.*
 
-QuakeCore now applies a shared parameter-understanding layer before deterministic tools are executed.
-
-- `RouterService` identifies the intent route, such as `phase_picking`, `earthquake_location`, or `continuous_monitoring`.
-- `ToolPlanner` converts natural language into structured tool parameters before tool execution.
-- Deterministic routes no longer rely only on raw tool kwargs; they can use LLM planning plus rule-based fallback.
-- Continuous monitoring requests support natural-language time windows and region names such as:
-  - *"对加州2019年7月4日的17到18点进行地震监测"*
-  - *"2019年7月4日的17到18点进行地震监测"*
-  - *"对南加州最近 10 小时做连续监测"*
-
-Typical `continuous_monitoring` planning output looks like:
-
-```json
-{
-  "route": "continuous_monitoring",
-  "tool": "run_continuous_monitoring",
-  "params": {
-    "region": "加州",
-    "start": "2019-07-04T17:00:00",
-    "end": "2019-07-04T18:00:00"
-  },
-  "need_rerun": true,
-  "confidence": 0.9
-}
-```
-
-This same parameter resolution is now used by both:
-
-- `/api/chat`
-- `/api/workflows/continuous/start`
-
-## Validation
-
-Backend:
-```bash
-conda run -n quakecore python -m pytest tests/test_backend_health.py tests/test_backend_files.py tests/test_backend_chat_schema.py tests/test_backend_artifacts_route.py tests/test_backend_config.py tests/test_backend_skills.py -q
-conda run -n quakecore python -m pytest tests/test_router_service.py -q
-conda run -n quakecore python -m pytest tests/test_tool_planner.py tests/test_session_file_context.py tests/test_location_workflow_route.py -q
-conda run -n quakecore python -m pytest tests -q
-```
-
-Frontend:
-```bash
-cd frontend
-npm run build
-```
-
-Smoke scripts (in-process mode, no local socket dependency):
-```bash
-PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_backend.py
-PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload.py
-PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_chat.py
-PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_upload_then_chat.py
-PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_location_workflow.py
-PYTHONPATH=. QUAKECORE_SMOKE_INPROCESS=1 conda run -n quakecore python scripts/smoke_full_web_agent.py
-```
-
-Live DeepSeek v4 Flash smoke:
-```bash
-export DEEPSEEK_API_KEY=your_key
-uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
-python scripts/smoke_deepseek_v4_flash.py
-```
-
-Pre-merge consolidated checks:
-```bash
-pytest tests -q
-python scripts/smoke_backend.py
-python scripts/smoke_upload.py
-python scripts/smoke_location_workflow.py
-python scripts/smoke_full_web_agent.py
-python scripts/smoke_deepseek_v4_flash.py
-cd frontend && npm run build
-```
-
-Optional live pytest:
-```bash
-pytest tests/test_deepseek_live.py -q
-```
-
-## Security Notes
-
-- Artifact download route enforces path containment under `data/` and blocks path traversal.
-- Upload endpoint accepts unknown extensions as `unknown`; unknown files are not bound to agent current-file state.
-- Chat artifact metadata includes `type`, `name`, `path`, and `url` for explicit frontend rendering.
-- Do not commit real API keys or `.env` files to the repository.
-
-## Current Limitations
-
-- The project still keeps compatibility with legacy `agent.tools` behaviors.
-- Deterministic fast paths now cover `earthquake_location` and `continuous_monitoring`, but many other routes still depend on Agent + tool orchestration.
-- Natural-language parameter resolution for deterministic tools is improving, but highly ambiguous prompts may still need clarification or explicit parameters.
-- LangGraph is disabled by default (`QUAKECORE_USE_LANGGRAPH=0`).
-- RAG and Python Runner are not enabled by default.
-
-No Docker is used in this repository.

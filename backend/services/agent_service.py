@@ -297,6 +297,7 @@ class AgentService:
         message: str,
         session_id: str,
         route: str,
+        lang: str,
     ) -> ChatResult | None:
         if not self._is_trace_pick_request(message, route):
             return None
@@ -320,7 +321,7 @@ class AgentService:
                 route=route,
                 normalized=normalized,
                 artifacts=artifacts,
-                lang="zh",
+                lang=lang,
             ),
             error=normalized.error,
             route=route,
@@ -361,10 +362,16 @@ class AgentService:
         return any(token in text for token in ("plot", "draw", "图", "绘", "画"))
 
     @staticmethod
-    def _missing_continuous_time_result(session_id: str, route: str) -> ChatResult:
+    def _missing_continuous_time_result(session_id: str, route: str, lang: str = "zh") -> ChatResult:
+        is_zh = str(lang or "").startswith("zh")
+        answer = (
+            "Missing monitoring time range. Please specify e.g. 2019-07-04T17:00:00 to 2019-07-04T18:00:00."
+            if not is_zh
+            else "缺少监测时间范围。请指定例如 2019-07-04T17:00:00 到 2019-07-04T18:00:00。"
+        )
         return ChatResult(
             session_id=session_id,
-            answer="缺少监测时间范围。请指定例如 2019-07-04T17:00:00 到 2019-07-04T18:00:00。",
+            answer=answer,
             error="start/end or date+hours are required.",
             route=route,
             artifacts=[],
@@ -444,19 +451,35 @@ class AgentService:
             {"type": item.type, "name": item.name, "path": item.path}
             for item in artifacts
         ]
-        prompt = (
-            "你是 QuakeCore 的结果总结器。你不能调用工具，只能根据给定工具结果生成简洁中文回答。\n"
-            "要求：\n"
-            "1. 不要编造结果。\n"
-            "2. 不要重复长路径。\n"
-            "3. 不要把图片 markdown 写进正文，因为前端会单独显示 artifact。\n"
-            "4. 如果有 CSV/PNG/HDF5 等 artifact，只在文字里简要说明结果文件已生成。\n"
-            "5. 回答适合聊天窗口展示，优先总结关键结论。\n\n"
-            f"用户问题：{message}\n"
-            f"路由：{route}\n"
-            f"工具原始结果：\n{raw_text}\n\n"
-            f"artifacts：{json.dumps(artifact_brief, ensure_ascii=False)}\n"
-        )
+        if lang and str(lang).startswith("zh"):
+            prompt = (
+                "你是 QuakeCore 的结果总结器。你不能调用工具，只能根据给定工具结果生成简洁中文回答。\n"
+                "要求：\n"
+                "1. 不要编造结果。\n"
+                "2. 不要重复长路径。\n"
+                "3. 不要把图片 markdown 写进正文，因为前端会单独显示 artifact。\n"
+                "4. 如果有 CSV/PNG/HDF5 等 artifact，只在文字里简要说明结果文件已生成。\n"
+                "5. 回答适合聊天窗口展示，优先总结关键结论。\n\n"
+                f"用户问题：{message}\n"
+                f"路由：{route}\n"
+                f"工具原始结果：\n{raw_text}\n\n"
+                f"artifacts：{json.dumps(artifact_brief, ensure_ascii=False)}\n"
+            )
+        else:
+            prompt = (
+                "You are QuakeCore's result summarizer. You cannot call tools. "
+                "Generate a concise English answer based on the given tool results.\n"
+                "Requirements:\n"
+                "1. Do not fabricate results.\n"
+                "2. Do not repeat long paths.\n"
+                "3. Do not include image markdown in the text; artifacts are shown separately by the frontend.\n"
+                "4. If there are CSV/PNG/HDF5 artifacts, briefly note that result files have been generated.\n"
+                "5. The answer should be suitable for chat display; prioritize key conclusions.\n\n"
+                f"User question: {message}\n"
+                f"Route: {route}\n"
+                f"Tool raw result:\n{raw_text}\n\n"
+                f"artifacts: {json.dumps(artifact_brief, ensure_ascii=False)}\n"
+            )
         try:
             from agent.core import _build_llm
 
@@ -479,7 +502,10 @@ class AgentService:
         text = str(message or "").lower()
         return any(
             token in text
-            for token in ("并画", "同时画", "顺便画", "统计", "分布", "对比", "筛选", "解释", "展示", "图像", "做个图")
+            for token in (
+                "并画", "同时画", "顺便画", "统计", "分布", "对比", "筛选", "解释", "展示", "图像", "做个图",
+                "analyze", "analysis", "analyse", "review", "examine", "all pickups",
+            )
         )
 
     def _try_blackbox_postprocess(
@@ -655,6 +681,7 @@ class AgentService:
         message: str,
         session_id: str,
         route: str,
+        lang: str,
     ) -> ChatResult | None:
         tool_obj = None
         payload: Any | None = None
@@ -692,10 +719,10 @@ class AgentService:
                 runtime_results=self._sessions.get_runtime_results(session_id),
                 uploaded_files=self._sessions.get_uploaded_files(session_id),
                 current_file=self._sessions.get_current_file(session_id),
-                lang="zh",
+                lang=lang,
             )
             if not (plan.params.get("start") and plan.params.get("end")):
-                return self._missing_continuous_time_result(session_id, route)
+                return self._missing_continuous_time_result(session_id, route, lang=lang)
             tool_obj = run_continuous_monitoring
             payload = {"params": plan.params}
         else:
@@ -714,7 +741,7 @@ class AgentService:
         post = self._try_blackbox_postprocess(
             message=message,
             session_id=session_id,
-            lang="zh",
+            lang=lang,
             route=route,
         )
         if post is not None:
@@ -735,7 +762,7 @@ class AgentService:
                 route=route,
                 normalized=normalized,
                 artifacts=artifacts,
-                lang="zh",
+                lang=lang,
             ),
             error=normalized.error,
             route=route,
@@ -1071,7 +1098,7 @@ class AgentService:
                 "locate_place_data_nearseismic": locate_place_data_nearseismic,
             }
             if tool == "run_continuous_monitoring" and not (params.get("start") and params.get("end")):
-                return self._missing_continuous_time_result(session_id, route)
+                return self._missing_continuous_time_result(session_id, route, lang=lang)
             tool_obj = mapping[tool]
             payload = {"params": params}
         elif tool in {
@@ -1131,7 +1158,7 @@ class AgentService:
             post = self._try_blackbox_postprocess(
                 message=message,
                 session_id=session_id,
-                lang="zh",
+                lang=lang,
                 route=route,
             )
             if post is not None:
@@ -1197,7 +1224,11 @@ class AgentService:
             plan = None
             pass
 
-        yield {"type": "status", "message": f"QuakeCore 路由中 (route={route})..."}
+        is_zh = str(final_lang or "").startswith("zh")
+        yield {
+            "type": "status",
+            "message": f"QuakeCore routing (route={route})..." if not is_zh else f"QuakeCore 路由中 (route={route})...",
+        }
 
         # Routes that benefit from streaming OpenCode post-processing
         if route in ("result_analysis", "result_explanation"):
@@ -1237,7 +1268,7 @@ class AgentService:
             return
 
         if plan is not None and self._should_stream_blackbox_postprocess(message=message, route=plan.route):
-            yield {"type": "status", "message": "QuakeCore 处理中..."}
+            yield {"type": "status", "message": "QuakeCore processing..." if not is_zh else "QuakeCore 处理中..."}
             try:
                 planned_result = self._try_execute_tool_plan(
                     plan=plan,
@@ -1287,7 +1318,7 @@ class AgentService:
                 return
 
         if route == "earthquake_location" and self._should_stream_blackbox_postprocess(message=message, route=route):
-            yield {"type": "status", "message": "QuakeCore 处理中..."}
+            yield {"type": "status", "message": "QuakeCore processing..." if not is_zh else "QuakeCore 处理中..."}
             try:
                 workflow_result = run_location_workflow(final_session_id)
                 self._persist_workflow_runtime(final_session_id, workflow_result)
@@ -1327,7 +1358,7 @@ class AgentService:
         # All other routes: use non-streaming chat() which has fast paths for
         # phase_picking, file_structure, waveform_reading, map_plotting,
         # earthquake_location, format_conversion, seismo_qa, settings, general_chat
-        yield {"type": "status", "message": "QuakeCore 处理中..."}
+        yield {"type": "status", "message": "QuakeCore processing..." if not is_zh else "QuakeCore 处理中..."}
 
         try:
             result = self.chat(
@@ -1400,6 +1431,7 @@ class AgentService:
                 message=message,
                 session_id=final_session_id,
                 route=route,
+                lang=final_lang,
             )
             if fast_path_result is not None:
                 return fast_path_result
@@ -1407,6 +1439,7 @@ class AgentService:
                 message=message,
                 session_id=final_session_id,
                 route=route,
+                lang=final_lang,
             )
             if deterministic_result is not None:
                 return deterministic_result

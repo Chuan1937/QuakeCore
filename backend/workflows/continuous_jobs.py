@@ -32,7 +32,7 @@ def create_continuous_job(job_id: str, *, session_id: str | None = None, message
             "session_id": session_id,
             "message": message,
             "status": "running",
-            "step": "任务准备中",
+            "step": "Preparing task",
             "percent": _STAGE_BASE_PERCENT["queued"],
             "logs": [],
             "result": None,
@@ -49,7 +49,7 @@ def update_continuous_job_progress(job_id: str, item: dict[str, Any]) -> None:
             return
 
         stage = str(item.get("stage") or "download")
-        message = str(item.get("message") or "").strip() or job.get("step", "处理中")
+        message = str(item.get("message") or "").strip() or job.get("step", "Processing")
         downloaded = item.get("downloaded")
         total = item.get("total")
         base = _STAGE_BASE_PERCENT.get(stage, 10)
@@ -92,12 +92,12 @@ def finish_continuous_job(job_id: str, result: dict[str, Any], *, failed: bool =
         if failed:
             job["status"] = "failed"
             job["error"] = str(result.get("error") or result.get("message") or "Workflow failed")
-            job["step"] = "执行失败"
+            job["step"] = "Failed"
             job["percent"] = float(job.get("percent", 0.0))
         else:
             job["status"] = "completed"
             job["error"] = None
-            job["step"] = "执行完成"
+            job["step"] = "Completed"
             job["percent"] = 100.0
 
 
@@ -108,7 +108,7 @@ def fail_continuous_job(job_id: str, error: str) -> None:
             return
         job["status"] = "failed"
         job["error"] = error
-        job["step"] = "执行失败"
+        job["step"] = "Failed"
         job["updated_at"] = _utc_now_iso()
 
 

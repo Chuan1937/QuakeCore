@@ -9,8 +9,6 @@ data/
 .DS_Store
 Thumbs.db
 /NonLinLoc
-
-/deploy/
 /Validation/Waveforms-teleseismic
 /Validation/Waveforms-near-seismic
 /Validation/near-seismic-catalog

@@ -1,5 +1,8 @@
+"use client";
+
 import type { ReactNode } from "react";
 import { toBackendUrl } from "@/lib/api";
+import { useLanguage } from "@/lib/i18n";
 
 type MarkdownViewProps = {
   content: string;
@@ -103,6 +106,7 @@ function parseTable(lines: string[], start: number): { end: number; node: ReactN
 }
 
 export function MarkdownView({ content }: MarkdownViewProps) {
+  const { t } = useLanguage();
   const lines = content.split(/\r?\n/);
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -188,7 +192,7 @@ export function MarkdownView({ content }: MarkdownViewProps) {
   }
 
   if (!blocks.length) {
-    return <p className="markdown-empty">No content.</p>;
+    return <p className="markdown-empty">{t("no_content")}</p>;
   }
 
   return <div className="markdown-body">{blocks}</div>;

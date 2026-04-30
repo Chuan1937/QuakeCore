@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import { Nav } from "@/components/nav";
 import { MarkdownView } from "@/components/markdown-view";
 import { getSkill, listSkills, type SkillDetail, type SkillSummary } from "@/lib/api";
+import { useLanguage } from "@/lib/i18n";
 
 export default function SkillsPage() {
+  const { t } = useLanguage();
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [activeSkill, setActiveSkill] = useState<string>("");
   const [detail, setDetail] = useState<SkillDetail | null>(null);
-  const [message, setMessage] = useState<string>("Loading...");
+  const [message, setMessage] = useState<string>(t("loading"));
 
   useEffect(() => {
     let mounted = true;
@@ -30,13 +32,13 @@ export default function SkillsPage() {
             setMessage("Loaded");
           }
         } else {
-          setMessage("No skills found");
+          setMessage(t("no_skills"));
         }
       } catch (error) {
         if (!mounted) {
           return;
         }
-        setMessage(error instanceof Error ? error.message : "Failed to load skills.");
+        setMessage(error instanceof Error ? error.message : t("load_skills_failed"));
       }
     }
 
@@ -45,17 +47,17 @@ export default function SkillsPage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [t]);
 
   async function selectSkill(name: string) {
     setActiveSkill(name);
-    setMessage("Loading skill...");
+    setMessage(t("loading_skill"));
     try {
       const next = await getSkill(name);
       setDetail(next);
       setMessage("Loaded");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to load skill.");
+      setMessage(error instanceof Error ? error.message : t("load_skill_failed"));
     }
   }
 
@@ -64,23 +66,22 @@ export default function SkillsPage() {
       <Nav />
       <section className="hero compact">
         <div className="hero-copy">
-          <p className="eyebrow">Skills</p>
-          <h1>Markdown skill library</h1>
+          <p className="eyebrow">{t("skills_title")}</p>
+          <h1>{t("skills_subtitle")}</h1>
           <p className="lede">
-            Browse the markdown skill files served by the backend and inspect
-            the content used by the assistant.
+            {t("skills_description")}
           </p>
         </div>
         <div className="status-card">
-          <span>Status</span>
+          <span>{t("status_label")}</span>
           <strong>{message}</strong>
-          <span>{skills.length} skill(s) available</span>
+          <span>{skills.length} {t("skills_available")}</span>
         </div>
       </section>
 
       <section className="skills-layout">
         <aside className="panel skills-list-panel">
-          <h2>Available skills</h2>
+          <h2>{t("available_skills")}</h2>
           <div className="skills-list">
             {skills.map((skill) => (
               <button
@@ -101,7 +102,7 @@ export default function SkillsPage() {
             <>
               <div className="skill-detail-header">
                 <div>
-                  <p className="eyebrow">Markdown</p>
+                  <p className="eyebrow">{t("markdown_label")}</p>
                   <h2>{detail.name}</h2>
                 </div>
                 <code>{detail.path}</code>
@@ -110,8 +111,8 @@ export default function SkillsPage() {
             </>
           ) : (
             <div className="empty-state">
-              <h2>No skill selected</h2>
-              <p>Select a skill on the left to view its markdown content.</p>
+              <h2>{t("no_skill_selected")}</h2>
+              <p>{t("select_skill_hint")}</p>
             </div>
           )}
         </section>
@@ -119,4 +120,3 @@ export default function SkillsPage() {
     </main>
   );
 }
-
