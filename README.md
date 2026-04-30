@@ -110,46 +110,6 @@ After starting backend and frontend, open the settings page in the web UI and sa
   - Base URL: usually `http://localhost:11434`
   - Model: detected from the local Ollama server
 
-### Backend Config Persistence
-
-Backend LLM settings are persisted to:
-
-- `data/config/llm_config.json`
-
-If that file does not exist, backend defaults are used. For DeepSeek, when `api_key` is empty in config, the backend falls back to:
-
-- `DEEPSEEK_API_KEY`
-
-Example config file:
-
-```json
-{
-  "provider": "deepseek",
-  "model_name": "deepseek-v4-flash",
-  "api_key": null,
-  "base_url": "https://api.deepseek.com"
-}
-```
-
-You can also read or update config through the backend API:
-
-- `GET /api/config/defaults`
-- `GET /api/config/llm`
-- `POST /api/config/llm`
-
-## Startup Notes
-
-Recommended startup order:
-
-1. Start the backend on `127.0.0.1:8000`.
-2. Start the frontend on `localhost:3000`.
-3. Open the frontend settings page and confirm the LLM provider.
-4. Upload data and use chat or workflow routes.
-
-Current local CORS defaults allow:
-
-- `http://localhost:3000`
-- `http://127.0.0.1:3000`
 
 ## Usage
 1. Configure your LLM settings in the sidebar.
