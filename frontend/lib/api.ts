@@ -117,11 +117,40 @@ export type SkillDetail = {
   content: string;
 };
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
+const STORAGE_KEY = "quakecore_api_base_url";
+
+function getStoredApiBaseUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function getApiBaseUrl(): string {
+  const stored = getStoredApiBaseUrl();
+  if (stored) {
+    return stored.replace(/\/$/, "");
+  }
+  return process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
+}
+
+export function setApiBaseUrl(url: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, url.replace(/\/$/, ""));
+  } catch {
+    // localStorage not available
+  }
+}
 
 export function toBackendUrl(url: string): string {
-  const base = API_BASE_URL;
+  const base = getApiBaseUrl();
   if (!url) {
     return url;
   }
@@ -135,7 +164,7 @@ export function toBackendUrl(url: string): string {
 }
 
 export async function chatWithAgent(payload: ChatRequest): Promise<ChatResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/chat`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -180,7 +209,7 @@ export type StreamEvent = {
 export async function* chatWithAgentStream(
   payload: ChatRequest,
 ): AsyncGenerator<StreamEvent> {
-  const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -252,7 +281,7 @@ export async function uploadFile(
     formData.append("session_id", sessionId);
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/files/upload`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/files/upload`, {
     method: "POST",
     body: formData,
   });
@@ -265,7 +294,7 @@ export async function uploadFile(
 }
 
 export async function getConfigDefaults(): Promise<ConfigDefaults> {
-  const response = await fetch(`${API_BASE_URL}/api/config/defaults`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/config/defaults`, {
     cache: "no-store",
   });
 
@@ -277,7 +306,7 @@ export async function getConfigDefaults(): Promise<ConfigDefaults> {
 }
 
 export async function getLlmConfig(): Promise<LlmConfig> {
-  const response = await fetch(`${API_BASE_URL}/api/config/llm`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/config/llm`, {
     cache: "no-store",
   });
 
@@ -289,7 +318,7 @@ export async function getLlmConfig(): Promise<LlmConfig> {
 }
 
 export async function saveLlmConfig(payload: LlmConfig): Promise<LlmConfig> {
-  const response = await fetch(`${API_BASE_URL}/api/config/llm`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/config/llm`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -306,7 +335,7 @@ export async function saveLlmConfig(payload: LlmConfig): Promise<LlmConfig> {
 }
 
 export async function listSkills(): Promise<{ skills: SkillSummary[] }> {
-  const response = await fetch(`${API_BASE_URL}/api/skills`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/skills`, {
     cache: "no-store",
   });
 
@@ -325,7 +354,7 @@ export type OllamaModelsResponse = {
 
 export async function getOllamaModels(baseUrl: string): Promise<OllamaModelsResponse> {
   const response = await fetch(
-    `${API_BASE_URL}/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`,
+    `${getApiBaseUrl()}/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`,
     { cache: "no-store" },
   );
 
@@ -337,7 +366,7 @@ export async function getOllamaModels(baseUrl: string): Promise<OllamaModelsResp
 }
 
 export async function getSkill(name: string): Promise<SkillDetail> {
-  const response = await fetch(`${API_BASE_URL}/api/skills/${encodeURIComponent(name)}`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/skills/${encodeURIComponent(name)}`, {
     cache: "no-store",
   });
 
@@ -355,7 +384,7 @@ export async function startContinuousWorkflow(payload: {
   lang?: "en" | "zh";
   params?: Record<string, unknown>;
 }): Promise<ContinuousJobStartResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/workflows/continuous/start`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/workflows/continuous/start`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -372,7 +401,7 @@ export async function startContinuousWorkflow(payload: {
 export async function getContinuousWorkflowProgress(
   jobId: string,
 ): Promise<ContinuousJobProgressResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/workflows/continuous/${encodeURIComponent(jobId)}/progress`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/workflows/continuous/${encodeURIComponent(jobId)}/progress`, {
     cache: "no-store",
   });
   if (!response.ok) {
@@ -385,7 +414,7 @@ export async function getContinuousWorkflowProgress(
 export async function getContinuousWorkflowResult(
   jobId: string,
 ): Promise<ContinuousJobResultResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/workflows/continuous/${encodeURIComponent(jobId)}/result`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/workflows/continuous/${encodeURIComponent(jobId)}/result`, {
     cache: "no-store",
   });
   if (!response.ok) {
