@@ -107,6 +107,15 @@ const dict: Record<string, Record<Lang, string>> = {
   required: { zh: "必需", en: "required" },
 
   no_content: { zh: "无内容。", en: "No content." },
+
+  backend_connection: { zh: "后端连接", en: "Backend Connection" },
+  backend_url_label: { zh: "后端 API 地址", en: "Backend API URL" },
+  save_backend_url: { zh: "保存后端地址", en: "Save Backend URL" },
+  backend_url_saved: { zh: "后端地址已保存，刷新页面后生效。", en: "Backend URL saved. Refresh to apply." },
+  backend_url_empty: { zh: "后端地址不能为空。", en: "Backend URL cannot be empty." },
+  backend_url_invalid: { zh: "请输入有效的 URL（如 http://127.0.0.1:8000）。", en: "Enter a valid URL (e.g. http://127.0.0.1:8000)." },
+  backend_url_hint: { zh: "如果前端无法连接后端（如出现 failed to fetch），可在此修改后端地址。默认 http://127.0.0.1:8000。", en: "If the frontend cannot reach the backend (e.g. 'failed to fetch'), update the backend URL here. Default: http://127.0.0.1:8000." },
+  failed_to_fetch_hint: { zh: "无法连接到后端服务，请确认后端已启动。可在设置页面修改后端地址。", en: "Cannot connect to the backend. Please ensure the backend is running. You can update the backend URL in Settings." },
 };
 
 type LanguageContextType = {

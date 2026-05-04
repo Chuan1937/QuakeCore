@@ -9,6 +9,8 @@ import {
   getLlmConfig,
   getOllamaModels,
   saveLlmConfig,
+  getApiBaseUrl,
+  setApiBaseUrl,
   type ConfigDefaults,
   type LlmConfig,
 } from "@/lib/api";
@@ -46,6 +48,9 @@ export default function SettingsPage() {
   const [ollamaMessage, setOllamaMessage] = useState("");
   const [detecting, setDetecting] = useState(false);
 
+  const [backendUrl, setBackendUrl] = useState("http://127.0.0.1:8000");
+  const [backendUrlMessage, setBackendUrlMessage] = useState("");
+
   useEffect(() => {
     let mounted = true;
 
@@ -74,6 +79,8 @@ export default function SettingsPage() {
             baseUrl: configData.base_url || "https://api.deepseek.com",
           });
         }
+
+        setBackendUrl(getApiBaseUrl());
       } catch (error) {
         if (!mounted) return;
         setMessage(error instanceof Error ? error.message : t("load_settings_failed"));
@@ -111,6 +118,22 @@ export default function SettingsPage() {
     } finally {
       setDetecting(false);
     }
+  }
+
+  function handleBackendUrlSave() {
+    const trimmed = backendUrl.trim();
+    if (!trimmed) {
+      setBackendUrlMessage(t("backend_url_empty"));
+      return;
+    }
+    try {
+      new URL(trimmed);
+    } catch {
+      setBackendUrlMessage(t("backend_url_invalid"));
+      return;
+    }
+    setApiBaseUrl(trimmed);
+    setBackendUrlMessage(t("backend_url_saved"));
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -261,6 +284,28 @@ export default function SettingsPage() {
             {loading ? t("saving") : t("save_and_return")}
           </button>
         </form>
+
+        <div className="settings-form" style={{ marginTop: "2rem", borderTop: "1px solid var(--border)", paddingTop: "1.5rem" }}>
+          <h2 style={{ marginBottom: "1rem", fontSize: "1.1rem" }}>{t("backend_connection")}</h2>
+          <label>
+            <span>{t("backend_url_label")}</span>
+            <input
+              value={backendUrl}
+              onChange={(event) => {
+                setBackendUrl(event.target.value);
+                setBackendUrlMessage("");
+              }}
+              placeholder="http://127.0.0.1:8000"
+            />
+          </label>
+          <button type="button" className="settings-detect-btn" onClick={handleBackendUrlSave}>
+            {t("save_backend_url")}
+          </button>
+          {backendUrlMessage ? <p className="settings-message">{backendUrlMessage}</p> : null}
+          <p className="settings-ollama-empty" style={{ marginTop: "0.5rem" }}>
+            {t("backend_url_hint")}
+          </p>
+        </div>
       </section>
     </main>
   );

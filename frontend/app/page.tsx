@@ -648,7 +648,10 @@ export default function HomePage() {
         );
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("request_failed");
+      let message = err instanceof Error ? err.message : t("request_failed");
+      if (message.toLowerCase().includes("failed to fetch")) {
+        message = t("failed_to_fetch_hint");
+      }
       setError(message);
       setMessages((current) =>
         current.map((item) =>
