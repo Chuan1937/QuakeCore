@@ -150,6 +150,12 @@ class ToolPlanner:
             )
         if route == "result_explanation":
             return ToolPlan(route=route, tool="result_explanation", params={}, need_rerun=False, confidence=0.8)
+        if route == "dsa_depth_scanning":
+            return ToolPlan(route=route, tool="run_dsa_depth_scanning", params={}, need_rerun=False, confidence=0.9)
+        if route == "telehypo_location":
+            return ToolPlan(route=route, tool="run_telehypo_location", params={}, need_rerun=False, confidence=0.85)
+        if route == "polarity_prediction":
+            return ToolPlan(route=route, tool="predict_polarity_tool", params={}, need_rerun=False, confidence=0.85)
         if route == "result_analysis":
             if ("trace" in text or "轨迹" in text or "道" in text) and ("拾取" in text or "pick" in text):
                 if any(k in text for k in ("图", "图像", "图片", "plot", "image")):
@@ -246,6 +252,12 @@ runtime_results keys：
 - catalog_mag_depth_scatter
 - catalog_event_index
 - result_explanation
+- run_dsa_depth_scanning
+- list_dsa_examples_tool
+- run_telehypo_location
+- run_telehypo_plots_tool
+- predict_polarity_tool
+- list_polarity_models_tool
 
 规则：
 1. 已有结果查看/解释不要重跑 pick/location。
@@ -258,7 +270,10 @@ runtime_results keys：
 8. “加州” => region="加州"。
 9. 如果用户只说日期和小时范围，优先输出 start/end，不要只输出 date/hours。
 10. earthquake_location 如果用户说“定位当前文件/这个文件”，优先使用当前上传文件上下文，不要要求用户重复路径。
-11. 仅输出 JSON。
+11. dsa_depth_scanning: 使用 run_dsa_depth_scanning，默认运行 Example1，不需要额外参数。
+12. telehypo_location: 使用 run_telehypo_location。
+13. polarity_prediction: 使用 predict_polarity_tool，可选 model_name。
+14. 仅输出 JSON。
 
 输出格式：
 {{

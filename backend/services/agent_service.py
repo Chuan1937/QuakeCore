@@ -35,6 +35,11 @@ from agent.tools_facade import (
     read_file_trace,
     run_continuous_monitoring,
     run_continuous_picking,
+    run_dsa_depth_scanning,
+    run_telehypo_location,
+    run_telehypo_plots_tool,
+    predict_polarity_tool,
+    list_polarity_models_tool,
 )
 from backend.services.artifact_utils import to_data_relative_path
 from backend.services.config_service import ConfigService
@@ -1133,14 +1138,20 @@ class AgentService:
                     tool_obj = pick_first_arrivals
                     payload = {"params": {"trace_number": max(1, trace_index + 1)}}
                     route = "phase_picking"
-                else:
-                    return None
-            else:
-                # Route analysis requests to LangGraphRuntime so it can do code-first,
-                # template-fallback execution consistently.
+        elif route == "dsa_depth_scanning":
+            tool_obj = run_dsa_depth_scanning
+            payload = {"params": {}}
+        elif route == "telehypo_location":
+            tool_obj = run_telehypo_location
+            payload = {"params": {}}
+        elif route == "polarity_prediction":
+            current_file = self._sessions.get_current_file(session_id)
+            uploaded = self._sessions.get_uploaded_files(session_id)
+            file_path = current_file or (uploaded[-1] if uploaded else None)
+            if not file_path:
                 return None
-        elif tool == "result_explanation" or not tool:
-            return None
+            tool_obj = predict_polarity_tool
+            payload = {"params": {"waveform_path": file_path}}
         else:
             return None
 

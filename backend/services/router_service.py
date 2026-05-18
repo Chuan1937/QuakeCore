@@ -163,10 +163,43 @@ class RouterService:
             "模型",
             "配置",
         ),
+        "dsa_depth_scanning": (
+            "dsa",
+            "depth scanning",
+            "focal depth",
+            "focal depth determination",
+            "scan depth",
+            "深度扫描",
+            "震源深度",
+            "深度扫描算法",
+        ),
+        "polarity_prediction": (
+            "polarity",
+            "first motion",
+            "first-motion",
+            "p-wave polarity",
+            "seispolarity",
+            "极性",
+            "初动",
+            "初动方向",
+        ),
+        "telehypo_location": (
+            "telehypo",
+            "teleseismic",
+            "teleseismic location",
+            "远震",
+            "远震定位",
+        ),
     }
 
     def route_intent(self, message: str) -> str:
         text = str(message or "").lower()
+        if any(keyword in text for keyword in ("远震定位", "远震", "telehypo", "teleseismic")):
+            return "telehypo_location"
+        if any(keyword in text for keyword in ("dsa", "深度扫描", "震源深度扫描", "focal depth")):
+            return "dsa_depth_scanning"
+        if any(keyword in text for keyword in ("极性", "初动", "polarity", "first motion", "seispolarity")):
+            return "polarity_prediction"
         if any(keyword in text for keyword in ("重新定位", "重新做定位", "进行定位", "定位这个文件", "重新 locate")):
             return "earthquake_location"
         if any(keyword in text for keyword in ("定位结果", "location result", "result of location", "解释结果", "解读结果", "监测结果")):

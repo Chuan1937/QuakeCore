@@ -13,3 +13,6 @@ pygmt
 seisbench
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
+# Professional tools
+numba
+seispolarity

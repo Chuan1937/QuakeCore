@@ -47,6 +47,12 @@ from agent.tools_facade import (
     locate_place_data_nearseismic,
     add_station_coordinates,
     plot_location_map,
+    run_dsa_depth_scanning,
+    list_dsa_examples_tool,
+    run_telehypo_location,
+    run_telehypo_plots_tool,
+    predict_polarity_tool,
+    list_polarity_models_tool,
 )
 
 Provider = Literal["deepseek", "ollama"]
@@ -136,6 +142,12 @@ def get_agent_executor(
         locate_place_data_nearseismic,
         add_station_coordinates,
         plot_location_map,
+        run_dsa_depth_scanning,
+        list_dsa_examples_tool,
+        run_telehypo_location,
+        run_telehypo_plots_tool,
+        predict_polarity_tool,
+        list_polarity_models_tool,
     ]
 
     safe_skill_context = (skill_context or "").replace("{", "{{").replace("}", "}}").strip()
@@ -213,6 +225,11 @@ Important rules:
 11. Test data true locations:
    - Alaska event (data/): 54.65°N, 159.67°W, depth 28 km
    - Luding event (example_data/): 29.67°N, 102.28°E, depth 10 km, M6.8
+
+**Professional Tools (专业工具)**:
+- DSA (Depth-Scanning Algorithm): Use run_dsa_depth_scanning to determine focal depth. First call list_dsa_examples_tool to see available examples.
+- TeleHypo (Teleseismic Location): Use run_telehypo_location for teleseismic hypocenter location. Use run_telehypo_plots_tool to generate result figures.
+- SeisPolarity: Use list_polarity_models_tool to see available polarity models, then predict_polarity_tool to predict P-wave first-motion polarity (Up/Down/Unknown).
 
 Language requirement:
 - Always respond in English. Do not output Chinese paragraphs.
@@ -292,6 +309,11 @@ Important rules:
 11. 测试数据真实位置：
    - 阿拉斯加事件 (data/)：54.65°N, 159.67°W，深度 28 km
    - 泸定事件 (example_data/)：29.67°N, 102.28°E，深度 10 km，M6.8
+
+**专业工具**:
+- DSA (深度扫描算法): 使用 run_dsa_depth_scanning 确定震源深度。先调用 list_dsa_examples_tool 查看可用示例。
+- TeleHypo (远震定位): 使用 run_telehypo_location 做远震定位。使用 run_telehypo_plots_tool 生成结果图。
+- SeisPolarity (极性预测): 使用 list_polarity_models_tool 查看极性模型，再用 predict_polarity_tool 预测P波初动极性（Up/Down/Unknown）。
 
 语言要求：
 - 不要输出英文段落或英文"Summary: ..."。如需总结，请使用中文"摘要：..."。

@@ -5199,3 +5199,347 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
     }
 
     return json.dumps(result_payload, indent=2, ensure_ascii=False)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Professional tools: DSA, TeleHypo, SeisPolarity
+# ═══════════════════════════════════════════════════════════════
+
+@tool
+def run_dsa_depth_scanning(params: Union[str, dict, None] = None):
+    """
+    Run the Depth-Scanning Algorithm (DSA) to determine focal depth of earthquakes.
+    Uses 3-component SAC waveforms and a velocity model to scan possible depths.
+    Use this when the user asks about 'DSA', 'depth scanning', 'focal depth determination',
+    '震源深度扫描', or '深度扫描'.
+    Args: example_name (str, default "Example1"), verbose (bool, default False).
+    Available examples: Example1-Example8.
+    Returns: focal depth (km), station results, and plot images.
+    """
+    from quakecore_tools.dsa_tools import run_dsa_example
+    parsed = _parse_param_dict(params)
+    example_name = parsed.get("example_name", "Example1")
+    verbose = parsed.get("verbose", False)
+    result = run_dsa_example(example_name=example_name, verbose=verbose)
+
+    focal_depth = result.get("focal_depth_km", "N/A")
+    prelim_depth = result.get("prelim_depth_km", "N/A")
+    num_stations = result.get("num_stations", 0)
+
+    message = (
+        f"DSA 深度扫描完成（{example_name}）。\n"
+        f"初步深度: {prelim_depth} km → 最终深度解: {focal_depth} km\n"
+        f"使用台站数: {num_stations}"
+    )
+
+    # Convert plot paths to artifacts
+    artifacts = []
+    for plot_path in result.get("plots", []):
+        rel = str(plot_path).replace("\\", "/")
+        if "/data/" in rel:
+            rel = rel.split("/data/", 1)[1]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            fname = os.path.basename(plot_path)
+            # Only include key result plots (skip debug plots to avoid clutter)
+            is_key = any(kw in fname for kw in (
+                "First2Steps", "Steps3-4", "step3_locSrc", "Final", "Prelim"
+            ))
+            artifacts.append({
+                "type": "image",
+                "name": fname,
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+                "highlight": is_key,
+            })
+
+    if result.get("error"):
+        message = f"DSA 运行出错: {result['error']}"
+        return json.dumps({"success": False, "message": message, "artifacts": []}, indent=2, ensure_ascii=False)
+
+    return json.dumps({
+        "success": True,
+        "message": message,
+        "data": {
+            "focal_depth_km": focal_depth,
+            "prelim_depth_km": prelim_depth,
+            "num_stations": num_stations,
+            "elapsed_seconds": result.get("elapsed_seconds"),
+        },
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def list_dsa_examples_tool(params: Union[str, dict, None] = None):
+    """
+    List all available DSA (Depth-Scanning Algorithm) examples with their data status.
+    Use this when the user asks 'what DSA examples are available', 'list DSA',
+    '有什么DSA示例', or '列出DSA'.
+    """
+    from quakecore_tools.dsa_tools import list_dsa_examples
+    result = list_dsa_examples()
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def run_telehypo_location(params: Union[str, dict, None] = None):
+    """
+    Run TeleHypo teleseismic hypocenter location.
+    Locates teleseismic earthquakes by automatically matching depth phases.
+    Use this when user asks about 'TeleHypo', 'teleseismic location',
+    '远震定位', or 'telehypo'.
+    Note: Data (~715MB) auto-symlinked from QuakeCore-Paper/TeleHypo.
+    Returns: event location, station count, and plot images.
+    """
+    from quakecore_tools.telehypo_tools import run_telehypo_example
+    parsed = _parse_param_dict(params)
+    catalog_dir = parsed.get("catalog_dir", None)
+    skip_steps = parsed.get("skip_steps", None)  # Let auto-detection decide
+    verbose = parsed.get("verbose", False)
+    result = run_telehypo_example(catalog_dir=catalog_dir, skip_steps=skip_steps, verbose=verbose)
+
+    if result.get("error"):
+        return json.dumps({"success": False, "message": result["error"], "artifacts": []}, indent=2, ensure_ascii=False)
+
+    depth = result.get("focal_depth_km", "N/A")
+    num_stations = result.get("num_stations_used", len(result.get("station_results", [])))
+    steps_ok = 0
+    for k, v in result.items():
+        if k == "completed":
+            steps_ok = len(v)
+        elif k == "failed":
+            steps_ok -= len(v)
+
+    message = (
+        f"TeleHypo 远震定位完成。\n"
+        f"估计震源深度: {depth} km\n"
+        f"使用台站数: {num_stations}\n"
+        f"成功步骤: {steps_ok}/6"
+    )
+
+    # Convert plots to artifacts
+    artifacts = []
+    for plot_path in result.get("plots", []):
+        rel = str(plot_path).replace("\\", "/")
+        if "/data/" in rel:
+            rel = rel.split("/data/", 1)[1]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            artifacts.append({
+                "type": "image",
+                "name": os.path.basename(plot_path),
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+            })
+
+    return json.dumps({
+        "success": True,
+        "message": message,
+        "data": {"focal_depth_km": depth, "num_stations": num_stations},
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def run_telehypo_plots_tool(params: Union[str, dict, None] = None):
+    """
+    Generate plots for an existing TeleHypo result.
+    Generates SNR plots, brightness function plots, DSA depth solution plots,
+    and solution comparison plots.
+    Use this when user asks to 'plot TeleHypo results', 'show TeleHypo figures',
+    or '绘制TeleHypo结果图'.
+    Returns: plot images.
+    """
+    from quakecore_tools.telehypo_tools import run_telehypo_plots
+    parsed = _parse_param_dict(params)
+    event_dir = parsed.get("event_dir", None)
+    verbose = parsed.get("verbose", False)
+    result = run_telehypo_plots(event_dir=event_dir, verbose=verbose)
+
+    if result.get("error"):
+        return json.dumps({"success": False, "message": result["error"], "artifacts": []}, indent=2, ensure_ascii=False)
+
+    artifacts = []
+    for plot_path in result.get("plots", []):
+        rel = str(plot_path).replace("\\", "/")
+        if "/data/" in rel:
+            rel = rel.split("/data/", 1)[1]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            artifacts.append({
+                "type": "image",
+                "name": os.path.basename(plot_path),
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+            })
+
+    return json.dumps({
+        "success": True,
+        "message": f"TeleHypo 绘图完成，共 {len(artifacts)} 张。",
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def predict_polarity_tool(params: Union[str, dict, None] = None):
+    """
+    Predict P-wave first-motion polarity using deep learning (SeisPolarity).
+    Use this when user asks about 'polarity', 'first motion', 'P波极性',
+    '初动方向', '初动极性', or 'seispolarity'.
+    Automatically uses the uploaded waveform file.
+    Args: model_name (str, default "ROSS_SCSN").
+    Available models: ROSS_SCSN, ROSS_GLOBAL, EQPOLARITY_SCSN, EQPOLARITY_GLOBAL, etc.
+    Returns: polarity (Up/Down/Unknown) with waveform plot.
+    """
+    from quakecore_tools.seispolarity_tools import predict_polarity, plot_prediction
+    parsed = _parse_param_dict(params)
+    model_name = parsed.get("model_name", "ROSS_SCSN")
+    waveform_path = parsed.get("waveform_path", None)
+    device = parsed.get("device", None)
+
+    if not waveform_path:
+        return json.dumps({
+            "success": False,
+            "message": "请先上传波形文件（SAC/miniSEED），或指定 waveform_path 参数。",
+            "artifacts": [],
+        }, indent=2, ensure_ascii=False)
+
+    from obspy import read
+    try:
+        st = read(waveform_path)
+        waveforms = st[0].data
+        sampling_rate = st[0].stats.sampling_rate
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "message": f"无法读取波形文件: {e}",
+            "artifacts": [],
+        }, indent=2, ensure_ascii=False)
+
+    # Get model input length
+    from seispolarity.inference import MODELS_CONFIG
+    model_config = MODELS_CONFIG.get(model_name, {})
+    input_len = model_config.get("input_len", 400)
+
+    # Auto-detect P-onset using deep learning (EQTransformer + PhaseNet)
+    onset_idx = len(waveforms) // 2  # fallback: center
+    used_dl = False
+    try:
+        # Try to use CURRENT_PICKS if available from prior pick_first_arrivals
+        global CURRENT_PICKS
+        if CURRENT_PICKS:
+            p_picks = [p for p in CURRENT_PICKS if (p.phase_type or '').upper() == 'P'
+                      and p.sample_index is not None]
+            if p_picks:
+                best = max(p_picks, key=lambda p: p.normalized_score or 0)
+                onset_idx = best.sample_index
+                used_dl = True
+    except Exception:
+        pass
+
+    if not used_dl:
+        # Run deep learning picking (EQTransformer + PhaseNet) via pick_phases
+        try:
+            from utils.phase_picker import pick_phases
+            from utils.miniseed_handler import MiniSEEDHandler
+            handler = MiniSEEDHandler(waveform_path)
+            dl_picks = pick_phases(source=waveform_path, file_type="miniseed", methods=None)
+            p_picks = [p for p in dl_picks if (p.phase_type or '').upper() == 'P'
+                      and p.sample_index is not None]
+            if p_picks:
+                best = max(p_picks, key=lambda p: p.normalized_score or 0)
+                onset_idx = best.sample_index
+                used_dl = True
+        except Exception:
+            pass
+
+    if not used_dl:
+        # Last fallback: kurtosis
+        try:
+            from scipy.stats import kurtosis as kurt
+            window = min(200, len(waveforms) // 4)
+            n = len(waveforms)
+            shape = (n - window + 1, window)
+            strides = (waveforms.strides[0], waveforms.strides[0])
+            rolled = np.lib.stride_tricks.as_strided(waveforms, shape=shape, strides=strides)
+            kurt_vals = np.full(n, np.nan)
+            kurt_vals[window - 1:] = kurt(rolled, axis=1, nan_policy='omit')
+            kurt_vals = np.nan_to_num(kurt_vals, nan=0.0)
+            onset_idx = int(np.argmax(np.abs(kurt_vals)))
+        except Exception:
+            pass
+
+    # Window around P-onset
+    if len(waveforms) > input_len:
+        pre_pick = min(100, input_len // 4)
+        start = max(0, onset_idx - pre_pick)
+        end = min(len(waveforms), start + input_len)
+        if end - start < input_len:
+            start = max(0, end - input_len)
+        waveforms = waveforms[start:end]
+        if len(waveforms) < input_len:
+            waveforms = np.pad(waveforms, (0, input_len - len(waveforms)), mode='constant')
+        waveforms = waveforms[:input_len]
+
+    result = predict_polarity(waveforms=waveforms, model_name=model_name, device=device)
+
+    if result.get("error"):
+        return json.dumps({"success": False, "message": result["error"], "artifacts": []}, indent=2, ensure_ascii=False)
+
+    pred_list = result.get("predictions", [])
+    pred_label = pred_list[0] if pred_list else "Unknown"
+
+    # Generate plot
+    plot_dir = os.path.join(DEFAULT_STRUCTURE_DIR, "polarity")
+    os.makedirs(plot_dir, exist_ok=True)
+    plot_filename = f"polarity_{os.path.basename(waveform_path).replace('.', '_')}.png"
+    plot_path = os.path.join(plot_dir, plot_filename)
+    plot_result = plot_prediction(waveforms, result, plot_path,
+                                  title=f"Polarity: {pred_label} ({model_name})")
+
+    artifacts = []
+    if plot_path and os.path.exists(plot_path):
+        rel = plot_path.replace("\\", "/")
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        artifacts.append({
+            "type": "image",
+            "name": os.path.basename(plot_path),
+            "path": rel,
+            "url": f"/api/artifacts/{rel}",
+        })
+
+    return json.dumps({
+        "success": True,
+        "message": f"初动极性预测结果: {pred_label}\n模型: {model_name}\n文件: {os.path.basename(waveform_path)}",
+        "data": {"polarity": pred_label, "model": model_name},
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def list_polarity_models_tool(params: Union[str, dict, None] = None):
+    """
+    List all available SeisPolarity pretrained models for P-wave polarity picking.
+    Models include ROSS, EQPolarity, DiTingMotion, APP, CFM, PolarCAP, RPNet.
+    Use this when user asks 'what polarity models are available', 'list polarity models',
+    '有哪些极性模型', or before calling predict_polarity_tool.
+    Args: details (bool, default True) - show detailed model descriptions.
+    """
+    from quakecore_tools.seispolarity_tools import list_models
+    parsed = _parse_param_dict(params)
+    details = parsed.get("details", True)
+    if isinstance(details, str):
+        details = details.lower() in ("true", "yes", "1")
+    result = list_models(details=details)
+    if details:
+        return json.dumps({"status": "ok", "count": len(result)}, indent=2, ensure_ascii=False)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
