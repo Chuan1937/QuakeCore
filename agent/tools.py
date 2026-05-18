@@ -5415,12 +5415,41 @@ def predict_polarity_tool(params: Union[str, dict, None] = None):
     try:
         st = read(waveform_path)
         waveforms = st[0].data
+        sampling_rate = st[0].stats.sampling_rate
     except Exception as e:
         return json.dumps({
             "success": False,
             "message": f"无法读取波形文件: {e}",
             "artifacts": [],
         }, indent=2, ensure_ascii=False)
+
+    # Get model input length and auto-window if needed
+    from seispolarity.inference import MODELS_CONFIG
+    model_config = MODELS_CONFIG.get(model_name, {})
+    input_len = model_config.get("input_len", 400)
+
+    if len(waveforms) > input_len:
+        # Try to find P-arrival using kurtosis (simple method)
+        from scipy.stats import kurtosis as kurt
+        window = min(200, len(waveforms) // 4)
+        n = len(waveforms)
+        shape = (n - window + 1, window)
+        strides = (waveforms.strides[0], waveforms.strides[0])
+        rolled = np.lib.stride_tricks.as_strided(waveforms, shape=shape, strides=strides)
+        kurt_vals = np.full(n, np.nan)
+        kurt_vals[window - 1:] = kurt(rolled, axis=1, nan_policy='omit')
+        kurt_vals = np.nan_to_num(kurt_vals, nan=0.0)
+        onset_idx = int(np.argmax(np.abs(kurt_vals)))
+        # Window around P-onset: pre_pick=100 samples, post_pick = input_len-100
+        pre_pick = min(100, input_len // 4)
+        start = max(0, onset_idx - pre_pick)
+        end = min(len(waveforms), start + input_len)
+        if end - start < input_len:
+            start = max(0, end - input_len)
+        waveforms = waveforms[start:end]
+        if len(waveforms) < input_len:
+            waveforms = np.pad(waveforms, (0, input_len - len(waveforms)), mode='constant')
+        waveforms = waveforms[:input_len]
 
     result = predict_polarity(waveforms=waveforms, model_name=model_name, device=device)
 
