@@ -163,6 +163,33 @@ class RouterService:
             "模型",
             "配置",
         ),
+        "dsa_depth_scanning": (
+            "dsa",
+            "depth scanning",
+            "focal depth",
+            "focal depth determination",
+            "scan depth",
+            "深度扫描",
+            "震源深度",
+            "深度扫描算法",
+        ),
+        "polarity_prediction": (
+            "polarity",
+            "first motion",
+            "first-motion",
+            "p-wave polarity",
+            "seispolarity",
+            "极性",
+            "初动",
+            "初动方向",
+        ),
+        "telehypo_location": (
+            "telehypo",
+            "teleseismic",
+            "teleseismic location",
+            "远震",
+            "远震定位",
+        ),
     }
 
     def route_intent(self, message: str) -> str:

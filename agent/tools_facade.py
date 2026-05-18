@@ -52,6 +52,16 @@ from quakecore_tools.waveform_tools import (
     read_trace_sample,
 )
 
+# ---- Professional tools ----
+from agent.tools import (
+    run_dsa_depth_scanning,
+    list_dsa_examples_tool,
+    run_telehypo_location,
+    run_telehypo_plots_tool,
+    predict_polarity_tool,
+    list_polarity_models_tool,
+)
+
 __all__ = [
     "run_analysis_sandbox",
     "add_station_coordinates",
@@ -95,4 +105,10 @@ __all__ = [
     "read_trace_sample",
     "run_continuous_monitoring",
     "run_continuous_picking",
+    "run_dsa_depth_scanning",
+    "list_dsa_examples_tool",
+    "run_telehypo_location",
+    "run_telehypo_plots_tool",
+    "predict_polarity_tool",
+    "list_polarity_models_tool",
 ]

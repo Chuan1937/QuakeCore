@@ -5199,3 +5199,138 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
     }
 
     return json.dumps(result_payload, indent=2, ensure_ascii=False)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Professional tools: DSA, TeleHypo, SeisPolarity
+# ═══════════════════════════════════════════════════════════════
+
+@tool
+def run_dsa_depth_scanning(params: Union[str, dict, None] = None):
+    """
+    Run the Depth-Scanning Algorithm (DSA) to determine focal depth of earthquakes.
+    Uses 3-component SAC waveforms and a velocity model to scan possible depths.
+    Use this when the user asks about 'DSA', 'depth scanning', 'focal depth determination',
+    '震源深度扫描', or '深度扫描'.
+    Args: example_name (str, default "Example1"), verbose (bool, default False).
+    Available examples: Example1-Example8.
+    Returns: focal depth (km), station results, and plot file paths.
+    """
+    from quakecore_tools.dsa_tools import run_dsa_example
+    parsed = _parse_param_dict(params)
+    example_name = parsed.get("example_name", "Example1")
+    verbose = parsed.get("verbose", False)
+    result = run_dsa_example(example_name=example_name, verbose=verbose)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def list_dsa_examples_tool(params: Union[str, dict, None] = None):
+    """
+    List all available DSA (Depth-Scanning Algorithm) examples with their data status.
+    Use this when the user asks 'what DSA examples are available', 'list DSA',
+    '有什么DSA示例', or '列出DSA'.
+    """
+    from quakecore_tools.dsa_tools import list_dsa_examples
+    result = list_dsa_examples()
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def run_telehypo_location(params: Union[str, dict, None] = None):
+    """
+    Run TeleHypo teleseismic hypocenter location.
+    Locates teleseismic earthquakes by automatically matching depth phases.
+    Use this when user asks about 'TeleHypo', 'teleseismic location',
+    '远震定位', or 'telehypo'.
+    Args: catalog_dir (str, optional), skip_steps (list of int, optional), verbose (bool).
+    Note: Large dataset (~715MB) needs to be prepared first via prepare_telehypo_data().
+    Returns: event location, station count, and plot paths.
+    """
+    from quakecore_tools.telehypo_tools import run_telehypo_example
+    parsed = _parse_param_dict(params)
+    catalog_dir = parsed.get("catalog_dir", None)
+    skip_steps = parsed.get("skip_steps", None)
+    verbose = parsed.get("verbose", False)
+    result = run_telehypo_example(catalog_dir=catalog_dir, skip_steps=skip_steps, verbose=verbose)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def run_telehypo_plots_tool(params: Union[str, dict, None] = None):
+    """
+    Generate plots for an existing TeleHypo result.
+    Generates SNR plots, brightness function plots, DSA depth solution plots,
+    and solution comparison plots.
+    Use this when user asks to 'plot TeleHypo results', 'show TeleHypo figures',
+    or '绘制TeleHypo结果图'.
+    Args: event_dir (str, optional - auto-detected if not provided).
+    Returns: list of plot file paths.
+    """
+    from quakecore_tools.telehypo_tools import run_telehypo_plots
+    parsed = _parse_param_dict(params)
+    event_dir = parsed.get("event_dir", None)
+    verbose = parsed.get("verbose", False)
+    result = run_telehypo_plots(event_dir=event_dir, verbose=verbose)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def predict_polarity_tool(params: Union[str, dict, None] = None):
+    """
+    Predict P-wave first-motion polarity using deep learning (SeisPolarity).
+    Use this when user asks about 'polarity', 'first motion', 'P波极性',
+    '初动方向', or 'seispolarity'.
+    First call list_polarity_models_tool to show available models, then call this with a model name.
+    Args: model_name (str, default "ROSS_SCSN"), waveform_path (str, optional - path to waveform file).
+    Available models: ROSS_SCSN, ROSS_GLOBAL, EQPOLARITY_SCSN, EQPOLARITY_GLOBAL,
+    DITINGMOTION_DITINGSCSN, DITING_GLOBAL, APP_SCSN, APP_GLOBAL, CFM_SCSN, CFM_GLOBAL,
+    POLARCAP_SCSN, POLARCAP_GLOBAL, RPNET_SCSN, RPNET_GLOBAL.
+    Returns: polarity predictions with labels (Up/Down/Unknown).
+    """
+    from quakecore_tools.seispolarity_tools import predict_polarity
+    parsed = _parse_param_dict(params)
+    model_name = parsed.get("model_name", "ROSS_SCSN")
+    waveform_path = parsed.get("waveform_path", None)
+    device = parsed.get("device", None)
+
+    if waveform_path:
+        from obspy import read
+        try:
+            st = read(waveform_path)
+            waveforms = st[0].data
+        except Exception:
+            waveforms = None
+    else:
+        waveforms = None
+
+    if waveforms is None:
+        return json.dumps({
+            "info": "SeisPolarity models are available. Use list_polarity_models_tool to see options. "
+                    "To run prediction, provide a waveform_path to a SAC/miniSEED file, "
+                    "or specify a model_name to verify the model loads correctly.",
+            "model_loaded": False,
+        }, indent=2, ensure_ascii=False)
+
+    result = predict_polarity(waveforms=waveforms, model_name=model_name, device=device)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@tool
+def list_polarity_models_tool(params: Union[str, dict, None] = None):
+    """
+    List all available SeisPolarity pretrained models for P-wave polarity picking.
+    Models include ROSS, EQPolarity, DiTingMotion, APP, CFM, PolarCAP, RPNet.
+    Use this when user asks 'what polarity models are available', 'list polarity models',
+    '有哪些极性模型', or before calling predict_polarity_tool.
+    Args: details (bool, default True) - show detailed model descriptions.
+    """
+    from quakecore_tools.seispolarity_tools import list_models
+    parsed = _parse_param_dict(params)
+    details = parsed.get("details", True)
+    if isinstance(details, str):
+        details = details.lower() in ("true", "yes", "1")
+    result = list_models(details=details)
+    if details:
+        return json.dumps({"status": "ok", "count": len(result)}, indent=2, ensure_ascii=False)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
