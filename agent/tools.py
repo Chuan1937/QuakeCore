@@ -5214,14 +5214,62 @@ def run_dsa_depth_scanning(params: Union[str, dict, None] = None):
     '震源深度扫描', or '深度扫描'.
     Args: example_name (str, default "Example1"), verbose (bool, default False).
     Available examples: Example1-Example8.
-    Returns: focal depth (km), station results, and plot file paths.
+    Returns: focal depth (km), station results, and plot images.
     """
     from quakecore_tools.dsa_tools import run_dsa_example
     parsed = _parse_param_dict(params)
     example_name = parsed.get("example_name", "Example1")
     verbose = parsed.get("verbose", False)
     result = run_dsa_example(example_name=example_name, verbose=verbose)
-    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+    focal_depth = result.get("focal_depth_km", "N/A")
+    prelim_depth = result.get("prelim_depth_km", "N/A")
+    num_stations = result.get("num_stations", 0)
+
+    message = (
+        f"DSA 深度扫描完成（{example_name}）。\n"
+        f"初步深度: {prelim_depth} km → 最终深度解: {focal_depth} km\n"
+        f"使用台站数: {num_stations}"
+    )
+
+    # Convert plot paths to artifacts
+    artifacts = []
+    for plot_path in result.get("plots", []):
+        rel = str(plot_path).replace("\\", "/")
+        if "/data/" in rel:
+            rel = rel.split("/data/", 1)[1]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            fname = os.path.basename(plot_path)
+            # Only include key result plots (skip debug plots to avoid clutter)
+            is_key = any(kw in fname for kw in (
+                "First2Steps", "Steps3-4", "step3_locSrc", "Final", "Prelim"
+            ))
+            artifacts.append({
+                "type": "image",
+                "name": fname,
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+                "highlight": is_key,
+            })
+
+    if result.get("error"):
+        message = f"DSA 运行出错: {result['error']}"
+        return json.dumps({"success": False, "message": message, "artifacts": []}, indent=2, ensure_ascii=False)
+
+    return json.dumps({
+        "success": True,
+        "message": message,
+        "data": {
+            "focal_depth_km": focal_depth,
+            "prelim_depth_km": prelim_depth,
+            "num_stations": num_stations,
+            "elapsed_seconds": result.get("elapsed_seconds"),
+        },
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
 
 
 @tool
