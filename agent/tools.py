@@ -5291,17 +5291,58 @@ def run_telehypo_location(params: Union[str, dict, None] = None):
     Locates teleseismic earthquakes by automatically matching depth phases.
     Use this when user asks about 'TeleHypo', 'teleseismic location',
     '远震定位', or 'telehypo'.
-    Args: catalog_dir (str, optional), skip_steps (list of int, optional), verbose (bool).
-    Note: Large dataset (~715MB) needs to be prepared first via prepare_telehypo_data().
-    Returns: event location, station count, and plot paths.
+    Note: Data (~715MB) auto-symlinked from QuakeCore-Paper/TeleHypo.
+    Returns: event location, station count, and plot images.
     """
     from quakecore_tools.telehypo_tools import run_telehypo_example
     parsed = _parse_param_dict(params)
     catalog_dir = parsed.get("catalog_dir", None)
-    skip_steps = parsed.get("skip_steps", None)
+    skip_steps = parsed.get("skip_steps", [1])  # Default: skip data fetch (already downloaded)
     verbose = parsed.get("verbose", False)
     result = run_telehypo_example(catalog_dir=catalog_dir, skip_steps=skip_steps, verbose=verbose)
-    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+    if result.get("error"):
+        return json.dumps({"success": False, "message": result["error"], "artifacts": []}, indent=2, ensure_ascii=False)
+
+    depth = result.get("focal_depth_km", "N/A")
+    num_stations = result.get("num_stations_used", len(result.get("station_results", [])))
+    steps_ok = 0
+    for k, v in result.items():
+        if k == "completed":
+            steps_ok = len(v)
+        elif k == "failed":
+            steps_ok -= len(v)
+
+    message = (
+        f"TeleHypo 远震定位完成。\n"
+        f"估计震源深度: {depth} km\n"
+        f"使用台站数: {num_stations}\n"
+        f"成功步骤: {steps_ok}/6"
+    )
+
+    # Convert plots to artifacts
+    artifacts = []
+    for plot_path in result.get("plots", []):
+        rel = str(plot_path).replace("\\", "/")
+        if "/data/" in rel:
+            rel = rel.split("/data/", 1)[1]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            artifacts.append({
+                "type": "image",
+                "name": os.path.basename(plot_path),
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+            })
+
+    return json.dumps({
+        "success": True,
+        "message": message,
+        "data": {"focal_depth_km": depth, "num_stations": num_stations},
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
 
 
 @tool
@@ -5312,15 +5353,38 @@ def run_telehypo_plots_tool(params: Union[str, dict, None] = None):
     and solution comparison plots.
     Use this when user asks to 'plot TeleHypo results', 'show TeleHypo figures',
     or '绘制TeleHypo结果图'.
-    Args: event_dir (str, optional - auto-detected if not provided).
-    Returns: list of plot file paths.
+    Returns: plot images.
     """
     from quakecore_tools.telehypo_tools import run_telehypo_plots
     parsed = _parse_param_dict(params)
     event_dir = parsed.get("event_dir", None)
     verbose = parsed.get("verbose", False)
     result = run_telehypo_plots(event_dir=event_dir, verbose=verbose)
-    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+    if result.get("error"):
+        return json.dumps({"success": False, "message": result["error"], "artifacts": []}, indent=2, ensure_ascii=False)
+
+    artifacts = []
+    for plot_path in result.get("plots", []):
+        rel = str(plot_path).replace("\\", "/")
+        if "/data/" in rel:
+            rel = rel.split("/data/", 1)[1]
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        if rel:
+            artifacts.append({
+                "type": "image",
+                "name": os.path.basename(plot_path),
+                "path": rel,
+                "url": f"/api/artifacts/{rel}",
+            })
+
+    return json.dumps({
+        "success": True,
+        "message": f"TeleHypo 绘图完成，共 {len(artifacts)} 张。",
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
 
 
 @tool
