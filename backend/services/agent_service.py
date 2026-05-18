@@ -1145,8 +1145,13 @@ class AgentService:
             tool_obj = run_telehypo_location
             payload = {"params": {}}
         elif route == "polarity_prediction":
+            current_file = self._sessions.get_current_file(session_id)
+            uploaded = self._sessions.get_uploaded_files(session_id)
+            file_path = current_file or (uploaded[-1] if uploaded else None)
+            if not file_path:
+                return None
             tool_obj = predict_polarity_tool
-            payload = {"params": {}}
+            payload = {"params": {"waveform_path": file_path}}
         else:
             return None
 

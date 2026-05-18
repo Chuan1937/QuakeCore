@@ -5392,40 +5392,71 @@ def predict_polarity_tool(params: Union[str, dict, None] = None):
     """
     Predict P-wave first-motion polarity using deep learning (SeisPolarity).
     Use this when user asks about 'polarity', 'first motion', 'P波极性',
-    '初动方向', or 'seispolarity'.
-    First call list_polarity_models_tool to show available models, then call this with a model name.
-    Args: model_name (str, default "ROSS_SCSN"), waveform_path (str, optional - path to waveform file).
-    Available models: ROSS_SCSN, ROSS_GLOBAL, EQPOLARITY_SCSN, EQPOLARITY_GLOBAL,
-    DITINGMOTION_DITINGSCSN, DITING_GLOBAL, APP_SCSN, APP_GLOBAL, CFM_SCSN, CFM_GLOBAL,
-    POLARCAP_SCSN, POLARCAP_GLOBAL, RPNET_SCSN, RPNET_GLOBAL.
-    Returns: polarity predictions with labels (Up/Down/Unknown).
+    '初动方向', '初动极性', or 'seispolarity'.
+    Automatically uses the uploaded waveform file.
+    Args: model_name (str, default "ROSS_SCSN").
+    Available models: ROSS_SCSN, ROSS_GLOBAL, EQPOLARITY_SCSN, EQPOLARITY_GLOBAL, etc.
+    Returns: polarity (Up/Down/Unknown) with waveform plot.
     """
-    from quakecore_tools.seispolarity_tools import predict_polarity
+    from quakecore_tools.seispolarity_tools import predict_polarity, plot_prediction
     parsed = _parse_param_dict(params)
     model_name = parsed.get("model_name", "ROSS_SCSN")
     waveform_path = parsed.get("waveform_path", None)
     device = parsed.get("device", None)
 
-    if waveform_path:
-        from obspy import read
-        try:
-            st = read(waveform_path)
-            waveforms = st[0].data
-        except Exception:
-            waveforms = None
-    else:
-        waveforms = None
-
-    if waveforms is None:
+    if not waveform_path:
         return json.dumps({
-            "info": "SeisPolarity models are available. Use list_polarity_models_tool to see options. "
-                    "To run prediction, provide a waveform_path to a SAC/miniSEED file, "
-                    "or specify a model_name to verify the model loads correctly.",
-            "model_loaded": False,
+            "success": False,
+            "message": "请先上传波形文件（SAC/miniSEED），或指定 waveform_path 参数。",
+            "artifacts": [],
+        }, indent=2, ensure_ascii=False)
+
+    from obspy import read
+    try:
+        st = read(waveform_path)
+        waveforms = st[0].data
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "message": f"无法读取波形文件: {e}",
+            "artifacts": [],
         }, indent=2, ensure_ascii=False)
 
     result = predict_polarity(waveforms=waveforms, model_name=model_name, device=device)
-    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+    if result.get("error"):
+        return json.dumps({"success": False, "message": result["error"], "artifacts": []}, indent=2, ensure_ascii=False)
+
+    pred_list = result.get("predictions", [])
+    pred_label = pred_list[0] if pred_list else "Unknown"
+
+    # Generate plot
+    plot_dir = os.path.join(DEFAULT_STRUCTURE_DIR, "polarity")
+    os.makedirs(plot_dir, exist_ok=True)
+    plot_filename = f"polarity_{os.path.basename(waveform_path).replace('.', '_')}.png"
+    plot_path = os.path.join(plot_dir, plot_filename)
+    plot_result = plot_prediction(waveforms, result, plot_path,
+                                  title=f"Polarity: {pred_label} ({model_name})")
+
+    artifacts = []
+    if plot_path and os.path.exists(plot_path):
+        rel = plot_path.replace("\\", "/")
+        if rel.startswith("data/"):
+            rel = rel[5:]
+        rel = rel.lstrip("/")
+        artifacts.append({
+            "type": "image",
+            "name": os.path.basename(plot_path),
+            "path": rel,
+            "url": f"/api/artifacts/{rel}",
+        })
+
+    return json.dumps({
+        "success": True,
+        "message": f"初动极性预测结果: {pred_label}\n模型: {model_name}\n文件: {os.path.basename(waveform_path)}",
+        "data": {"polarity": pred_label, "model": model_name},
+        "artifacts": artifacts,
+    }, indent=2, ensure_ascii=False, default=str)
 
 
 @tool
