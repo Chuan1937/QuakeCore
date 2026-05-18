@@ -44,6 +44,9 @@ from quakecore_tools.monitoring_tools import (
 )
 from quakecore_tools.picking_tools import pick_all_miniseed_files, pick_first_arrivals
 from quakecore_tools.plotting_tools import plot_location_map
+from quakecore_tools.dsa_tools import run_dsa_example
+from quakecore_tools.telehypo_tools import run_telehypo_example
+from quakecore_tools.seispolarity_tools import list_models, predict_polarity
 from quakecore_tools.waveform_tools import (
     read_file_trace,
     read_hdf5_trace,
@@ -57,6 +60,10 @@ __all__ = [
     "add_station_coordinates",
     "associate_continuous_events",
     "compress_hdf5_to_zfp",
+    "run_dsa_example",
+    "run_telehypo_example",
+    "list_models",
+    "predict_polarity",
     "convert_hdf5_to_excel",
     "convert_hdf5_to_numpy",
     "convert_miniseed_to_hdf5",
