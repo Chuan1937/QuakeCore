@@ -21,4 +21,4 @@ Thumbs.db
 /Validation/near-seismic-location/nlloc_model
 /Validation/teleseismic-location/taup
 /Validation/ContinuousData
-/Validation/
+/Validation/checkpoints_download/
