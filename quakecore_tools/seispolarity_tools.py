@@ -155,6 +155,60 @@ def predict_from_stream(
         return {"error": str(e)}
 
 
+def plot_prediction(
+    waveform: np.ndarray,
+    prediction: Dict,
+    output_path: str,
+    title: str = "Polarity Prediction",
+) -> str:
+    """Plot waveform with polarity prediction result.
+
+    Args:
+        waveform: 1D numpy array of waveform data
+        prediction: Prediction result dict from predict_polarity()
+        output_path: Path to save the plot (e.g., 'polarity_result.png')
+        title: Plot title
+
+    Returns:
+        Path to saved plot file
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(12, 4))
+        ax.plot(waveform, color='steelblue', linewidth=0.8)
+        ax.set_xlabel('Sample')
+        ax.set_ylabel('Amplitude')
+        ax.set_title(title)
+
+        # Annotate prediction
+        if "predictions" in prediction:
+            pred = prediction["predictions"]
+            if isinstance(pred, list) and len(pred) > 0:
+                pred = pred[0]
+            label = str(pred)
+            color = {'Up': 'red', 'Down': 'blue', 'Unknown': 'gray'}.get(label, 'black')
+            ax.text(0.02, 0.95, f"Polarity: {label}", transform=ax.transAxes,
+                    fontsize=14, fontweight='bold', color=color,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # Mark pick position (center of window)
+        center = len(waveform) // 2
+        ax.axvline(center, color='green', linestyle='--', alpha=0.5, linewidth=1)
+
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+        return output_path
+
+    except Exception as e:
+        return f"Error generating plot: {e}"
+
+
 def get_model_info(model_name: str) -> Dict:
     """Get detailed information about a specific model.
 
@@ -178,5 +232,6 @@ __all__ = [
     "list_models",
     "predict_polarity",
     "predict_from_stream",
+    "plot_prediction",
     "get_model_info",
 ]
