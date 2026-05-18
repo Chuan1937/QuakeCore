@@ -160,7 +160,17 @@ def run_telehypo_example(
     if skip_steps:
         steps_to_run = [s for i, s in enumerate(all_steps, 1) if i not in skip_steps]
     else:
-        steps_to_run = all_steps
+        # Auto-detect which steps can be skipped based on existing data
+        event_dir = next(catalog_path.glob("20*"), None)
+        skip = []
+        if event_dir and (event_dir / "ssnapresults").exists():
+            # SNR already computed -> skip sub1, sub2
+            skip.extend([1, 2])
+        if event_dir and (event_dir / "inventory").exists() and list((event_dir / "inventory").glob("*.xml")):
+            skip.append(3)
+        if event_dir and list(event_dir.glob("*StationWithHighSNR*.csv")):
+            skip.append(4)
+        steps_to_run = [s for i, s in enumerate(all_steps, 1) if i not in skip]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Copy scripts
@@ -246,11 +256,26 @@ def run_telehypo_example(
             except Exception as e:
                 steps_result["failed"].append({"step": step, "error": str(e)})
 
-        # Collect all plots
-        all_plots = _collect_plots(plots_dir)
+        # Collect all plots and copy to persistent location under data/
+        _, data_dir, _, _ = _get_telehypo_dirs()
+        persistent_plots_dir = data_dir / "results" / "plots"
+        persistent_plots_dir.mkdir(parents=True, exist_ok=True)
+
+        all_plots = []
+        for tp in _collect_plots(plots_dir):
+            dest = str(persistent_plots_dir / os.path.basename(tp))
+            shutil.copy2(tp, dest)
+            all_plots.append(dest)
+        # Also collect plots generated in catalog (but only those under data/)
         for p in catalog_path.rglob("*"):
             if p.is_dir():
-                all_plots.extend(_collect_plots(str(p)))
+                for tp in _collect_plots(str(p)):
+                    # Copy to persistent location if not already there
+                    dest = str(persistent_plots_dir / os.path.basename(tp))
+                    if not os.path.exists(dest):
+                        shutil.copy2(tp, dest)
+                    if dest not in all_plots:
+                        all_plots.append(dest)
 
         # Find output directories
         output_info = {}

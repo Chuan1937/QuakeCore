@@ -5297,7 +5297,7 @@ def run_telehypo_location(params: Union[str, dict, None] = None):
     from quakecore_tools.telehypo_tools import run_telehypo_example
     parsed = _parse_param_dict(params)
     catalog_dir = parsed.get("catalog_dir", None)
-    skip_steps = parsed.get("skip_steps", [1])  # Default: skip data fetch (already downloaded)
+    skip_steps = parsed.get("skip_steps", None)  # Let auto-detection decide
     verbose = parsed.get("verbose", False)
     result = run_telehypo_example(catalog_dir=catalog_dir, skip_steps=skip_steps, verbose=verbose)
 
