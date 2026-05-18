@@ -5423,24 +5423,61 @@ def predict_polarity_tool(params: Union[str, dict, None] = None):
             "artifacts": [],
         }, indent=2, ensure_ascii=False)
 
-    # Get model input length and auto-window if needed
+    # Get model input length
     from seispolarity.inference import MODELS_CONFIG
     model_config = MODELS_CONFIG.get(model_name, {})
     input_len = model_config.get("input_len", 400)
 
+    # Auto-detect P-onset using deep learning (EQTransformer + PhaseNet)
+    onset_idx = len(waveforms) // 2  # fallback: center
+    used_dl = False
+    try:
+        # Try to use CURRENT_PICKS if available from prior pick_first_arrivals
+        global CURRENT_PICKS
+        if CURRENT_PICKS:
+            p_picks = [p for p in CURRENT_PICKS if (p.phase_type or '').upper() == 'P'
+                      and p.sample_index is not None]
+            if p_picks:
+                best = max(p_picks, key=lambda p: p.normalized_score or 0)
+                onset_idx = best.sample_index
+                used_dl = True
+    except Exception:
+        pass
+
+    if not used_dl:
+        # Run deep learning picking (EQTransformer + PhaseNet) via pick_phases
+        try:
+            from utils.phase_picker import pick_phases
+            from utils.miniseed_handler import MiniSEEDHandler
+            handler = MiniSEEDHandler(waveform_path)
+            dl_picks = pick_phases(source=waveform_path, file_type="miniseed", methods=None)
+            p_picks = [p for p in dl_picks if (p.phase_type or '').upper() == 'P'
+                      and p.sample_index is not None]
+            if p_picks:
+                best = max(p_picks, key=lambda p: p.normalized_score or 0)
+                onset_idx = best.sample_index
+                used_dl = True
+        except Exception:
+            pass
+
+    if not used_dl:
+        # Last fallback: kurtosis
+        try:
+            from scipy.stats import kurtosis as kurt
+            window = min(200, len(waveforms) // 4)
+            n = len(waveforms)
+            shape = (n - window + 1, window)
+            strides = (waveforms.strides[0], waveforms.strides[0])
+            rolled = np.lib.stride_tricks.as_strided(waveforms, shape=shape, strides=strides)
+            kurt_vals = np.full(n, np.nan)
+            kurt_vals[window - 1:] = kurt(rolled, axis=1, nan_policy='omit')
+            kurt_vals = np.nan_to_num(kurt_vals, nan=0.0)
+            onset_idx = int(np.argmax(np.abs(kurt_vals)))
+        except Exception:
+            pass
+
+    # Window around P-onset
     if len(waveforms) > input_len:
-        # Try to find P-arrival using kurtosis (simple method)
-        from scipy.stats import kurtosis as kurt
-        window = min(200, len(waveforms) // 4)
-        n = len(waveforms)
-        shape = (n - window + 1, window)
-        strides = (waveforms.strides[0], waveforms.strides[0])
-        rolled = np.lib.stride_tricks.as_strided(waveforms, shape=shape, strides=strides)
-        kurt_vals = np.full(n, np.nan)
-        kurt_vals[window - 1:] = kurt(rolled, axis=1, nan_policy='omit')
-        kurt_vals = np.nan_to_num(kurt_vals, nan=0.0)
-        onset_idx = int(np.argmax(np.abs(kurt_vals)))
-        # Window around P-onset: pre_pick=100 samples, post_pick = input_len-100
         pre_pick = min(100, input_len // 4)
         start = max(0, onset_idx - pre_pick)
         end = min(len(waveforms), start + input_len)
