@@ -2306,21 +2306,26 @@ def _load_validation_module(module_key: str):
     if module_key in _VALIDATION_MODULE_CACHE:
         return _VALIDATION_MODULE_CACHE[module_key]
 
-    mapping = {
-        "regular": "nearseismic_location_validation.py",
-        "blind": "nearseismic_location_blind_validation.py",
-        "continuous": "continuous_monitoring_validation.py",
-        "catalog_plot": "plot_catalog_debug.py",
-    }
-    filename = mapping.get(module_key)
-    if not filename:
-        raise ValueError(f"Unknown validation module key: {module_key}")
+    # catalog_plot is in utils/ (git-tracked), not Validation/
+    if module_key == "catalog_plot":
+        file_path = os.path.join(os.getcwd(), "utils", "plot_catalog_debug.py")
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Catalog plot script not found: {file_path}")
+    else:
+        mapping = {
+            "regular": "nearseismic_location_validation.py",
+            "blind": "nearseismic_location_blind_validation.py",
+            "continuous": "continuous_monitoring_validation.py",
+        }
+        filename = mapping.get(module_key)
+        if not filename:
+            raise ValueError(f"Unknown validation module key: {module_key}")
 
-    file_path = os.path.join(
-        os.getcwd(), "Validation", "near-seismic-location", filename
-    )
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Validation script not found: {file_path}")
+        file_path = os.path.join(
+            os.getcwd(), "Validation", "near-seismic-location", filename
+        )
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Validation script not found: {file_path}")
 
     module_name = f"quakecore_{module_key}_validation"
     spec = importlib.util.spec_from_file_location(module_name, file_path)
@@ -4390,6 +4395,153 @@ def run_continuous_monitoring(params: Union[str, dict, None] = None):
                 else "Please provide a more specific place name, or latitude/longitude directly.",
         }, ensure_ascii=False, indent=2)
     progress_log = []
+
+    # Check if results already exist locally to skip reprocessing.
+    stem = f"continuous_{start_time.strftime('%Y%m%d_%H%M%S')}"
+    cached_json = os.path.join(DEFAULT_LOCATION_DIR, f"{stem}_catalog_location.json")
+    cached_csv = os.path.join(DEFAULT_LOCATION_DIR, f"{stem}_catalog_location.csv")
+    cached_plot = os.path.join(DEFAULT_LOCATION_DIR, "continuous_catalog_3views.png")
+    cached_plot_corrected = os.path.join(DEFAULT_LOCATION_DIR, "continuous_catalog_3views_corrected.png")
+    cached_corrected_json = os.path.join(DEFAULT_LOCATION_DIR, f"{stem}_catalog_corrected.json")
+    cached_corrected_csv = os.path.join(DEFAULT_LOCATION_DIR, f"{stem}_catalog_corrected.csv")
+
+    if os.path.exists(cached_json) and os.path.exists(cached_csv):
+        # Build artifacts list with all available files
+        artifacts = []
+        def _to_artifact_path_cached(local_path: str) -> str:
+            rel = local_path.replace("\\", "/")
+            if rel.startswith("./"):
+                rel = rel[2:]
+            if rel.startswith("data/"):
+                rel = rel[5:]
+            return rel.lstrip("/")
+
+        # Prefer corrected versions if available
+        csv_path = cached_corrected_csv if os.path.exists(cached_corrected_csv) else cached_csv
+        json_path = cached_corrected_json if os.path.exists(cached_corrected_json) else cached_json
+
+        csv_name = "continuous_catalog_lasted.csv" if os.path.exists(cached_corrected_csv) else "continuous_catalog_location.csv"
+        json_name = "continuous_catalog_lasted.json" if os.path.exists(cached_corrected_json) else "continuous_catalog_location.json"
+
+        rel_csv = _to_artifact_path_cached(csv_path)
+        rel_json = _to_artifact_path_cached(json_path)
+        artifacts.append({"type": "file", "name": csv_name, "path": rel_csv, "url": f"/api/artifacts/{rel_csv}"})
+        artifacts.append({"type": "file", "name": json_name, "path": rel_json, "url": f"/api/artifacts/{rel_json}"})
+
+        # Add all available plot images
+        for plot_path, plot_name in [
+            (cached_plot_corrected, "continuous_catalog_3views_corrected.png"),
+            (cached_plot, "continuous_catalog_3views.png"),
+        ]:
+            if os.path.exists(plot_path):
+                rel_plot = _to_artifact_path_cached(plot_path)
+                artifacts.append({"type": "image", "name": plot_name, "path": rel_plot, "url": f"/api/artifacts/{rel_plot}"})
+
+        # Load cached catalog to compute summary stats
+        with open(json_path, "r", encoding="utf-8") as f:
+            cached_data = json.load(f)
+        n_located = len(cached_data.get("catalog", []))
+
+        # Try to run catalog comparison for cached results
+        catalog_comparison = None
+        if parsed.get("compare_with_catalog", True):
+            try:
+                from utils.catalog_matcher import match_catalogs, compute_detection_stats
+                truth = fetch_catalog(
+                    start_time=start_time,
+                    end_time=end_time,
+                    min_lat=region["min_lat"],
+                    max_lat=region["max_lat"],
+                    min_lon=region["min_lon"],
+                    max_lon=region["max_lon"],
+                    min_magnitude=float(parsed.get("min_magnitude", 1.0)),
+                    client_name=region["catalog"],
+                )
+                if truth:
+                    detected_cat = []
+                    for idx, ev in enumerate(cached_data.get("catalog", [])):
+                        try:
+                            from obspy import UTCDateTime
+                            det_time = float(UTCDateTime(ev.get("time")).timestamp)
+                        except Exception:
+                            det_time = float(start_time.timestamp)
+                        detected_cat.append({
+                            "idx": idx,
+                            "time": det_time,
+                            "latitude": float(ev.get("latitude", 0.0)),
+                            "longitude": float(ev.get("longitude", 0.0)),
+                            "depth": float(ev.get("depth_km", 0.0)),
+                        })
+                    matches, fps, fns = match_catalogs(detected_cat, truth)
+                    stats = compute_detection_stats(detected_cat, truth, matches, fps, fns)
+                    catalog_comparison = {
+                        "n_truth_events": stats["n_truth"],
+                        "n_matched": stats["n_matched"],
+                        "recall_percent": stats["recall_percent"],
+                        "precision_percent": stats["precision_percent"],
+                    }
+            except Exception:
+                pass
+
+        # Build message similar to normal processing
+        n_detected = n_located  # For cached, detected = located
+        comp = catalog_comparison
+        recall_value = None
+        precision_value = None
+        show_pair_metrics = False
+        n_matched = None
+        n_truth = None
+        if comp:
+            recall = comp.get("recall_percent")
+            precision = comp.get("precision_percent")
+            if isinstance(recall, (int, float)) and isinstance(precision, (int, float)):
+                recall_value = float(recall)
+                precision_value = float(precision)
+                show_pair_metrics = not (recall_value < 50.0 and precision_value < 50.0)
+            nm = comp.get("n_matched")
+            nt = comp.get("n_truth_events")
+            if isinstance(nm, (int, float)) and isinstance(nt, (int, float)):
+                n_matched = int(nm)
+                n_truth = int(nt)
+
+        fallback_parts = [f"本次监测时段内共定位 {n_located} 个事件。"]
+        if show_pair_metrics and recall_value is not None and precision_value is not None:
+            fallback_parts.append(f"查全率为 {recall_value:.1f}%，查准率为 {precision_value:.1f}%。")
+        if n_matched is not None and n_truth is not None:
+            fallback_parts.append(f"与官方目录匹配到 {n_matched} 个事件。")
+        fallback_message = " ".join(fallback_parts)
+
+        cached_result = {
+            "success": True,
+            "message": fallback_message,
+            "artifacts": artifacts,
+            "data": {
+                "status": "success",
+                "cached": True,
+                "start_time": str(start_time),
+                "end_time": str(end_time),
+                "n_events_detected": n_detected,
+                "n_events_located": n_located,
+                "catalog_json": json_path,
+                "catalog_csv": csv_path,
+                "catalog_3view": cached_plot_corrected if os.path.exists(cached_plot_corrected) else cached_plot,
+                "catalog_comparison": catalog_comparison,
+                "region": {
+                    "name": region.get("region"),
+                    "mode": region.get("mode", "region"),
+                    "place": region.get("place"),
+                    "min_lat": region["min_lat"],
+                    "max_lat": region["max_lat"],
+                    "min_lon": region["min_lon"],
+                    "max_lon": region["max_lon"],
+                    "network": region["network"],
+                    "client": region["client"],
+                    "catalog": region["catalog"],
+                },
+                "catalog": cached_data.get("catalog", []),
+            },
+        }
+        return json.dumps(cached_result, indent=2, ensure_ascii=False)
 
     def _push_job_progress(item: dict) -> None:
         if not job_id:
