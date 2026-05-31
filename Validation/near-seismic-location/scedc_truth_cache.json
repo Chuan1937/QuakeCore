@@ -1,0 +1,722 @@
+[
+  {
+    "time": "2019-07-04T17:59:59.870000Z",
+    "lat": 35.6911667,
+    "lon": -117.493,
+    "depth": 3.17,
+    "mag": 2.44,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222964"
+  },
+  {
+    "time": "2019-07-04T17:59:38.880000Z",
+    "lat": 35.6896667,
+    "lon": -117.5153333,
+    "depth": 9.06,
+    "mag": 2.13,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222956"
+  },
+  {
+    "time": "2019-07-04T17:58:48.660000Z",
+    "lat": 35.6913333,
+    "lon": -117.5008333,
+    "depth": 9.01,
+    "mag": 2.27,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222948"
+  },
+  {
+    "time": "2019-07-04T17:58:19.150000Z",
+    "lat": 35.7296667,
+    "lon": -117.5225,
+    "depth": 3.1,
+    "mag": 2.49,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222940"
+  },
+  {
+    "time": "2019-07-04T17:58:02.640000Z",
+    "lat": 35.702,
+    "lon": -117.5083333,
+    "depth": 4.77,
+    "mag": 3.33,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443319"
+  },
+  {
+    "time": "2019-07-04T17:57:43.060000Z",
+    "lat": 35.6725,
+    "lon": -117.4743333,
+    "depth": 8.76,
+    "mag": 2.78,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222932"
+  },
+  {
+    "time": "2019-07-04T17:57:31.460000Z",
+    "lat": 35.6595,
+    "lon": -117.5223333,
+    "depth": 2.3,
+    "mag": 2.95,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443311"
+  },
+  {
+    "time": "2019-07-04T17:56:55.520000Z",
+    "lat": 35.695,
+    "lon": -117.4921667,
+    "depth": 1.77,
+    "mag": 2.33,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222924"
+  },
+  {
+    "time": "2019-07-04T17:56:21.920000Z",
+    "lat": 35.5928333,
+    "lon": -117.588,
+    "depth": 8.93,
+    "mag": 2.33,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222908"
+  },
+  {
+    "time": "2019-07-04T17:56:09.300000Z",
+    "lat": 35.6271667,
+    "lon": -117.577,
+    "depth": 15.61,
+    "mag": 2.29,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222916"
+  },
+  {
+    "time": "2019-07-04T17:55:54.590000Z",
+    "lat": 35.7071667,
+    "lon": -117.4738333,
+    "depth": 1.27,
+    "mag": 2.35,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222900"
+  },
+  {
+    "time": "2019-07-04T17:55:46.150000Z",
+    "lat": 35.7553333,
+    "lon": -117.5576667,
+    "depth": 2.46,
+    "mag": 2.24,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222892"
+  },
+  {
+    "time": "2019-07-04T17:55:30.800000Z",
+    "lat": 35.6705,
+    "lon": -117.5221667,
+    "depth": 3.91,
+    "mag": 2.57,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222876"
+  },
+  {
+    "time": "2019-07-04T17:55:26.820000Z",
+    "lat": 35.6335,
+    "lon": -117.5798333,
+    "depth": 11.2,
+    "mag": 2.49,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222884"
+  },
+  {
+    "time": "2019-07-04T17:54:59.560000Z",
+    "lat": 35.6391667,
+    "lon": -117.5628333,
+    "depth": 10.48,
+    "mag": 2.53,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443327"
+  },
+  {
+    "time": "2019-07-04T17:53:50.220000Z",
+    "lat": 35.636,
+    "lon": -117.5441667,
+    "depth": 10.16,
+    "mag": 2.24,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222860"
+  },
+  {
+    "time": "2019-07-04T17:53:25.560000Z",
+    "lat": 35.644,
+    "lon": -117.5411667,
+    "depth": 12.89,
+    "mag": 2.2,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222852"
+  },
+  {
+    "time": "2019-07-04T17:53:14.940000Z",
+    "lat": 35.7011667,
+    "lon": -117.4906667,
+    "depth": 1.08,
+    "mag": 2.13,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222844"
+  },
+  {
+    "time": "2019-07-04T17:52:41.700000Z",
+    "lat": 35.7218333,
+    "lon": -117.5251667,
+    "depth": 7.04,
+    "mag": 2.92,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443295"
+  },
+  {
+    "time": "2019-07-04T17:52:06.950000Z",
+    "lat": 35.7408333,
+    "lon": -117.5588333,
+    "depth": 7.11,
+    "mag": 2.42,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222828"
+  },
+  {
+    "time": "2019-07-04T17:51:46.650000Z",
+    "lat": 35.674,
+    "lon": -117.5235,
+    "depth": 5.3,
+    "mag": 3.46,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443287"
+  },
+  {
+    "time": "2019-07-04T17:50:48.960000Z",
+    "lat": 35.678,
+    "lon": -117.4991667,
+    "depth": 1.14,
+    "mag": 2.79,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443303"
+  },
+  {
+    "time": "2019-07-04T17:50:48.290000Z",
+    "lat": 35.738,
+    "lon": -117.5293333,
+    "depth": 7.72,
+    "mag": 2.73,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222692"
+  },
+  {
+    "time": "2019-07-04T17:50:36.210000Z",
+    "lat": 35.6386667,
+    "lon": -117.6038333,
+    "depth": 11.85,
+    "mag": 2.37,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222684"
+  },
+  {
+    "time": "2019-07-04T17:50:02.720000Z",
+    "lat": 35.7338333,
+    "lon": -117.527,
+    "depth": 6.79,
+    "mag": 2.38,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222676"
+  },
+  {
+    "time": "2019-07-04T17:49:38.950000Z",
+    "lat": 35.687,
+    "lon": -117.4906667,
+    "depth": 10.66,
+    "mag": 2.57,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222668"
+  },
+  {
+    "time": "2019-07-04T17:49:35.190000Z",
+    "lat": 35.7335,
+    "lon": -117.5068333,
+    "depth": 3.91,
+    "mag": 2.52,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222596"
+  },
+  {
+    "time": "2019-07-04T17:48:57.070000Z",
+    "lat": 35.5983333,
+    "lon": -117.557,
+    "depth": 1.54,
+    "mag": 2.43,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222588"
+  },
+  {
+    "time": "2019-07-04T17:48:24.150000Z",
+    "lat": 35.6593333,
+    "lon": -117.5263333,
+    "depth": 2.68,
+    "mag": 2.96,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222580"
+  },
+  {
+    "time": "2019-07-04T17:48:15.680000Z",
+    "lat": 35.7053333,
+    "lon": -117.5245,
+    "depth": 5.52,
+    "mag": 3.11,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222572"
+  },
+  {
+    "time": "2019-07-04T17:48:03.160000Z",
+    "lat": 35.6365,
+    "lon": -117.5518333,
+    "depth": 6.62,
+    "mag": 3.27,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222564"
+  },
+  {
+    "time": "2019-07-04T17:47:54.970000Z",
+    "lat": 35.7286667,
+    "lon": -117.5606667,
+    "depth": 5.25,
+    "mag": 3.4,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222556"
+  },
+  {
+    "time": "2019-07-04T17:47:40.970000Z",
+    "lat": 35.726,
+    "lon": -117.5585,
+    "depth": 3.58,
+    "mag": 3.11,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222548"
+  },
+  {
+    "time": "2019-07-04T17:47:17.810000Z",
+    "lat": 35.7455,
+    "lon": -117.5465,
+    "depth": 7.11,
+    "mag": 3.5,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443279"
+  },
+  {
+    "time": "2019-07-04T17:46:49.960000Z",
+    "lat": 35.6385,
+    "lon": -117.6108333,
+    "depth": 10.97,
+    "mag": 3.07,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443271"
+  },
+  {
+    "time": "2019-07-04T17:46:37.050000Z",
+    "lat": 35.7213333,
+    "lon": -117.5286667,
+    "depth": 4.6,
+    "mag": 2.44,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222540"
+  },
+  {
+    "time": "2019-07-04T17:46:20.320000Z",
+    "lat": 35.6563333,
+    "lon": -117.5325,
+    "depth": 1.52,
+    "mag": 2.56,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222532"
+  },
+  {
+    "time": "2019-07-04T17:46:03.710000Z",
+    "lat": 35.6431667,
+    "lon": -117.6101667,
+    "depth": 10.14,
+    "mag": 2.96,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443263"
+  },
+  {
+    "time": "2019-07-04T17:45:28.630000Z",
+    "lat": 35.7348333,
+    "lon": -117.5368333,
+    "depth": 10.34,
+    "mag": 3.21,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222524"
+  },
+  {
+    "time": "2019-07-04T17:45:23.950000Z",
+    "lat": 35.7151667,
+    "lon": -117.5473333,
+    "depth": 7.21,
+    "mag": 3.03,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421989"
+  },
+  {
+    "time": "2019-07-04T17:45:05.780000Z",
+    "lat": 35.6976667,
+    "lon": -117.4865,
+    "depth": 2.24,
+    "mag": 3.03,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421997"
+  },
+  {
+    "time": "2019-07-04T17:44:32.820000Z",
+    "lat": 35.6875,
+    "lon": -117.5071667,
+    "depth": 1.54,
+    "mag": 3.86,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443255"
+  },
+  {
+    "time": "2019-07-04T17:44:24.020000Z",
+    "lat": 35.7478333,
+    "lon": -117.54,
+    "depth": 9.4,
+    "mag": 2.77,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421981"
+  },
+  {
+    "time": "2019-07-04T17:43:49.220000Z",
+    "lat": 35.7458333,
+    "lon": -117.5346667,
+    "depth": 6.35,
+    "mag": 3.21,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421933"
+  },
+  {
+    "time": "2019-07-04T17:43:29.600000Z",
+    "lat": 35.6548333,
+    "lon": -117.5405,
+    "depth": 9.57,
+    "mag": 3.5,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421925"
+  },
+  {
+    "time": "2019-07-04T17:42:54.130000Z",
+    "lat": 35.7301667,
+    "lon": -117.5586667,
+    "depth": 7.84,
+    "mag": 3.22,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443239"
+  },
+  {
+    "time": "2019-07-04T17:42:21.920000Z",
+    "lat": 35.5766667,
+    "lon": -117.6386667,
+    "depth": 6.89,
+    "mag": 3.2,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421965"
+  },
+  {
+    "time": "2019-07-04T17:41:43.580000Z",
+    "lat": 35.6048333,
+    "lon": -117.5843333,
+    "depth": 7.3,
+    "mag": 3.22,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421973"
+  },
+  {
+    "time": "2019-07-04T17:41:20.850000Z",
+    "lat": 35.7266667,
+    "lon": -117.5288333,
+    "depth": 1.97,
+    "mag": 3.3,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421957"
+  },
+  {
+    "time": "2019-07-04T17:40:51.720000Z",
+    "lat": 35.6805,
+    "lon": -117.4743333,
+    "depth": 7.09,
+    "mag": 3.13,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37259692"
+  },
+  {
+    "time": "2019-07-04T17:40:46.140000Z",
+    "lat": 35.7298333,
+    "lon": -117.5548333,
+    "depth": 7.72,
+    "mag": 3.42,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222516"
+  },
+  {
+    "time": "2019-07-04T17:40:34.900000Z",
+    "lat": 35.6948333,
+    "lon": -117.5018333,
+    "depth": 2.04,
+    "mag": 3.54,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222508"
+  },
+  {
+    "time": "2019-07-04T17:40:18.520000Z",
+    "lat": 35.707,
+    "lon": -117.5101667,
+    "depth": 8.66,
+    "mag": 4.13,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443231"
+  },
+  {
+    "time": "2019-07-04T17:40:02.250000Z",
+    "lat": 35.7253333,
+    "lon": -117.5708333,
+    "depth": 6.63,
+    "mag": 3.8,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443223"
+  },
+  {
+    "time": "2019-07-04T17:39:51.740000Z",
+    "lat": 35.6715,
+    "lon": -117.5453333,
+    "depth": 2.27,
+    "mag": 3.11,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37259660"
+  },
+  {
+    "time": "2019-07-04T17:39:35.360000Z",
+    "lat": 35.6876667,
+    "lon": -117.4931667,
+    "depth": 10.96,
+    "mag": 3.69,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443215"
+  },
+  {
+    "time": "2019-07-04T17:39:33.310000Z",
+    "lat": 35.5743333,
+    "lon": -117.6366667,
+    "depth": 6.85,
+    "mag": 3.11,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222404"
+  },
+  {
+    "time": "2019-07-04T17:39:14.620000Z",
+    "lat": 35.6215,
+    "lon": -117.5945,
+    "depth": 8.82,
+    "mag": 2.98,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37259612"
+  },
+  {
+    "time": "2019-07-04T17:39:05.120000Z",
+    "lat": 35.7168333,
+    "lon": -117.6661667,
+    "depth": 5.17,
+    "mag": 3.25,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37259588"
+  },
+  {
+    "time": "2019-07-04T17:38:57.260000Z",
+    "lat": 35.6698333,
+    "lon": -117.5295,
+    "depth": 1.87,
+    "mag": 3.43,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37256196"
+  },
+  {
+    "time": "2019-07-04T17:38:47.760000Z",
+    "lat": 35.6235,
+    "lon": -117.596,
+    "depth": 8.55,
+    "mag": 3.5,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222396"
+  },
+  {
+    "time": "2019-07-04T17:38:21.450000Z",
+    "lat": 35.714,
+    "lon": -117.476,
+    "depth": 1.74,
+    "mag": 3.73,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37421941"
+  },
+  {
+    "time": "2019-07-04T17:37:55.500000Z",
+    "lat": 35.7456667,
+    "lon": -117.5516667,
+    "depth": 8.29,
+    "mag": 3.86,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443199"
+  },
+  {
+    "time": "2019-07-04T17:37:46.320000Z",
+    "lat": 35.6811667,
+    "lon": -117.5261667,
+    "depth": 6.83,
+    "mag": 3.24,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37259580"
+  },
+  {
+    "time": "2019-07-04T17:37:25.640000Z",
+    "lat": 35.6758333,
+    "lon": -117.4575,
+    "depth": 15.82,
+    "mag": 4.01,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37218996"
+  },
+  {
+    "time": "2019-07-04T17:37:14.850000Z",
+    "lat": 35.6655,
+    "lon": -117.516,
+    "depth": 1.64,
+    "mag": 3.97,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222364"
+  },
+  {
+    "time": "2019-07-04T17:37:01.140000Z",
+    "lat": 35.7105,
+    "lon": -117.4773333,
+    "depth": 1.57,
+    "mag": 3.66,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222372"
+  },
+  {
+    "time": "2019-07-04T17:36:58.950000Z",
+    "lat": 35.7258333,
+    "lon": -117.5593333,
+    "depth": 5.3,
+    "mag": 3.41,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222380"
+  },
+  {
+    "time": "2019-07-04T17:36:04.360000Z",
+    "lat": 35.7341667,
+    "lon": -117.5741667,
+    "depth": 6.41,
+    "mag": 3.94,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37255980"
+  },
+  {
+    "time": "2019-07-04T17:35:52.170000Z",
+    "lat": 35.687,
+    "lon": -117.5061667,
+    "depth": 1.6,
+    "mag": 4.28,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37218988"
+  },
+  {
+    "time": "2019-07-04T17:35:46.340000Z",
+    "lat": 35.6936667,
+    "lon": -117.437,
+    "depth": 7.65,
+    "mag": 3.63,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37222356"
+  },
+  {
+    "time": "2019-07-04T17:35:17.430000Z",
+    "lat": 35.6886667,
+    "lon": -117.474,
+    "depth": 6.48,
+    "mag": 3.93,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37255940"
+  },
+  {
+    "time": "2019-07-04T17:35:01.660000Z",
+    "lat": 35.644,
+    "lon": -117.5671667,
+    "depth": 4.64,
+    "mag": 4.49,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443191"
+  },
+  {
+    "time": "2019-07-04T17:33:49.000000Z",
+    "lat": 35.7053333,
+    "lon": -117.5038333,
+    "depth": 10.5,
+    "mag": 6.4,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443183"
+  },
+  {
+    "time": "2019-07-04T17:27:35.140000Z",
+    "lat": 35.7025,
+    "lon": -117.5016667,
+    "depth": 9.59,
+    "mag": 0.54,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229276"
+  },
+  {
+    "time": "2019-07-04T17:27:00.040000Z",
+    "lat": 34.1748333,
+    "lon": -117.4988333,
+    "depth": 2.98,
+    "mag": 1.45,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443167"
+  },
+  {
+    "time": "2019-07-04T17:16:18.570000Z",
+    "lat": 35.709,
+    "lon": -117.4903333,
+    "depth": 10.17,
+    "mag": 0.62,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229268"
+  },
+  {
+    "time": "2019-07-04T17:15:47.190000Z",
+    "lat": 35.7068333,
+    "lon": -117.5018333,
+    "depth": 8.99,
+    "mag": 1.43,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443151"
+  },
+  {
+    "time": "2019-07-04T17:15:35.500000Z",
+    "lat": 35.7108333,
+    "lon": -117.4813333,
+    "depth": 11.58,
+    "mag": 0.42,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229260"
+  },
+  {
+    "time": "2019-07-04T17:14:10.460000Z",
+    "lat": 35.6911667,
+    "lon": -117.5353333,
+    "depth": 13.0,
+    "mag": 0.5,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229244"
+  },
+  {
+    "time": "2019-07-04T17:14:09.200000Z",
+    "lat": 35.7055,
+    "lon": -117.4935,
+    "depth": 10.88,
+    "mag": 0.37,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229236"
+  },
+  {
+    "time": "2019-07-04T17:13:51.800000Z",
+    "lat": 35.7041667,
+    "lon": -117.4953333,
+    "depth": 10.98,
+    "mag": 0.77,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443143"
+  },
+  {
+    "time": "2019-07-04T17:13:36.190000Z",
+    "lat": 35.7023333,
+    "lon": -117.5045,
+    "depth": 10.65,
+    "mag": 0.39,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229228"
+  },
+  {
+    "time": "2019-07-04T17:13:26.210000Z",
+    "lat": 35.7046667,
+    "lon": -117.4988333,
+    "depth": 10.17,
+    "mag": 0.6,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229220"
+  },
+  {
+    "time": "2019-07-04T17:12:38.080000Z",
+    "lat": 35.7083333,
+    "lon": -117.4905,
+    "depth": 11.04,
+    "mag": 1.75,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443135"
+  },
+  {
+    "time": "2019-07-04T17:12:14.970000Z",
+    "lat": 35.7065,
+    "lon": -117.5031667,
+    "depth": 10.52,
+    "mag": 2.13,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443127"
+  },
+  {
+    "time": "2019-07-04T17:11:40.160000Z",
+    "lat": 35.7083333,
+    "lon": -117.5053333,
+    "depth": 6.33,
+    "mag": 0.94,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=37229212"
+  },
+  {
+    "time": "2019-07-04T17:11:32.850000Z",
+    "lat": 35.7055,
+    "lon": -117.4975,
+    "depth": 11.2,
+    "mag": 0.63,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443119"
+  },
+  {
+    "time": "2019-07-04T17:09:20.090000Z",
+    "lat": 35.7076667,
+    "lon": -117.5013333,
+    "depth": 10.97,
+    "mag": 2.49,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443111"
+  },
+  {
+    "time": "2019-07-04T17:02:55.340000Z",
+    "lat": 35.7081667,
+    "lon": -117.5036667,
+    "depth": 10.6,
+    "mag": 3.98,
+    "id": "quakeml:service.scedc.caltech.edu/fdsnws/event/1/query?eventid=38443095"
+  }
+]

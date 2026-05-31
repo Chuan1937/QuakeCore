@@ -1,0 +1,42 @@
+[
+  {
+    "index": 1,
+    "output": "/Users/chuan/Documents/code/QuakeCore/Validation/near-seismic-location/continuous_results/taup_compare_top5/01_20190704_172700_Mw1.45.png",
+    "truth_time": "2019-07-04T17:27:00.040000Z",
+    "truth_mag": 1.45,
+    "dist_err_km": 1.2651666034795552,
+    "depth_err_km": 3.52
+  },
+  {
+    "index": 2,
+    "output": "/Users/chuan/Documents/code/QuakeCore/Validation/near-seismic-location/continuous_results/taup_compare_top5/02_20190704_170920_Mw2.49.png",
+    "truth_time": "2019-07-04T17:09:20.090000Z",
+    "truth_mag": 2.49,
+    "dist_err_km": 0.8608730174344155,
+    "depth_err_km": 4.470000000000001
+  },
+  {
+    "index": 3,
+    "output": "/Users/chuan/Documents/code/QuakeCore/Validation/near-seismic-location/continuous_results/taup_compare_top5/03_20190704_175241_Mw2.92.png",
+    "truth_time": "2019-07-04T17:52:41.700000Z",
+    "truth_mag": 2.92,
+    "dist_err_km": 0.7599714631978562,
+    "depth_err_km": 0.54
+  },
+  {
+    "index": 4,
+    "output": "/Users/chuan/Documents/code/QuakeCore/Validation/near-seismic-location/continuous_results/taup_compare_top5/04_20190704_175802_Mw3.33.png",
+    "truth_time": "2019-07-04T17:58:02.640000Z",
+    "truth_mag": 3.33,
+    "dist_err_km": 0.784634702651571,
+    "depth_err_km": 5.23
+  },
+  {
+    "index": 5,
+    "output": "/Users/chuan/Documents/code/QuakeCore/Validation/near-seismic-location/continuous_results/taup_compare_top5/05_20190704_170255_Mw3.98.png",
+    "truth_time": "2019-07-04T17:02:55.340000Z",
+    "truth_mag": 3.98,
+    "dist_err_km": 0.7692829526572679,
+    "depth_err_km": 4.9
+  }
+]

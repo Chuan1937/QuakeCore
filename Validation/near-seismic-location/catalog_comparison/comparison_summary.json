@@ -1,0 +1,11 @@
+{
+  "n_detected": 85,
+  "n_scedc_truth": 90,
+  "n_matched": 66,
+  "match_rate_pct": 77.6,
+  "bias_correction": {
+    "lat": 0.009084112939451217,
+    "lon": 0.0007530517578118179,
+    "depth": 4.565
+  }
+}
