@@ -70,7 +70,10 @@ cd ..
 
 ```bash
 # 1. Install Homebrew (if not installed)
+# Not China
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# China
+/bin/bash -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"
 
 # 2. Install system dependencies
 brew install git curl
