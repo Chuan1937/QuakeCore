@@ -53,6 +53,7 @@ from agent.tools_facade import (
     run_telehypo_plots_tool,
     predict_polarity_tool,
     list_polarity_models_tool,
+    get_demo_progress,
 )
 
 Provider = Literal["deepseek", "ollama"]
@@ -148,6 +149,7 @@ def get_agent_executor(
         run_telehypo_plots_tool,
         predict_polarity_tool,
         list_polarity_models_tool,
+        get_demo_progress,
     ]
 
     safe_skill_context = (skill_context or "").replace("{", "{{").replace("}", "}}").strip()
@@ -230,6 +232,12 @@ Important rules:
 - DSA (Depth-Scanning Algorithm): Use run_dsa_depth_scanning to determine focal depth. First call list_dsa_examples_tool to see available examples.
 - TeleHypo (Teleseismic Location): Use run_telehypo_location for teleseismic hypocenter location. Use run_telehypo_plots_tool to generate result figures.
 - SeisPolarity: Use list_polarity_models_tool to see available polarity models, then predict_polarity_tool to predict P-wave first-motion polarity (Up/Down/Unknown).
+
+**Demo Mode (演示模式)**:
+- When user requests "演示", "demo", or asks to see the monitoring process with progress, use run_continuous_monitoring with "演示" in the params.
+- For demo picking requests like "拾取（演示）", "震相拾取演示", use run_continuous_monitoring with both "拾取" and "演示" in the params.
+- The system will automatically detect the demo step and show progress logs.
+- After demo completes, present the results and artifacts.
 
 Language requirement:
 - Always respond in English. Do not output Chinese paragraphs.

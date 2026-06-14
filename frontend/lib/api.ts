@@ -36,6 +36,11 @@ export type ContinuousJobProgressResponse = {
   status: "running" | "completed" | "failed" | string;
   step?: string;
   percent?: number;
+  stages?: Record<string, {
+    label: string;
+    percent: number;
+    status: "pending" | "running" | "completed" | string;
+  }>;
   logs?: Array<{
     stage?: string;
     message?: string;

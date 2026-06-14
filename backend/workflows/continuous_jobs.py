@@ -52,10 +52,14 @@ def update_continuous_job_progress(job_id: str, item: dict[str, Any]) -> None:
         message = str(item.get("message") or "").strip() or job.get("step", "Processing")
         downloaded = item.get("downloaded")
         total = item.get("total")
+        explicit_percent = item.get("percent")
         base = _STAGE_BASE_PERCENT.get(stage, 10)
         percent = float(job.get("percent", base))
 
-        if stage == "download" and isinstance(downloaded, (int, float)) and isinstance(total, (int, float)) and total:
+        # Use explicit percent if provided (for demo mode fine-grained progress)
+        if isinstance(explicit_percent, (int, float)):
+            percent = max(percent, float(explicit_percent))
+        elif stage == "download" and isinstance(downloaded, (int, float)) and isinstance(total, (int, float)) and total:
             ratio = max(0.0, min(1.0, float(downloaded) / float(total)))
             percent = max(percent, base + ratio * 30.0)
         elif stage in {"picking", "association", "location", "plot"}:
@@ -65,6 +69,31 @@ def update_continuous_job_progress(job_id: str, item: dict[str, Any]) -> None:
             job["step"] = message
             job["percent"] = max(0.0, min(99.0, percent))
             job["updated_at"] = _utc_now_iso()
+
+        # Save stages data for multi-stage progress display
+        stages = item.get("stages")
+        if isinstance(stages, dict):
+            job["stages"] = stages
+
+        # Save stage info for single stage updates
+        stage_label = item.get("stage_label")
+        stage_percent = item.get("stage_percent")
+        stage_order = item.get("stage_order")
+        if stage_label is not None:
+            if "stages" not in job:
+                job["stages"] = {}
+            job["stages"][stage] = {
+                "label": stage_label,
+                "percent": stage_percent if stage_percent is not None else 0,
+                "status": "running",
+                "order": stage_order if stage_order is not None else 0,
+            }
+            # Update status of previous stages to completed
+            if isinstance(stage_order, (int, float)):
+                for s, info in job.get("stages", {}).items():
+                    if isinstance(info.get("order"), (int, float)) and info["order"] < stage_order:
+                        info["status"] = "completed"
+                        info["percent"] = 100
 
         logs = job.setdefault("logs", [])
         logs.append(

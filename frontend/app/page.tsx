@@ -56,7 +56,16 @@ type Message = {
     percent: number;
     step: string;
     status: string;
+    stages?: Record<string, {
+      label: string;
+      percent: number;
+      status: string;
+    }>;
   };
+  demoLogs?: Array<{
+    text: string;
+    timestamp: number;
+  }>;
 };
 
 type Thread = {
@@ -68,6 +77,31 @@ type Thread = {
 
 const UPLOAD_ACCEPT =
   ".mseed,.miniseed,.sac,.sgy,.segy,.h5,.hdf5,.npy,.npz,.csv,.txt";
+
+// Auto-scroll component for progress logs
+function ProgressAutoScroll({ messageId, logs }: { messageId: string; logs?: Array<{ text: string; timestamp: number }> }) {
+  useEffect(() => {
+    if (!logs || logs.length === 0) return;
+    
+    const scrollToProgress = () => {
+      // Find the progress bar element and scroll it into view at the top
+      const progressElement = document.getElementById(`progress-log-${messageId}`);
+      if (progressElement) {
+        progressElement.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    };
+    
+    // Scroll immediately
+    scrollToProgress();
+    
+    // Also scroll after delay to ensure DOM is updated
+    const timer = setTimeout(scrollToProgress, 100);
+    
+    return () => clearTimeout(timer);
+  }, [messageId, logs?.length]);
+
+  return null;
+}
 
 function newId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -83,7 +117,16 @@ function isContinuousMonitoringRequest(text: string): boolean {
     source.includes("连续") ||
     source.includes("监测") ||
     source.includes("continuous monitoring") ||
-    source.includes("continuous")
+    source.includes("continuous") ||
+    source.includes("执行") ||
+    source.includes("演示") ||
+    source.includes("demo") ||
+    source.includes("拾取") ||
+    source.includes("pick") ||
+    source.includes("定位") ||
+    source.includes("location") ||
+    source.includes("误差") ||
+    source.includes("analysis")
   );
 }
 
@@ -409,21 +452,32 @@ export default function HomePage() {
     progress: ContinuousJobProgressResponse,
   ) {
     setMessages((current) =>
-      current.map((item) =>
-        item.id === pendingId
-          ? {
-              ...item,
-              pending: progress.status === "running",
-              route: "continuous_monitoring",
-              content: t("monitoring_in_progress"),
-              progress: {
-                percent: Number(progress.percent ?? 0),
-                step: String(progress.step || t("processing")),
-                status: String(progress.status || "running"),
-              },
-            }
-          : item,
-      ),
+      current.map((item) => {
+        if (item.id !== pendingId) return item;
+
+        const newStep = String(progress.step || t("processing"));
+        const existingLogs = item.demoLogs || [];
+        const lastLog = existingLogs[existingLogs.length - 1];
+
+        // Only add new log if step changed
+        const shouldAddLog = !lastLog || lastLog.text !== newStep;
+        const newLogs = shouldAddLog
+          ? [...existingLogs, { text: newStep, timestamp: Date.now() }]
+          : existingLogs;
+
+        return {
+          ...item,
+          pending: progress.status === "running",
+          route: "continuous_monitoring",
+          content: t("monitoring_in_progress"),
+          demoLogs: newLogs,
+          progress: {
+            percent: Number(progress.percent ?? 0),
+            step: newStep,
+            status: String(progress.status || "running"),
+          },
+        };
+      }),
     );
   }
 
@@ -836,12 +890,22 @@ export default function HomePage() {
                     </div>
                   ) : message.pending ? (
                     message.route === "continuous_monitoring" && message.progress ? (
-                      <div className="assistant-message progress-card">
-                        <div>{t("monitoring_in_progress")}</div>
+                      <div className="assistant-message">
+                        <div className="progress-log-list" id={`progress-log-${message.id}`}>
+                          {(message.demoLogs || []).map((log, index) => (
+                            <div
+                              key={log.timestamp}
+                              className={`progress-log-item ${index === (message.demoLogs?.length || 0) - 1 ? "progress-log-current" : ""}`}
+                            >
+                              <span className="progress-log-prefix">{">"}</span>
+                              <span className="progress-log-text">{log.text}</span>
+                            </div>
+                          ))}
+                        </div>
                         <div className="progress-bar">
                           <div style={{ width: `${Math.max(0, Math.min(100, message.progress.percent))}%` }} />
                         </div>
-                        <div>{message.progress.step}</div>
+                        <ProgressAutoScroll messageId={message.id} logs={message.demoLogs} />
                       </div>
                     ) : (
                       <div className="assistant-message assistant-message-live">

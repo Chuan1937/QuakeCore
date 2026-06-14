@@ -141,6 +141,8 @@ class ToolPlanner:
             region = self._rule_region(message)
             if region:
                 params["region"] = region
+            # Preserve original message for demo mode detection
+            params["message"] = message
             return ToolPlan(
                 route=route,
                 tool="run_continuous_monitoring",
@@ -304,6 +306,9 @@ runtime_results keys：
                 return fallback
             if route == "continuous_monitoring":
                 params = {**fallback.params, **params}
+                # Ensure message is preserved for demo mode detection
+                if "message" not in params:
+                    params["message"] = message
             return ToolPlan(
                 route=planned_route,
                 tool=tool,

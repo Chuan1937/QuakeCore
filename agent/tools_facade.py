@@ -60,6 +60,7 @@ from agent.tools import (
     run_telehypo_plots_tool,
     predict_polarity_tool,
     list_polarity_models_tool,
+    get_demo_progress,
 )
 
 __all__ = [
@@ -111,4 +112,5 @@ __all__ = [
     "run_telehypo_plots_tool",
     "predict_polarity_tool",
     "list_polarity_models_tool",
+    "get_demo_progress",
 ]

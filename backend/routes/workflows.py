@@ -261,6 +261,7 @@ def get_continuous_progress(job_id: str):
         "status": job.get("status"),
         "step": job.get("step"),
         "percent": job.get("percent", 0),
+        "stages": job.get("stages"),
         "logs": job.get("logs", []),
         "error": job.get("error"),
     }
@@ -286,3 +287,38 @@ def get_continuous_result(job_id: str):
         "result": result,
         "error": job.get("error"),
     }
+
+
+def _run_demo_job(job_id: str, session_id: str, params: dict) -> None:
+    """Run demo workflow with simulated progress."""
+    try:
+        from agent.tools import run_continuous_demo
+
+        payload = dict(params or {})
+        payload["job_id"] = job_id
+        raw_result = run_continuous_demo(payload)
+        result = _normalize_continuous_result(raw_result)
+        _persist_continuous_runtime_results(session_id, result)
+        failed = bool(result.get("error")) or result.get("success") is False
+        finish_continuous_job(job_id, result, failed=failed)
+    except Exception as exc:
+        fail_continuous_job(job_id, str(exc))
+
+
+@router.post("/continuous/demo")
+def start_continuous_demo(payload: dict):
+    """Start a demo continuous monitoring workflow with simulated progress."""
+    session_id = payload.get("session_id") or uuid4().hex
+    message = str(payload.get("message") or "演示模式: 南加州 2019-07-04 17:00-18:00")
+
+    params = {
+        "start": payload.get("start", "2019-07-04T17:00:00"),
+        "end": payload.get("end", "2019-07-04T18:00:00"),
+        "region": payload.get("region", "南加州"),
+    }
+
+    job_id = uuid4().hex
+    create_continuous_job(job_id, session_id=session_id, message=message)
+    worker = Thread(target=_run_demo_job, args=(job_id, session_id, params), daemon=True)
+    worker.start()
+    return {"job_id": job_id, "session_id": session_id, "status": "running", "demo": True}

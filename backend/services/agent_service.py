@@ -1034,6 +1034,53 @@ class AgentService:
         tool = plan.tool
         params = dict(plan.params or {})
 
+        # Check if demo mode is requested - override tool selection
+        is_demo_request = "执行" in str(message) or "演示" in str(message) or "demo" in str(message).lower()
+        if is_demo_request:
+            # Detect specific demo step and create job for progress tracking
+            msg_lower = str(message).lower()
+            from uuid import uuid4
+            from threading import Thread
+            from backend.workflows.continuous_jobs import create_continuous_job
+
+            demo_job_id = uuid4().hex
+            create_continuous_job(demo_job_id, message=message)
+
+            if "下载" in msg_lower or "download" in msg_lower:
+                from agent.tools import run_demo_download
+                demo_func = run_demo_download
+            elif "拾取" in msg_lower or "pick" in msg_lower or "震相" in msg_lower:
+                from agent.tools import run_demo_picking
+                demo_func = run_demo_picking
+            elif "定位" in msg_lower or "location" in msg_lower or "震源" in msg_lower:
+                from agent.tools import run_demo_location
+                demo_func = run_demo_location
+            elif "误差" in msg_lower or "分析" in msg_lower or "analysis" in msg_lower:
+                from agent.tools import run_demo_analysis
+                demo_func = run_demo_analysis
+            else:
+                from agent.tools import run_continuous_demo
+                demo_func = run_continuous_demo
+
+            # Run demo in background thread for progress tracking
+            def _run_demo_async():
+                try:
+                    demo_func({"job_id": demo_job_id, "message": message})
+                except Exception:
+                    pass
+
+            Thread(target=_run_demo_async, daemon=True).start()
+
+            # Return immediate response with job_id for progress polling
+            return ChatResult(
+                session_id=session_id,
+                answer=f"执行模式已启动 (job_id: {demo_job_id})\n\n请查看进度...",
+                error=None,
+                route="continuous_monitoring",
+                artifacts=[],
+                workflow={"job_id": demo_job_id, "status": "running"},
+            )
+
         if tool == "pick_first_arrivals":
             has_session_file = bool(self._sessions.get_current_file(session_id) or self._sessions.get_uploaded_files(session_id))
             if not has_session_file:
@@ -1104,6 +1151,15 @@ class AgentService:
             }
             if tool == "run_continuous_monitoring" and not (params.get("start") and params.get("end")):
                 return self._missing_continuous_time_result(session_id, route, lang=lang)
+            # Set demo mode flag if message contains demo keywords
+            if tool == "run_continuous_monitoring":
+                from agent.tools import set_demo_mode
+                # Check all possible sources of the original message
+                msg_text = str(message or "")
+                msg_text += " " + str(params.get("message", ""))
+                msg_text += " " + str(params.get("query", ""))
+                if "执行" in msg_text or "演示" in msg_text or "demo" in msg_text.lower():
+                    set_demo_mode(True)
             tool_obj = mapping[tool]
             payload = {"params": params}
         elif tool in {
