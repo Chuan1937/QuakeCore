@@ -23,25 +23,50 @@ FILE_TYPE_BY_SUFFIX = {
 
 
 def bind_uploaded_file_to_agent(path: str, file_type: str) -> bool:
-    if file_type == "segy":
-        from agent.tools import set_current_segy_path
+    """Bind an uploaded file to the agent's context.
 
-        set_current_segy_path(path)
+    Updates both the legacy agent.tools globals and the new context module
+    so that all tools can see the uploaded file.
+    """
+    from quakecore_tools.context import (
+        set_current_segy_path as ctx_set_segy,
+        set_current_miniseed_path as ctx_set_miniseed,
+        set_current_hdf5_path as ctx_set_hdf5,
+        set_current_sac_path as ctx_set_sac,
+    )
+
+    if file_type == "segy":
+        ctx_set_segy(path)
+        try:
+            from agent.tools import set_current_segy_path
+            set_current_segy_path(path)
+        except ImportError:
+            pass
         return True
     if file_type == "miniseed":
-        from agent.tools import set_current_miniseed_path
-
-        set_current_miniseed_path(path)
+        ctx_set_miniseed(path)
+        try:
+            from agent.tools import set_current_miniseed_path, add_miniseed_path
+            set_current_miniseed_path(path)
+            add_miniseed_path(path)
+        except ImportError:
+            pass
         return True
     if file_type == "hdf5":
-        from agent.tools import set_current_hdf5_path
-
-        set_current_hdf5_path(path)
+        ctx_set_hdf5(path)
+        try:
+            from agent.tools import set_current_hdf5_path
+            set_current_hdf5_path(path)
+        except ImportError:
+            pass
         return True
     if file_type == "sac":
-        from agent.tools import set_current_sac_path
-
-        set_current_sac_path(path)
+        ctx_set_sac(path)
+        try:
+            from agent.tools import set_current_sac_path
+            set_current_sac_path(path)
+        except ImportError:
+            pass
         return True
     return False
 

@@ -8,15 +8,11 @@ import { useLanguage, inferPendingKey } from "@/lib/i18n";
 import { LanguageToggle } from "@/components/language-toggle";
 import {
   chatWithAgentStream,
-  getContinuousWorkflowProgress,
-  getContinuousWorkflowResult,
   getLlmConfig,
   saveLlmConfig,
-  startContinuousWorkflow,
   toBackendUrl,
   uploadFile,
   type ChatArtifact,
-  type ContinuousJobProgressResponse,
   type LlmConfig,
   type StreamEvent,
   type WorkflowResult,
@@ -84,10 +80,10 @@ function ProgressAutoScroll({ messageId, logs }: { messageId: string; logs?: Arr
     if (!logs || logs.length === 0) return;
     
     const scrollToProgress = () => {
-      // Find the progress bar element and scroll it into view at the top
-      const progressElement = document.getElementById(`progress-log-${messageId}`);
-      if (progressElement) {
-        progressElement.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Scroll the chat-log container to the bottom
+      const chatLog = document.querySelector('.chat-log');
+      if (chatLog) {
+        chatLog.scrollTop = chatLog.scrollHeight;
       }
     };
     
@@ -95,7 +91,7 @@ function ProgressAutoScroll({ messageId, logs }: { messageId: string; logs?: Arr
     scrollToProgress();
     
     // Also scroll after delay to ensure DOM is updated
-    const timer = setTimeout(scrollToProgress, 100);
+    const timer = setTimeout(scrollToProgress, 150);
     
     return () => clearTimeout(timer);
   }, [messageId, logs?.length]);
@@ -109,25 +105,6 @@ function newId() {
 
 function inferPendingText(text: string): string {
   return inferPendingKey(text);
-}
-
-function isContinuousMonitoringRequest(text: string): boolean {
-  const source = text.toLowerCase();
-  return (
-    source.includes("连续") ||
-    source.includes("监测") ||
-    source.includes("continuous monitoring") ||
-    source.includes("continuous") ||
-    source.includes("执行") ||
-    source.includes("演示") ||
-    source.includes("demo") ||
-    source.includes("拾取") ||
-    source.includes("pick") ||
-    source.includes("定位") ||
-    source.includes("location") ||
-    source.includes("误差") ||
-    source.includes("analysis")
-  );
 }
 
 function isOpencodeResponse(event: StreamEvent["response"] | undefined): boolean {
@@ -447,92 +424,6 @@ export default function HomePage() {
     [sessionId],
   );
 
-  function applyContinuousProgress(
-    pendingId: string,
-    progress: ContinuousJobProgressResponse,
-  ) {
-    setMessages((current) =>
-      current.map((item) => {
-        if (item.id !== pendingId) return item;
-
-        const newStep = String(progress.step || t("processing"));
-        const existingLogs = item.demoLogs || [];
-        const lastLog = existingLogs[existingLogs.length - 1];
-
-        // Only add new log if step changed
-        const shouldAddLog = !lastLog || lastLog.text !== newStep;
-        const newLogs = shouldAddLog
-          ? [...existingLogs, { text: newStep, timestamp: Date.now() }]
-          : existingLogs;
-
-        return {
-          ...item,
-          pending: progress.status === "running",
-          route: "continuous_monitoring",
-          content: t("monitoring_in_progress"),
-          demoLogs: newLogs,
-          progress: {
-            percent: Number(progress.percent ?? 0),
-            step: newStep,
-            status: String(progress.status || "running"),
-          },
-        };
-      }),
-    );
-  }
-
-  async function runContinuousWorkflow(
-    text: string,
-    pendingId: string,
-    sessionHint: string | null,
-  ) {
-    const started = await startContinuousWorkflow({
-      message: text,
-      session_id: sessionHint,
-      lang: lang,
-    });
-    setSessionId(started.session_id);
-    const jobId = started.job_id;
-
-    let progress = await getContinuousWorkflowProgress(jobId);
-    applyContinuousProgress(pendingId, progress);
-
-    while (progress.status === "running") {
-      await new Promise((resolve) => window.setTimeout(resolve, 1000));
-      progress = await getContinuousWorkflowProgress(jobId);
-      applyContinuousProgress(pendingId, progress);
-    }
-
-    const result = await getContinuousWorkflowResult(jobId);
-    if (result.status === "running") {
-      return;
-    }
-
-    const payload = result.result || {};
-    const answer = String(payload.message || result.error || t("monitoring_complete"));
-    const artifacts = mergeArtifacts(
-      Array.isArray(payload.artifacts) ? payload.artifacts : [],
-      answer,
-    );
-    const errorText = String(payload.error || result.error || "");
-
-    setMessages((current) =>
-      current.map((item) =>
-        item.id === pendingId
-          ? {
-              ...item,
-              pending: false,
-              route: "continuous_monitoring",
-              content: answer,
-              artifacts,
-              error: errorText || null,
-              progress: undefined,
-            }
-          : item,
-      ),
-    );
-  }
-
   async function handleSend(messageText: string) {
     const text = messageText.trim();
     const hasAttachments = pendingAttachments.filter((a) => a.status === "uploaded").length > 0;
@@ -558,41 +449,8 @@ export default function HomePage() {
       return;
     }
 
-    if (isContinuousMonitoringRequest(text)) {
-      const pendingId = newId();
-      setMessages((current) => [
-        ...current,
-        {
-          id: pendingId,
-          role: "assistant",
-          content: t("monitoring_in_progress"),
-          route: "continuous_monitoring",
-          pending: true,
-          progress: { percent: 2, step: t("task_preparing"), status: "running" },
-        },
-      ]);
-      try {
-        await runContinuousWorkflow(text, pendingId, sessionId);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : t("monitoring_failed");
-        setError(message);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === pendingId
-              ? {
-                  ...item,
-                  pending: false,
-                  content: t("monitoring_failed"),
-                  error: message,
-                }
-              : item,
-          ),
-        );
-      } finally {
-        setChatLoading(false);
-      }
-      return;
-    }
+    // All requests go to the Agent — let AI decide which tool to use.
+    // No keyword-based routing in the frontend.
 
     const msgId = newId();
     setMessages((current) => [
@@ -647,6 +505,14 @@ export default function HomePage() {
                 : item,
             ),
           );
+
+          // Auto-scroll when new progress arrives
+          requestAnimationFrame(() => {
+            const chatLog = document.querySelector('.chat-log');
+            if (chatLog) {
+              chatLog.scrollTop = chatLog.scrollHeight;
+            }
+          });
         }
 
         if (event.type === "final" && event.response) {
