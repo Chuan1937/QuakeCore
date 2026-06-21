@@ -123,10 +123,15 @@ class AgentService:
         uploaded_files = [item for item in (attachments or self._sessions.get_uploaded_files(session_id)) if item]
         try:
             from agent.tools import set_current_uploaded_files
-
             set_current_uploaded_files(uploaded_files)
         except Exception:
-            # Keep backward compatibility: file-context injection must never block chat.
+            pass
+
+        # Also sync to the context module
+        try:
+            from quakecore_tools.context import set_current_uploaded_files as ctx_set_files
+            ctx_set_files(uploaded_files)
+        except Exception:
             pass
 
         if not uploaded_files:
@@ -139,7 +144,6 @@ class AgentService:
         try:
             bind_uploaded_file_to_agent(current_file, file_type)
         except Exception:
-            # Keep backward compatibility: file-context injection must never block chat.
             return
 
     def _build_chat_artifacts(self, normalized: NormalizedToolResult) -> list[ArtifactItem]:
@@ -1475,112 +1479,94 @@ class AgentService:
         try:
             self._inject_session_file_context(final_session_id, attachments)
             self._apply_file_reference_from_message(final_session_id, message)
-            runtime_results = self._sessions.get_runtime_results(final_session_id)
-            uploaded_files = self._sessions.get_uploaded_files(final_session_id)
-            current_file = self._sessions.get_current_file(final_session_id)
-            plan = self._tool_planner.plan(
-                message=message,
-                route=route,
-                runtime_results=runtime_results,
-                uploaded_files=uploaded_files,
-                current_file=current_file,
-                lang=final_lang,
-            )
-            planned_result = self._try_execute_tool_plan(
-                plan=plan,
-                message=message,
-                session_id=final_session_id,
-                lang=final_lang,
-            )
-            if planned_result is not None:
-                return planned_result
-            fast_path_result = self._try_fast_path_trace_pick(
-                message=message,
-                session_id=final_session_id,
-                route=route,
-                lang=final_lang,
-            )
-            if fast_path_result is not None:
-                return fast_path_result
-            deterministic_result = self._try_fast_path_deterministic(
-                message=message,
-                session_id=final_session_id,
-                route=route,
-                lang=final_lang,
-            )
-            if deterministic_result is not None:
-                return deterministic_result
+
+            # For tool requests: let the Agent handle everything.
+            # The Agent has all tools and their descriptions — it will pick the right one.
+            if route == "tool_request":
+                return self._invoke_agent(
+                    message=message,
+                    session_id=final_session_id,
+                    lang=final_lang,
+                    route=route,
+                )
+
+            # For result analysis: try planner + sandbox first, then agent
+            if route == "result_analysis":
+                runtime_results = self._sessions.get_runtime_results(final_session_id)
+                uploaded_files = self._sessions.get_uploaded_files(final_session_id)
+                current_file = self._sessions.get_current_file(final_session_id)
+                plan = self._tool_planner.plan(
+                    message=message,
+                    route=route,
+                    runtime_results=runtime_results,
+                    uploaded_files=uploaded_files,
+                    current_file=current_file,
+                    lang=final_lang,
+                )
+                planned_result = self._try_execute_tool_plan(
+                    plan=plan,
+                    message=message,
+                    session_id=final_session_id,
+                    lang=final_lang,
+                )
+                if planned_result is not None:
+                    return planned_result
+
+            # For earthquake location: use the workflow
             if route == "earthquake_location":
                 workflow_result = run_location_workflow(final_session_id)
                 self._persist_workflow_runtime(final_session_id, workflow_result)
-                workflow_status = str(workflow_result.get("status", "failed"))
-                workflow_steps = workflow_result.get("steps", [])
-                if workflow_steps:
-                    workflow_artifacts = self._artifacts_from_payload(workflow_result.get("artifacts", []))
-                    post = self._try_blackbox_postprocess(
-                        message=message,
-                        session_id=final_session_id,
-                        lang=final_lang,
-                        route=route,
-                    )
-                    if post is not None:
-                        post_message, post_artifacts = post
-                        workflow_artifacts = workflow_artifacts + [
-                            item for item in post_artifacts if item.url not in {a.url for a in workflow_artifacts}
-                        ]
-                        return ChatResult(
-                            session_id=final_session_id,
-                            answer=self._clean_public_answer(str(post_message or ""), "result_analysis"),
-                            error=workflow_result.get("error"),
-                            route="result_analysis",
-                            artifacts=workflow_artifacts,
-                            workflow={
-                                "status": workflow_result.get("status"),
-                                "summary": workflow_result.get("summary"),
-                                "message": workflow_result.get("message"),
-                                "steps": workflow_steps,
-                                "location": workflow_result.get("location", {}),
-                                "artifacts": workflow_result.get("artifacts", []),
-                                "error": workflow_result.get("error"),
-                            },
-                        )
-                    if workflow_status in {"success", "partial_success"}:
-                        answer = str(workflow_result.get("summary") or workflow_result.get("message") or "")
-                    else:
-                        answer = str(
-                            workflow_result.get("summary")
-                            or workflow_result.get("message")
-                            or "地震定位工作流执行失败，但已完成部分步骤。请查看步骤详情。"
-                        )
-                    return ChatResult(
-                        session_id=final_session_id,
-                        answer=answer,
-                        error=workflow_result.get("error"),
-                        route=route,
-                        artifacts=workflow_artifacts,
-                        workflow={
-                            "status": workflow_result.get("status"),
-                            "summary": workflow_result.get("summary"),
-                            "message": workflow_result.get("message"),
-                            "steps": workflow_steps,
-                            "location": workflow_result.get("location", {}),
-                            "artifacts": workflow_result.get("artifacts", []),
-                            "error": workflow_result.get("error"),
-                        },
-                    )
+                return self._build_location_result(final_session_id, workflow_result)
 
-            session = self._get_or_create_session(final_session_id, final_lang)
-            set_current_lang(final_lang)
-            message_with_context = self._build_message_with_runtime_context(
+            # For settings: handle directly
+            if route == "settings":
+                return ChatResult(
+                    session_id=final_session_id,
+                    answer="请在前端设置页面中修改模型配置。",
+                    error=None,
+                    route="settings",
+                    artifacts=[],
+                )
+
+            # General chat and everything else: go to Agent
+            return self._invoke_agent(
                 message=message,
                 session_id=final_session_id,
                 lang=final_lang,
+                route=route,
+            )
+
+        except Exception as exc:
+            return ChatResult(
+                session_id=final_session_id,
+                answer="",
+                error=str(exc),
+                route=route,
+                artifacts=[],
+            )
+
+    def _invoke_agent(
+        self,
+        *,
+        message: str,
+        session_id: str,
+        lang: str,
+        route: str,
+    ) -> ChatResult:
+        """Send the message to the ReAct Agent and let it pick the right tool."""
+        try:
+            session = self._get_or_create_session(session_id, lang)
+            set_current_lang(lang)
+            message_with_context = self._build_message_with_runtime_context(
+                message=message,
+                session_id=session_id,
+                lang=lang,
             )
             if self._langgraph_runtime.enabled:
                 raw_result = self._langgraph_runtime.invoke(
-                    session_id=final_session_id,
+                    session_id=session_id,
                     message=message_with_context,
-                    lang=final_lang,
+                    lang=lang,
                     fallback_agent=session.agent,
                 )
             else:
@@ -1604,55 +1590,29 @@ class AgentService:
                 if decoded_payload.get("message"):
                     answer = str(decoded_payload.get("message"))
             self._persist_runtime_updates(
-                final_session_id,
+                session_id,
                 self._extract_runtime_updates(
-                    session_id=final_session_id,
+                    session_id=session_id,
                     route=route,
                     data=runtime_data,
                     artifacts=artifacts,
                 ),
             )
             answer = self._clean_public_answer(answer, route)
-            workflow_for_result: dict[str, Any] | None = None
-            if route == "result_analysis":
-                progress_events = (runtime_data or {}).get("progress_events")
-                if progress_events and isinstance(progress_events, list):
-                    workflow_steps = []
-                    for ev in progress_events:
-                        workflow_steps.append({
-                            "name": str(ev.get("summary", "") or ""),
-                            "status": str(ev.get("status", "completed") or "completed"),
-                            "required": True,
-                            "message": str(ev.get("detail") or ev.get("summary", "") or ""),
-                            "error": None,
-                            "data": {k: v for k, v in ev.items() if k not in ("summary", "status", "detail")},
-                            "artifacts": [],
-                            "duration_ms": 0,
-                        })
-                    workflow_for_result = {
-                        "status": "success" if normalized.success else "failed",
-                        "summary": answer,
-                        "message": answer,
-                        "steps": workflow_steps,
-                        "location": {},
-                        "artifacts": [{"type": a.type, "name": a.name, "path": a.path} for a in artifacts],
-                        "error": normalized.error,
-                    }
-
             return ChatResult(
-                session_id=final_session_id,
+                session_id=session_id,
                 answer=answer,
                 error=normalized.error,
                 route=route,
                 artifacts=artifacts,
-                workflow=workflow_for_result,
+                workflow=None,
             )
         except Exception as exc:
             normalized = normalize_tool_output(exc)
             raw_error = str(normalized.error or "")
             if "Invalid Format" in raw_error or "Missing 'Action:' after 'Thought:'" in raw_error:
                 return ChatResult(
-                    session_id=final_session_id,
+                    session_id=session_id,
                     answer="工具执行已完成，但 Agent 输出格式异常。请查看已生成结果或重试。",
                     error=raw_error,
                     route=route,
@@ -1660,10 +1620,70 @@ class AgentService:
                     workflow=None,
                 )
             return ChatResult(
-                session_id=final_session_id,
+                session_id=session_id,
                 answer=normalized.message,
                 error=normalized.error,
                 route=route,
                 artifacts=[],
                 workflow=None,
             )
+
+    def _build_location_result(self, session_id: str, workflow_result: dict) -> ChatResult:
+        """Build ChatResult from location workflow output."""
+        workflow_artifacts = self._artifacts_from_payload(workflow_result.get("artifacts", []))
+        workflow_status = str(workflow_result.get("status", "failed"))
+        workflow_steps = workflow_result.get("steps", [])
+
+        if workflow_steps:
+            post = self._try_blackbox_postprocess(
+                message="分析定位结果",
+                session_id=session_id,
+                lang="en",
+                route="result_analysis",
+            )
+            if post is not None:
+                post_message, post_artifacts = post
+                workflow_artifacts = workflow_artifacts + [
+                    item for item in post_artifacts if item.url not in {a.url for a in workflow_artifacts}
+                ]
+                return ChatResult(
+                    session_id=session_id,
+                    answer=self._clean_public_answer(str(post_message or ""), "result_analysis"),
+                    error=workflow_result.get("error"),
+                    route="result_analysis",
+                    artifacts=workflow_artifacts,
+                    workflow={
+                        "status": workflow_result.get("status"),
+                        "summary": workflow_result.get("summary"),
+                        "message": workflow_result.get("message"),
+                        "steps": workflow_steps,
+                        "location": workflow_result.get("location", {}),
+                        "artifacts": workflow_result.get("artifacts", []),
+                        "error": workflow_result.get("error"),
+                    },
+                )
+
+        if workflow_status in {"success", "partial_success"}:
+            answer = str(workflow_result.get("summary") or workflow_result.get("message") or "")
+        else:
+            answer = str(
+                workflow_result.get("summary")
+                or workflow_result.get("message")
+                or "地震定位工作流执行失败，但已完成部分步骤。请查看步骤详情。"
+            )
+        return ChatResult(
+            session_id=session_id,
+            answer=answer,
+            error=workflow_result.get("error"),
+            route="earthquake_location",
+            artifacts=workflow_artifacts,
+            workflow={
+                "status": workflow_result.get("status"),
+                "summary": workflow_result.get("summary"),
+                "message": workflow_result.get("message"),
+                "steps": workflow_steps,
+                "location": workflow_result.get("location", {}),
+                "artifacts": workflow_result.get("artifacts", []),
+                "error": workflow_result.get("error"),
+            },
+        )

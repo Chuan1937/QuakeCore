@@ -173,6 +173,32 @@ def _normalize_from_dict(payload: dict[str, Any], raw: str | None = None) -> Nor
     )
 
 
+_ERROR_PATTERNS = re.compile(
+    r"no .+ (?:file|data) (?:is )?(?:currently )?loaded"
+    r"|no .+ file is currently loaded"
+    r"|error[:\s]"
+    r"|failed[:\s]"
+    r"|not found"
+    r"|missing[:\s]"
+    r"|trace index must be"
+    r"|no data file"
+    r"|出错"
+    r"|失败"
+    r"|未找到"
+    r"|未加载"
+    r"|请先上传"
+    r"|please upload",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_error(text: str) -> bool:
+    """Heuristic: detect error messages returned as plain strings by tools."""
+    if not text:
+        return False
+    return bool(_ERROR_PATTERNS.search(text))
+
+
 def normalize_tool_output(output: Any) -> NormalizedToolResult:
     if isinstance(output, NormalizedToolResult):
         return output
@@ -217,6 +243,16 @@ def normalize_tool_output(output: Any) -> NormalizedToolResult:
                 if normalized.raw is None:
                     normalized.raw = output
                 return normalized
+
+        if _looks_like_error(stripped):
+            return NormalizedToolResult(
+                success=False,
+                message=stripped,
+                data={},
+                artifacts=[],
+                raw=output,
+                error=stripped,
+            )
 
         artifacts = _extract_markdown_artifacts(output)
         message = _strip_artifact_markdown(output) if artifacts else output

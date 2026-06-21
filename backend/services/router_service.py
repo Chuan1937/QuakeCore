@@ -1,7 +1,16 @@
-"""Intent routing and artifact extraction for chat responses."""
+"""Intent routing and artifact extraction for chat responses.
+
+The router does lightweight classification only:
+- Is this a tool request or general chat?
+- For tool requests, return a broad category; the Agent picks the specific tool.
+
+Tool selection is handled by the Agent's ReAct loop, not by the router.
+"""
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,215 +26,103 @@ class ArtifactItem:
     path: str
 
 
+# Broad intent categories. The router picks one; the Agent picks the specific tool.
+_INTENT_CATEGORIES = {
+    "tool_request": "用户想要执行一个地震学操作（分析、转换、拾取、定位、监测、绘图等）",
+    "result_analysis": "用户想查看、分析、统计、解释之前操作的结果",
+    "settings": "用户想修改配置、模型、API Key 等设置",
+    "general_chat": "用户在问概念性问题、打招呼、或请求不属于工具操作的帮助",
+}
+
+
 class RouterService:
     _IMAGE_PATTERN = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
     _PATH_PATTERN = re.compile(
         r"(?P<path>(?:/api/artifacts/|\.?/)?data/[^\s`'\"<>()，。；！？：:,]+|/api/artifacts/[^\s`'\"<>()，。；！？：:,]+)",
         re.IGNORECASE,
     )
-    _ROUTE_KEYWORDS = {
-        "result_explanation": (
-            "解释结果",
-            "解读结果",
-            "解释一下结果",
-            "结果说明",
-            "result explanation",
-            "explain the result",
-            "interpret result",
-            "interpret the result",
-        ),
-        "result_analysis": (
-            "看看第",
-            "第3个事件",
-            "第 3 个事件",
-            "第三个事件",
-            "统计",
-            "分布",
-            "直方图",
-            "scatter",
-            "histogram",
-            "magnitude distribution",
-            "depth distribution",
-            "事件筛选",
-            "筛选事件",
-            "分析结果",
-            "画一下",
-            "绘制",
-            "重新画",
-            "做个图",
-            "做一张图",
-            "统计一下",
-            "平均",
-            "中位数",
-            "最大值",
-            "最小值",
-            "趋势",
-            "相关性",
-            "对比",
-            "筛选",
-            "导出",
-            "analyze",
-            "analysis",
-            "analyse",
-            "review",
-            "all pickups",
-        ),
-        "earthquake_location": (
-            "定位",
-            "locate",
-            "location",
-            "hypocenter",
-            "epicenter",
-            "震源",
-            "震中",
-            "event location",
-        ),
-        "phase_picking": (
-            "拾取",
-            "初至",
-            "初至拾取",
-            "到时拾取",
-            "first arrival",
-            "phase picking",
-            "pick phases",
-            "pick",
-            "phase",
-            "picking",
-            "震相",
-        ),
-        "file_structure": (
-            "结构",
-            "file structure",
-            "structure",
-            "inspect file",
-            "show structure",
-            "read this file",
-            "当前文件",
-        ),
-        "waveform_reading": (
-            "waveform",
-            "trace",
-            "channel",
-            "read waveform",
-            "read trace",
-            "第0道",
-            "第 0 道",
-            "读取波形",
-        ),
-        "format_conversion": (
-            "convert",
-            "conversion",
-            "format conversion",
-            "convert to",
-            "convert into",
-            "转换",
-            "转成",
-            "转为",
-        ),
-        "continuous_monitoring": (
-            "continuous",
-            "monitoring",
-            "monitor",
-            "recent",
-            "latest",
-            "continuous seismic monitoring",
-            "连续地震监测",
-            "地震监测",
-            "连续",
-            "最近",
-            "监测",
-        ),
-        "map_plotting": (
-            "map",
-            "plot map",
-            "plotting",
-            "plot",
-            "地图",
-        ),
-        "seismo_qa": (
-            "qa",
-            "question answering",
-            "faq",
-            "ask",
-            "explain",
-            "what is",
-            "seismo qa",
-            "地震问答",
-        ),
-        "settings": (
-            "setting",
-            "settings",
-            "config",
-            "configuration",
-            "llm",
-            "api key",
-            "provider",
-            "模型",
-            "配置",
-        ),
-        "dsa_depth_scanning": (
-            "dsa",
-            "depth scanning",
-            "focal depth",
-            "focal depth determination",
-            "scan depth",
-            "深度扫描",
-            "震源深度",
-            "深度扫描算法",
-        ),
-        "polarity_prediction": (
-            "polarity",
-            "first motion",
-            "first-motion",
-            "p-wave polarity",
-            "seispolarity",
-            "极性",
-            "初动",
-            "初动方向",
-        ),
-        "telehypo_location": (
-            "telehypo",
-            "teleseismic",
-            "teleseismic location",
-            "远震",
-            "远震定位",
-        ),
-    }
+
+    def __init__(self):
+        self._llm = None
+
+    def _get_llm(self):
+        """Lazy-init the LLM for routing."""
+        if self._llm is not None:
+            return self._llm
+        try:
+            from agent.core import _build_llm
+            from backend.services.config_service import ConfigService
+            cfg = ConfigService().get_llm_config()
+            self._llm = _build_llm(
+                provider=cfg.get("provider", "deepseek"),
+                model_name=cfg.get("model_name", "deepseek-v4-flash"),
+                api_key=cfg.get("api_key") or os.getenv("DEEPSEEK_API_KEY"),
+                base_url=cfg.get("base_url"),
+                streaming=False,
+            )
+        except Exception:
+            self._llm = None
+        return self._llm
 
     def route_intent(self, message: str) -> str:
-        text = str(message or "").lower()
-        if any(keyword in text for keyword in ("远震定位", "远震", "telehypo", "teleseismic")):
-            return "telehypo_location"
-        if any(keyword in text for keyword in ("dsa", "深度扫描", "震源深度扫描", "focal depth")):
-            return "dsa_depth_scanning"
-        if any(keyword in text for keyword in ("极性", "初动", "polarity", "first motion", "seispolarity")):
-            return "polarity_prediction"
-        if any(keyword in text for keyword in ("重新定位", "重新做定位", "进行定位", "定位这个文件", "重新 locate")):
-            return "earthquake_location"
-        if any(keyword in text for keyword in ("定位结果", "location result", "result of location", "解释结果", "解读结果", "监测结果")):
-            return "result_explanation"
-        analysis_actions = ("看看", "查看", "分析", "解读", "拾取情况", "拾取结果", "这个结果", "analyze", "analysis", "analyse", "review", "examine", "check")
-        analysis_subject_tokens = ("拾取", "pick", "phase", "震相", "结果", "文件", "图", "file")
-        if any(k in text for k in analysis_actions) and any(k in text for k in analysis_subject_tokens):
-            return "result_analysis"
-        if any(k in text for k in ("初至拾取", "开始拾取", "进行拾取", "重新拾取", "重新计算拾取", "rerun pick", "run picking")):
-            return "phase_picking"
-        if any(token in text for token in ("trace", "轨迹", "道")) and any(token in text for token in ("pick", "phase", "拾取", "震相")):
-            return "result_analysis"
-        if any(keyword in text for keyword in (
-            "第3个事件", "第 3 个事件", "第三个事件", "magnitude distribution", "depth distribution",
-            "画一下", "绘制", "做个图", "统计一下", "直方图", "分布", "筛选", "平均", "中位数", "相关性",
-        )):
-            return "result_analysis"
-        for route, keywords in self._ROUTE_KEYWORDS.items():
-            if any(keyword in text for keyword in keywords):
-                return route
-        # General "第N道" falls through to result_analysis only after checking all keyword routes
-        if re.search(r"第\s*\d+\s*(?:道|条|个)", text):
-            return "result_analysis"
-        if any(token in text for token in ("chat", "hello", "hi", "help")):
+        """Classify user intent into a broad category.
+
+        For tool requests, we return "tool_request" — the Agent's ReAct loop
+        will pick the correct tool based on the full context.
+        """
+        text = str(message or "").strip()
+        if not text:
             return "general_chat"
-        return "general_chat"
+
+        text_lower = text.lower()
+
+        # Short messages are likely follow-ups — let the Agent handle them
+        if len(text) < 10:
+            return "tool_request"
+
+        # Fast path: obvious settings requests
+        if any(kw in text_lower for kw in ("设置模型", "settings", "配置模型", "api key", "切换模型", "change model")):
+            return "settings"
+
+        # Fast path: obvious result analysis (follow-up on previous results)
+        if any(kw in text_lower for kw in ("解释结果", "explain result", "统计一下", "分析结果", "看看第")):
+            return "result_analysis"
+
+        # Use LLM for everything else
+        llm = self._get_llm()
+        if llm is None:
+            return "tool_request"
+
+        prompt = f"""分类用户意图。只输出 JSON：{{"intent": "类别"}}
+
+类别：
+- tool_request: 用户想执行地震学操作（拾取、定位、监测、转换、分析数据、下载数据、读取文件、绘图、频谱分析等任何工具操作）
+- result_analysis: 用户想查看/分析/统计之前操作的结果
+- settings: 用户想修改模型配置、API Key、切换模型
+- general_chat: 概念性问题、打招呼
+
+注意：简短的回复（如数字、"是"、"确认"、"6个通道"）通常是对话的延续，应归为 tool_request。
+
+用户消息：{text}
+
+JSON："""
+
+        try:
+            out = llm.invoke(prompt)
+            content = str(getattr(out, "content", "") or "").strip()
+            match = re.search(r'\{[^}]+\}', content)
+            if match:
+                parsed = json.loads(match.group())
+                intent = str(parsed.get("intent", "")).strip()
+                if intent in _INTENT_CATEGORIES:
+                    return intent
+        except Exception:
+            pass
+
+        # Fallback
+        if any(kw in text_lower for kw in ("hi", "hello", "你好", "help", "帮助")):
+            return "general_chat"
+        return "tool_request"
 
     def extract_artifacts(self, answer: str) -> list[ArtifactItem]:
         artifacts: list[ArtifactItem] = []

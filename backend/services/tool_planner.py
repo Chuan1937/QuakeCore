@@ -204,6 +204,10 @@ class ToolPlanner:
                 base_url=cfg.get("base_url"),
                 streaming=False,
             )
+            from quakecore_tools.registry import build_tool_names, build_tool_descriptions
+            registry_names = build_tool_names()
+            registry_desc = build_tool_descriptions()
+
             prompt = f"""
 你是 QuakeCore 的工具参数规划器。只输出 JSON，不要解释。
 
@@ -222,44 +226,16 @@ class ToolPlanner:
 runtime_results keys：
 {sorted(runtime_results.keys())}
 
-候选工具：
-- pick_first_arrivals
-- read_file_trace
-- get_file_structure
-- convert_miniseed_to_hdf5
-- convert_miniseed_to_numpy
-- convert_miniseed_to_sac
-- convert_sac_to_hdf5
-- convert_sac_to_numpy
-- convert_sac_to_miniseed
-- convert_segy_to_hdf5
-- convert_segy_to_numpy
-- convert_segy_to_excel
-- convert_hdf5_to_numpy
-- convert_hdf5_to_excel
-- download_continuous_waveforms
-- run_continuous_picking
-- associate_continuous_events
-- run_continuous_monitoring
-- locate_earthquake
-- locate_uploaded_data_nearseismic
-- locate_place_data_nearseismic
-- picks_trace_plot
-- picks_trace_detail
-- picks_summary
-- picks_by_station
-- catalog_magnitude_hist
-- catalog_depth_hist
-- catalog_time_series
-- catalog_mag_depth_scatter
-- catalog_event_index
+注册表中的工具：
+{registry_desc}
+
+候选工具名称：
+{', '.join(registry_names)}
+
+额外的分析模板工具（由 run_analysis_sandbox 执行）：
+- picks_trace_plot, picks_trace_detail, picks_summary, picks_by_station
+- catalog_magnitude_hist, catalog_depth_hist, catalog_time_series, catalog_mag_depth_scatter, catalog_event_index
 - result_explanation
-- run_dsa_depth_scanning
-- list_dsa_examples_tool
-- run_telehypo_location
-- run_telehypo_plots_tool
-- predict_polarity_tool
-- list_polarity_models_tool
 
 规则：
 1. 已有结果查看/解释不要重跑 pick/location。
